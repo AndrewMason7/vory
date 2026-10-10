@@ -8,6 +8,9 @@ public enum BotVisual: String, CaseIterable, Sendable {
     /// Symbols that are something other than the body: these take the eyes with them (the eyes
     /// fade with the symbol's amount), except the lens, whose eyes sit inside the glass.
     public var hidesEyes: Bool { self == .bolt || self == .bubbles || self == .warn || self == .exclaim }
+    /// Symbols with a reason of their own to show at once (words arriving, an approval, an error,
+    /// a lost connection): these cut short the hold on the symbol before them.
+    public var urgent: Bool { self == .bubbles || self == .exclaim || self == .warn || self == .bolt }
     /// Symbols with a loop of their own (a pulse, a hop, a glint): the timeline keeps ticking.
     public var loops: Bool { self == .orb || self == .bubbles || self == .bolt || self == .lens }
 }
@@ -116,6 +119,30 @@ public final class BotMotionModel {
     /// two hiding symbols, no flash on the way into one (item 5).
     private var eyesHeldDown = false
     private var lastEyeOpacity = 1.0
+    /// No symbol for a frame or two: a change of targets must last `minimumHold` before the bot
+    /// takes it up (a tool completing and the next one starting 0.2 s later kept the toolbox
+    /// instead of popping to the orb and back), unless the new symbol is `urgent`, which shows
+    /// at once. `shown` is what the springs head for; `pending` is the change waiting its turn.
+    public static let minimumHold = 0.3
+    private var shown: BotMotionTargets?
+    private var pending: (targets: BotMotionTargets, since: Double)?
+
+    /// The targets to head for at `t`, given what the state asks for.
+    private func held(_ targets: BotMotionTargets, at t: Double) -> BotMotionTargets {
+        guard let s = shown else { shown = targets; return targets }
+        if targets == s { pending = nil; return s }
+        if targets.visual.urgent, targets.visual != s.visual { shown = targets; pending = nil; return targets }
+        if let p = pending, p.targets == targets {
+            if t - p.since >= Self.minimumHold { shown = targets; pending = nil; return targets }
+            return s
+        }
+        pending = (targets, t)
+        return s
+    }
+    /// What the bot is heading for now (the held targets), for tests and the view's wake-ups.
+    public var shownTargets: BotMotionTargets { shown ?? lastTargets }
+    /// The time of the last `advance`, for tests.
+    public var lastAdvanceTime: Double { lastTime ?? 0 }
 
     public init(seed: Int) {
         self.seed = seed
@@ -149,9 +176,10 @@ public final class BotMotionModel {
 
     /// Advances to `t` (seconds) toward `targets` and returns the frame to draw.
     @discardableResult
-    public func advance(to t: Double, targets: BotMotionTargets) -> BotMotionFrame {
+    public func advance(to t: Double, targets asked: BotMotionTargets) -> BotMotionFrame {
         let dt = lastTime.map { max(0, t - $0) } ?? 0
         lastTime = t
+        let targets = held(asked, at: t)
         lastTargets = targets
         // A change of symbol: a small squash kick, rate-limited so fast flips never stack (item 15).
         if targets.visual != lastVisual {
@@ -209,12 +237,15 @@ public final class BotMotionModel {
                                        ("eyeOpacity", eyeOpacity.isSettled(at: hidden ? 0 : 1)), ("sx", sx.isSettled(at: 1)), ("sy", sy.isSettled(at: 1)),
                                        ("dim", dim.isSettled(at: lastTargets.dim)), ("halo", halo.isSettled(at: lastTargets.halo)), ("arcs", arcs.isSettled(at: lastTargets.arcs))]
         for (n, ok) in named where !ok { out.append(n) }
+        // A change waiting out the hold keeps the clock running until it is taken up.
+        if pending != nil { out.append("hold") }
         return out
     }
 
     /// Jumps every spring to its target (a held bot, Reduce Motion, a still frame).
     public func snap(to targets: BotMotionTargets, at t: Double) {
         lastTime = t; lastTargets = targets; lastVisual = targets.visual
+        shown = targets; pending = nil
         for v in BotVisual.allCases { amounts[v]?.snap(to: v == targets.visual ? 1 : 0) }
         eyeOpen.snap(to: targets.eyeOpen); eyeX.snap(to: targets.eyeX); eyeY.snap(to: targets.eyeY)
         eyeOpacity.snap(to: targets.visual.hidesEyes ? 0 : 1)

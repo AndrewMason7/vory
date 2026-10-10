@@ -21,14 +21,49 @@ import Testing
         return t
     }
 
+    /// Back-to-back tools (the burst of 2026-10-10: terminal complete, todo start 0.2 s later,
+    /// "Thinking…" in the gap) keep the toolbox: a change must last 0.3 s before it shows, so
+    /// nothing flashes for a frame or two. An urgent symbol (words, an approval, an error, a
+    /// lost connection) shows at once; a change that does last is taken up after the hold.
+    @Test func aChangeShorterThanTheHoldNeverShows() throws {
+        let m = BotMotionModel(seed: 5)
+        m.snap(to: .targets(for: .usingTool), at: 0)
+        var t = run(m, .usingTool, from: 0, seconds: 1.4)
+        // The gap: 0.2 s of thinking between two tools.
+        t = run(m, .thinking, from: t, seconds: 0.2) { f, _ in
+            #expect(f.amount(of: .toolbox) > 0.97, "the toolbox left during a 0.2 s gap")
+            #expect(f.amount(of: .orb) < 0.01, "the orb showed during a 0.2 s gap")
+            #expect(f.halo < 0.01, "the halo lit during a 0.2 s gap")
+        }
+        t = run(m, .usingTool, from: t, seconds: 0.5) { f, _ in
+            #expect(f.amount(of: .toolbox) > 0.97 && f.amount(of: .orb) < 0.01, "a pop after the gap")
+        }
+        #expect(m.shownTargets.visual == .toolbox)
+        // A tool too short to show: rest, a 0.2 s tool, rest again.
+        m.snap(to: .targets(for: .idle), at: t)
+        t = run(m, .usingTool, from: t, seconds: 0.2) { f, _ in #expect(f.amount(of: .toolbox) < 0.01, "a 0.2 s tool showed its toolbox") }
+        t = run(m, .idle, from: t, seconds: 0.5) { f, _ in #expect(f.amount(of: .toolbox) < 0.01) }
+        // A tool that lasts is taken up once the hold has passed.
+        var first: Double?
+        t = run(m, .usingTool, from: t, seconds: 1) { f, _ in if first == nil, f.amount(of: .toolbox) > 0.01 { first = m.lastAdvanceTime } }
+        let started = try #require(first)
+        #expect(started - (t - 1) > 0.28 && started - (t - 1) < 0.36, "the toolbox came up \(started - (t - 1)) s in, not after the 0.3 s hold")
+        #expect(m.shownTargets.visual == .toolbox)
+        // Words arriving cut the hold short: the bubbles start within two frames.
+        var bubblesAt: Double?
+        t = run(m, .streaming, from: t, seconds: 0.5) { f, _ in if bubblesAt == nil, f.amount(of: .bubbles) > 0.01 { bubblesAt = m.lastAdvanceTime } }
+        #expect(bubblesAt != nil && bubblesAt! - (t - 0.5) < 0.05, "the bubbles waited \(String(describing: bubblesAt.map { $0 - (t - 0.5) })) s")
+    }
+
     @Test func aStateSettlesAndIdleHasNothingLeftToDo() {
         let m = BotMotionModel(seed: 3)
         m.advance(to: 0, targets: .targets(for: .idle))
         _ = run(m, .thinking, from: 0, seconds: 1.5)
         #expect(!m.isSettled, "thinking loops (the pulse) and never settles")
-        _ = run(m, .idle, from: 1.5, seconds: 1.5)
+        // 1.5 s for the springs, after the 0.3 s hold on the change.
+        _ = run(m, .idle, from: 1.5, seconds: 1.8)
         #expect(m.isSettled, "idle with every spring on its target should settle; still moving: \(m.unsettled)")
-        #expect(m.advance(to: 3.1, targets: .targets(for: .idle)).amount(of: .orb) < 0.001)
+        #expect(m.advance(to: 3.4, targets: .targets(for: .idle)).amount(of: .orb) < 0.001)
     }
 
     @Test func everyInterruptedChangeStaysSmooth() {
