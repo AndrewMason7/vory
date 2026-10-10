@@ -27,6 +27,9 @@ struct ConversationView: View {
     /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
     /// there, whatever safe area or camera strip the header stands in, and it moves with them.
     @State private var headerBottom: CGFloat = 0
+    /// One switch, Matt's call: on a wide window (the list beside the chat) the header's Back
+    /// circle, which only clears the column, can go, as it is not there in Messages on iPad.
+    static let backHiddenWhenWide = false
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.wideLayout) private var wide
@@ -275,11 +278,17 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
     }
     private func header(_ chat: ChatSession) -> some View {
-        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
-                   onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
-            // Its bottom edge in window space, for the thread's top margin.
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { headerBottom = $0 }
+        // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
+        FoldReader { fold in
+            ChatHeader(chat: chat, fold: fold, showBack: !(wide && Self.backHiddenWhenWide),
+                       onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
+                       onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
+                // The header's own size and bottom edge (the reader around it is thread-sized):
+                // its height, and its bottom in window space for the thread's top margin.
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { headerBottom = $0 }
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
             // One group for VoiceOver, placed after the thread and the dock in the accessibility
             // order. The accessibility hit test (XCUITest's isHittable, touch to explore) tries
             // the screen's elements from the last one back, as if the last were on top, and goes
@@ -441,6 +450,10 @@ struct QueueStrip: View {
 /// the bot's avatar above the name (status while the agent works), and a glass … circle.
 struct ChatHeader: View {
     @Bindable var chat: ChatSession
+    /// The fold's frame in this header's coordinates when a partly open Duo has one here; the
+    /// pill moves to the side of it with more room (nothing interactive sits on the fold).
+    var fold: CGRect? = nil
+    var showBack = true
     var onBack: () -> Void
     var onProfile: () -> Void
     var onRename: () -> Void
@@ -455,6 +468,9 @@ struct ChatHeader: View {
     /// element would otherwise be the oldest message laid out.
     @AccessibilityFocusState private var backFocused: Bool
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
+    /// The pill's frame and the header's width, for keeping the pill off the fold.
+    @State private var pillFrame: CGRect = .zero
+    @State private var headerWidth: CGFloat = 0
     /// Read here so a name saved on the bot's card (#315) redraws the header.
     @AppStorage(BotNames.storageKey) private var namesRaw = ""
     private var botLabel: String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
@@ -465,12 +481,16 @@ struct ChatHeader: View {
         // No glass container here: a container draws its glass on a layer above the rest, and
         // the pill covered the bot sitting on it.
         HStack(alignment: .top, spacing: 12) {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+            if showBack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
+                .accessibilityFocused($backFocused)
+            } else {
+                Color.clear.frame(width: 44, height: 44)
             }
-            .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
-            .accessibilityFocused($backFocused)
             Spacer(minLength: 0)
             Button {
                 // The bot on the pill turns for the tap as it does elsewhere, and the plate opens.
@@ -520,6 +540,9 @@ struct ChatHeader: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            // Off the fold of a partly open Duo: to whichever side has more room.
+            .offset(x: FoldAvoidance.offset(for: pillFrame, fold: fold, in: headerWidth))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("chatHeader")) } action: { pillFrame = $0 }
             // The pill is offered that room before the spacers beside it share what is left, so
             // it is cut short only when its text does not fit.
             .layoutPriority(1)
@@ -545,6 +568,8 @@ struct ChatHeader: View {
             .accessibilityIdentifier("chat.more")
         }
         .padding(.horizontal, 16)
+        .coordinateSpace(.named("chatHeader"))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { headerWidth = $0 }
         .padding(.top, 4)
         // The bar is one surface, like the Messages header: a tap anywhere on it stays on it and
         // never reaches the thread scrolling underneath (a tool card would otherwise expand).

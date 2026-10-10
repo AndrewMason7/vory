@@ -137,7 +137,7 @@ struct TabBarClearance: ViewModifier {
     #endif
     func body(content: Content) -> some View {
         #if os(iOS)
-        content.contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
+        content.contentMargins(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
         #else
         content
         #endif

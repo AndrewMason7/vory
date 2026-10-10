@@ -67,8 +67,10 @@ struct VoryTabBar: View {
     static func reservedHeight(in geometry: WindowGeometry) -> CGFloat { reservedHeight(safeBottom: geometry.safeArea.bottom) }
     /// What a vertical strip takes from the window's width: the capsule plus a margin each side.
     static let reservedWidth: CGFloat = 56 + 2 * 10
-    /// A vertical slot: a little taller than wide, so the label fits under the icon.
-    private let verticalSlot: CGFloat = 58
+    /// Down a strip the bar is compact, like the system's vertical bars: icons only, in 46 pt
+    /// slots and circles, so it fits under the navigation items the strip already holds.
+    private let verticalSlot: CGFloat = 42
+    private var circleSize: CGFloat { axis == .vertical ? 42 : barHeight }
 
     var body: some View {
         GlassEffectContainer(spacing: circleGap) {
@@ -86,8 +88,8 @@ struct VoryTabBar: View {
                             Button { voice(p.name) } label: { Label(p.label, systemImage: "person.fill") }
                         }
                     } label: {
-                        Image(systemName: "mic.fill").font(.system(size: 22, weight: .medium))
-                            .frame(width: barHeight, height: barHeight)
+                        Image(systemName: "mic.fill").font(.system(size: axis == .vertical ? 19 : 22, weight: .medium))
+                            .frame(width: circleSize, height: circleSize)
                             .glassEffect(.regular.interactive(), in: .circle)
                     } primaryAction: {
                         voice(nil)
@@ -103,9 +105,9 @@ struct VoryTabBar: View {
                 Button { run(ComposeAction.tap(tapRaw)) } label: {
                     // Centred on the square, not the glyph: the pencil hangs off its top-right
                     // corner. Measured from a simulator screenshot (the square sat 2.5 pt low).
-                    Image(systemName: "square.and.pencil").font(.system(size: 23, weight: .medium))
+                    Image(systemName: "square.and.pencil").font(.system(size: axis == .vertical ? 20 : 23, weight: .medium))
                         .offset(x: 0, y: -2.5)
-                        .frame(width: barHeight, height: barHeight)
+                        .frame(width: circleSize, height: circleSize)
                         .glassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain)
@@ -121,7 +123,7 @@ struct VoryTabBar: View {
                 .accessibilityIdentifier("chats.new")
             }
         }
-        .padding(axis == .horizontal ? .horizontal : .vertical, sideMargin)
+        .padding(axis == .horizontal ? .horizontal : .vertical, axis == .horizontal ? sideMargin : 0)
         // Along the bottom: reserve only the part above the home-indicator area, like the
         // system bar group; the capsule itself is drawn overflowing into it. Down a strip: the
         // strip's width, the stack kept to its top like the system's.
@@ -183,7 +185,7 @@ struct VoryTabBar: View {
             .contentShape(Capsule())
             .gesture(barGesture(slotAlong: slotAlong))
         }
-        .frame(width: axis == .vertical ? barHeight : nil,
+        .frame(width: axis == .vertical ? verticalSlot + inset * 2 : nil,
                height: axis == .horizontal ? barHeight : CGFloat(max(1, tabs.count)) * verticalSlot + inset * 2)
         .glassEffect(.regular, in: .capsule)
     }
@@ -203,10 +205,10 @@ struct VoryTabBar: View {
     /// Settings › Appearance › Tab labels is off).
     @ViewBuilder private func slot(_ tab: AppModel.AppTab, dragging: Bool) -> some View {
         let selected = model.selectedTab == tab
-        let labelled = selected && !dragging && showLabels
+        let labelled = selected && !dragging && showLabels && axis == .horizontal
         VStack(spacing: 2) {
-            icon(for: tab, size: labelled ? 21 : 25)
-                .frame(height: labelled ? 24 : 30)
+            icon(for: tab, size: axis == .vertical ? 21 : (labelled ? 21 : 25))
+                .frame(height: axis == .vertical ? 26 : (labelled ? 24 : 30))
             if labelled {
                 Text(tab.title).font(.system(size: 10, weight: .semibold))
                     .lineLimit(1).minimumScaleFactor(0.8)
