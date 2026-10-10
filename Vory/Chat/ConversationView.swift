@@ -248,13 +248,13 @@ struct ConversationView: View {
     private func thread(_ chat: ChatSession) -> some View {
         #if os(macOS)
         // The dock is a bottom inset on the Mac: the thread needs no margins of its own.
-        let (dockTopArg, fallback, top): (CGFloat, CGFloat, CGFloat) = (0, 0, 0)
+        let (dockTopArg, fallback, top, fade): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
         #else
         // Until the header has been measured, its default height plus the status bar's usual share.
-        let (dockTopArg, fallback, top) = (dockTop, dockHeight + keyboardInset, headerHeight + windowGeometry.safeArea.top)
+        let (dockTopArg, fallback, top, fade) = (dockTop, dockHeight + keyboardInset, headerHeight + windowGeometry.safeArea.top, ChatStyle.bandFade)
         #endif
         return TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
-                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top, headerBottom: headerBottom)
+                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top, headerBottom: headerBottom, bandFade: fade)
             #if os(iOS)
             // The thread's margins (header above, dock and keyboard below) add up to a minimum
             // height. On a small phone with the keyboard up, or any phone with a tall card in
@@ -278,7 +278,7 @@ struct ConversationView: View {
     /// as a panel; black must stay black).
     private var headerBand: some View {
         let solid = headerHeight + windowGeometry.safeArea.top
-        let height = solid + 28
+        let height = solid + ChatStyle.bandFade
         return Rectangle().fill(Color(.systemBackground))
             .frame(height: height)
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
@@ -291,10 +291,10 @@ struct ConversationView: View {
     /// field itself that is the page, so nothing shows between the field and the keyboard.
     private var dockBand: some View {
         let solid = dockHeight + keyboardInset + windowGeometry.safeArea.bottom
-        let height = solid + 28
+        let height = solid + ChatStyle.bandFade
         return Rectangle().fill(Color(.systemBackground))
             .frame(height: height)
-            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 28 / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: ChatStyle.bandFade / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
             .ignoresSafeArea(.container, edges: .bottom)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
@@ -310,6 +310,10 @@ struct ConversationView: View {
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
+            // The dock's frame for the UI tests (its own container: an identifier on a plain
+            // view goes to every child, and the composer lost its name).
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat.dock")
     }
     private func header(_ chat: ChatSession) -> some View {
         // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
@@ -322,6 +326,9 @@ struct ConversationView: View {
                 // its height, and its bottom in window space for the thread's top margin.
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { headerBottom = $0 }
+                // The header's frame for the UI tests (a container of its own, as the dock).
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("chat.header")
                 .frame(maxHeight: .infinity, alignment: .top)
         }
             // One group for VoiceOver, placed after the thread and the dock in the accessibility

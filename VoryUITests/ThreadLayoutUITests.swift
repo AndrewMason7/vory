@@ -74,6 +74,31 @@ final class ThreadLayoutUITests: XCTestCase {
     private var overlapShots = 0
     private var checks = 0
 
+    /// The band's fade above the dock and below the header (`ChatStyle.bandFade`), with a point
+    /// of slack for rounding.
+    private let bandFade: CGFloat = 28
+    private var dock: XCUIElement { app.otherElements["chat.dock"].firstMatch }
+    private var header: XCUIElement { app.otherElements["chat.header"].firstMatch }
+
+    /// At the end of the thread, its last row (a card, the typing bubble, the status line) ends
+    /// above the dock band's fade: whole, not read through the fade (1.5, the bands).
+    private func checkEndClearsTheDock(_ label: String) {
+        let rows = threadRows().filter { $0.frame.height > 0 }
+        guard let last = rows.max(by: { $0.frame.maxY < $1.frame.maxY }), dock.exists else { XCTFail("\(label): no rows or no dock"); return }
+        let gap = dock.frame.minY - last.frame.maxY
+        if gap < bandFade - 1 { shot("thread-end-under-band-\(label)") }
+        XCTAssertGreaterThanOrEqual(gap, bandFade - 1, "\(label): \(last.id) ends \(Int(gap)) pt above the dock, inside the \(Int(bandFade)) pt fade")
+    }
+
+    /// At the top of the thread, its first row starts below the header band's fade.
+    private func checkTopClearsTheHeader(_ label: String) {
+        let rows = threadRows().filter { $0.frame.height > 0 }
+        guard let first = rows.min(by: { $0.frame.minY < $1.frame.minY }), header.exists else { XCTFail("\(label): no rows or no header"); return }
+        let gap = first.frame.minY - header.frame.maxY
+        if gap < bandFade - 1 { shot("thread-top-under-band-\(label)") }
+        XCTAssertGreaterThanOrEqual(gap, bandFade - 1, "\(label): \(first.id) starts \(Int(gap)) pt below the header, inside the \(Int(bandFade)) pt fade")
+    }
+
     private func check(_ label: String) {
         let rows = threadRows()
         checks += 1
@@ -114,6 +139,13 @@ final class ThreadLayoutUITests: XCTestCase {
         let rest = Date().addingTimeInterval(2.5)
         while Date() < rest { check("turn\(n)-settling") }
         shot("thread-turn\(n)-done")
+        // Settled at the end: the last row clears the dock's band, keyboard up and down.
+        checkEndClearsTheDock("turn\(n)-keyboard-up")
+        if app.keyboards.buttons["Hide keyboard"].firstMatch.exists {
+            app.keyboards.buttons["Hide keyboard"].firstMatch.tap()
+            sleep(1)
+            checkEndClearsTheDock("turn\(n)-keyboard-down")
+        }
     }
 
     func testRowsNeverOverlapWhileATurnOfToolCardsStreams() throws {
@@ -136,6 +168,17 @@ final class ThreadLayoutUITests: XCTestCase {
             check("up\(i)")
         }
         shot("thread-scrolled-up")
+        // On to the very top (the first row stops moving), where the first row clears the header's band.
+        var topY = threadRows().map(\.frame.minY).min() ?? 0
+        for _ in 0..<10 {
+            app.swipeDown(velocity: .fast)
+            sleep(1)
+            let y = threadRows().map(\.frame.minY).min() ?? 0
+            if abs(y - topY) < 1 { break }
+            topY = y
+        }
+        shot("thread-top")
+        checkTopClearsTheHeader("top")
         for i in 1...8 {
             app.swipeUp(velocity: .fast)
             sleep(1)
