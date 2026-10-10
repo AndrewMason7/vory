@@ -54,9 +54,14 @@ public struct AudioChunk: Sendable {
     /// Mono int16 speech with whatever follows the last spoken words cut off: Gemini's voice
     /// previews can end in a burst of static, which played at full level after the words (the
     /// 20 ms fade only softened its last 20 ms). The words are found as loud windows with few
-    /// zero crossings (voiced sound); noise is loud with many. `keep` seconds after the last
-    /// voiced window stay, the end fades over `fade`. Leaves other formats, and audio with
-    /// nothing after its words, as they are, so applying it twice changes nothing.
+    /// zero crossings (voiced sound); noise is loud with many. A word is a run of at least three
+    /// such windows (60 ms): one lone window is not a word. In 1.4 (10) a saved preview still
+    /// ended in static (#231): the fade put on it when it was saved left a single quiet,
+    /// low-crossing window at the very end, which counted as the last word, so everything
+    /// before it stayed, the static included. `keep` seconds after the last word stay, but no
+    /// further than the first loud noisy window after it; the end fades over `fade`. Leaves
+    /// other formats, and audio with nothing after its words, as they are, so applying it twice
+    /// changes nothing.
     public func trimmedTail(keep: Double = 0.08, fade: Double = 0.05) -> AudioChunk {
         guard !isFloat32, channels == 1 else { return self }
         let w = max(1, Int(0.02 * sampleRate)), frames = frameCount
@@ -82,8 +87,20 @@ public struct AudioChunk: Sendable {
         let voiced = level.indices.filter { crossings[$0] < 0.25 && level[$0] > -60 }.map { level[$0] }.sorted()
         guard !voiced.isEmpty else { return self }
         let reference = voiced[Int(Double(voiced.count - 1) * 0.9)]
-        guard let last = level.indices.last(where: { level[$0] > reference - 25 && crossings[$0] < 0.25 }) else { return self }
-        let end = min(frames, (last + 1) * w + Int(keep * sampleRate))
+        let speechLike = level.indices.map { level[$0] > reference - 25 && crossings[$0] < 0.25 }
+        // The last word: the end of the last run of three or more speech-like windows.
+        var lastWord: Int?
+        var run = 0
+        for i in level.indices {
+            run = speechLike[i] ? run + 1 : 0
+            if run >= 3 { lastWord = i }
+        }
+        guard let last = lastWord else { return self }
+        // A loud noisy window after the last word (static): the beat kept ends before it.
+        let noisy = ((last + 1)..<level.count).first { level[$0] > reference - 12 && crossings[$0] >= 0.25 }
+        var end = (last + 1) * w + Int(keep * sampleRate)
+        if let noisy { end = min(end, noisy * w) }
+        end = min(frames, end)
         guard end < frames else { return self }
         return AudioChunk(sampleRate: sampleRate, channels: 1, isFloat32: false, data: data.prefix(end * 2)).fadedOut(seconds: fade)
     }
