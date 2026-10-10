@@ -71,7 +71,7 @@ struct RootView: View {
             if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
                 VerticalBarEdge { edge in
                     let g = windowGeometry
-                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no"))
+                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@  hidden %@ kb %@ open %@ hiders %d mw %@ v %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no", model.tabBarHidden ? "yes" : "no", model.keyboardUp ? "yes" : "no", model.chatsPathOpen ? "yes" : "no", model.tabBarHiders[model.selectedTab] ?? 0, model.wideLayout ? "yes" : "no", model.tabBarVertical ? "yes" : "no"))
                         .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
                         .padding(.top, 40).allowsHitTesting(false)
                 }
@@ -85,6 +85,9 @@ struct RootView: View {
         // Manager or Split View window. The window's shape decides, never the device or a pose.
         .environment(\.wideLayout, wide)
         .onChange(of: wide, initial: true) { _, w in model.wideLayout = w }
+        // Belt and braces: the same value again once the layout has settled after a change of
+        // shape (the Duo's turn from one column to two).
+        .task(id: wide) { model.wideLayout = wide }
         // The probe answered and the chosen page is on the bar now: open on it, unless the
         // person has already gone somewhere else.
         .onChange(of: model.hiddenTabs) { was, hidden in

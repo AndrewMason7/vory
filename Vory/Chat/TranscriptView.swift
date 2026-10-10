@@ -1581,6 +1581,10 @@ struct MarkdownView: View, Equatable {
         // Mentions are marked after the cache: they depend on the bots known now, not on the text.
         Mentions.mark(inlineCached(text), names: Mentions.names)
     }
+    /// The inline text as a view, bot mentions drawn as chips (#321).
+    @MainActor static func inlineText(_ text: String) -> some View {
+        Mentions.text(inline(text)).textRenderer(MentionChipRenderer())
+    }
     static func inlineCached(_ text: String) -> AttributedString {
         let key = text as NSString
         if let hit = inlineCache.object(forKey: key) { return hit.text }
@@ -1630,9 +1634,9 @@ struct MarkdownView: View, Equatable {
         case .paragraph(let t):
             // Never squeezed to a line: on the Mac a reply under an opened Reasoning card lost
             // all but the first line of its last paragraph.
-            Text(Self.inline(t)).fixedSize(horizontal: false, vertical: true)
+            Self.inlineText(t).fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
+            Self.inlineText(t).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
         case .code(let lang, let code, let closed) where style.showsCards && closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.
@@ -1668,7 +1672,7 @@ struct MarkdownView: View, Equatable {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, it in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         listMarker(it)
-                        Text(Self.inline(it.text))
+                        Self.inlineText(it.text)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(it.depth) * 18)
@@ -1681,7 +1685,7 @@ struct MarkdownView: View, Equatable {
         case .quote(let t):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 2).fill(.secondary).frame(width: 3)
-                Text(Self.inline(t)).foregroundStyle(.secondary)
+                Self.inlineText(t).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         case .rule:
