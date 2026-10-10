@@ -228,7 +228,7 @@ struct TranscriptView: View {
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
             .contentMargins(.bottom, bottomInset + 8, for: .scrollContent)
-            .contentMargins(.top, effectiveTopInset + 8, for: .scrollContent)
+            .modifier(ThreadTopEdge(inset: effectiveTopInset + 8))
             // The keyboard is handled by hand (below) so the last message rides up with it instead
             // of vanishing under the composer; SwiftUI's own avoidance would then double the inset.
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -2121,5 +2121,23 @@ private struct ThreadWindowWatch: ViewModifier {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame($0) }
             .onChange(of: shape) { shapeChanged() }
             .onChange(of: geometry.keyboardOverlap, initial: true) { _, v in keyboard(v) }
+    }
+}
+
+/// The thread's room for the floating header (the blur under the header is the conversation's
+/// own band, see `ConversationView.headerBand`). On iOS the thread is also masked at its sides: the times wait 20 pt beyond the rows (the
+/// slide brings them in), which the screen's edge hid on a phone but the iPhone Duo's side
+/// strip and a second column would show. The sides only: the thread keeps running under the
+/// header's blur and the dock above and below.
+private struct ThreadTopEdge: ViewModifier {
+    let inset: CGFloat
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .mask { Rectangle().padding(.vertical, -4000) }
+            .contentMargins(.top, inset, for: .scrollContent)
+        #else
+        content.contentMargins(.top, inset, for: .scrollContent)
+        #endif
     }
 }

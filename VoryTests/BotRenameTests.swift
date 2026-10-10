@@ -6,7 +6,31 @@ import Testing
 /// Renaming a bot's folder (#315, part two): the name rules, what Vory refuses before asking
 /// the gateway, what moves between Vory's own keys, and the gateway's two calls as the app
 /// makes them (the OPTIONS probe for the route, the PATCH itself).
+/// This suite's own fake transport: `MockURLProtocol` belongs to HermesAPITests, and two suites
+/// sharing one static handler race when Swift Testing runs them side by side (seen on iOS).
+final class RenameStubProtocol: URLProtocol {
+    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (Int, [String: String], Data))?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let handler = Self.handler else { return }
+        var req = request
+        if req.httpBody == nil, let stream = req.httpBodyStream {
+            stream.open(); var data = Data(); let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+            while stream.hasBytesAvailable { let n = stream.read(buf, maxLength: 4096); if n > 0 { data.append(buf, count: n) } else { break } }
+            buf.deallocate(); stream.close(); req.httpBody = data
+        }
+        let (status, headers, body) = handler(req)
+        let response = HTTPURLResponse(url: req.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 @MainActor
+@Suite(.serialized)
 struct BotRenameTests {
     private let profiles = [ProfileInfo(name: "default", isDefault: true), ProfileInfo(name: "work"), ProfileInfo(name: "ops")]
 
@@ -76,7 +100,7 @@ struct BotRenameTests {
 
     private func makeAPI() throws -> HermesAPI {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.protocolClasses = [MockURLProtocol.self]
+        cfg.protocolClasses = [RenameStubProtocol.self]
         let g = try GatewayURL.normalize("https://h.example.com/hermes")
         let signer = RequestSigner(authMode: .sessionToken, sessionToken: "tok")
         return HermesAPI(gateway: g, signer: signer, urlSession: URLSession(configuration: cfg))
@@ -84,25 +108,25 @@ struct BotRenameTests {
 
     @Test func theRouteIsOfferedOnlyWhenAllowNamesPatch() async throws {
         let api = try makeAPI()
-        MockURLProtocol.handler = { req in
+        RenameStubProtocol.handler = { req in
             #expect(req.httpMethod == "OPTIONS")
             #expect(req.url?.path.hasSuffix("/api/profiles/_probe") == true)
             return (405, ["Allow": "PATCH"], Data())
         }
         #expect(await BotRename.supported(on: api))
         // An older gateway: the path exists for DELETE alone.
-        MockURLProtocol.handler = { _ in (405, ["Allow": "DELETE"], Data()) }
+        RenameStubProtocol.handler = { _ in (405, ["Allow": "DELETE"], Data()) }
         #expect(await !BotRename.supported(on: api))
         // No such route at all, or a relay that carries no headers.
-        MockURLProtocol.handler = { _ in (404, ["Content-Type": "application/json"], Data(#"{"detail":"Not Found"}"#.utf8)) }
+        RenameStubProtocol.handler = { _ in (404, ["Content-Type": "application/json"], Data(#"{"detail":"Not Found"}"#.utf8)) }
         #expect(await !BotRename.supported(on: api))
-        MockURLProtocol.handler = { _ in (405, [:], Data()) }
+        RenameStubProtocol.handler = { _ in (405, [:], Data()) }
         #expect(await !BotRename.supported(on: api))
     }
 
     @Test func thePatchCarriesTheCleanedNameAndTheAnswerNamesTheFolder() async throws {
         let api = try makeAPI()
-        MockURLProtocol.handler = { req in
+        RenameStubProtocol.handler = { req in
             #expect(req.httpMethod == "PATCH")
             #expect(req.url?.path.hasSuffix("/api/profiles/work") == true)
             let body = req.httpBody.flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) }
@@ -112,7 +136,7 @@ struct BotRenameTests {
         let r: JSONValue = try await api.send("PATCH", "/api/profiles/work", json: .object(["new_name": .string(BotRename.cleaned("Ops Desk"))]))
         #expect(r["name"]?.stringValue == "ops-desk")
         // A refusal from the gateway comes through with its reason.
-        MockURLProtocol.handler = { _ in (400, ["Content-Type": "application/json"], Data(#"{"detail":"Profile 'ops' already exists"}"#.utf8)) }
+        RenameStubProtocol.handler = { _ in (400, ["Content-Type": "application/json"], Data(#"{"detail":"Profile 'ops' already exists"}"#.utf8)) }
         await #expect(throws: HermesAPIError.self) {
             let _: JSONValue = try await api.send("PATCH", "/api/profiles/work", json: .object(["new_name": .string("ops")]))
         }

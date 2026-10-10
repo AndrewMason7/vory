@@ -27,9 +27,6 @@ struct ConversationView: View {
     /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
     /// there, whatever safe area or camera strip the header stands in, and it moves with them.
     @State private var headerBottom: CGFloat = 0
-    /// One switch, Matt's call: on a wide window (the list beside the chat) the header's Back
-    /// circle, which only clears the column, can go, as it is not there in Messages on iPad.
-    static let backHiddenWhenWide = false
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.wideLayout) private var wide
@@ -169,7 +166,14 @@ struct ConversationView: View {
         thread(chat)
             // Like Messages: header and dock float over the thread and the text scrolls under their glass.
             // On a wide layout the dock keeps to the reading column, as on the Mac.
+            // The thread blurs and fades under the header and under the dock across the whole
+            // column: bands of material that thin out toward the thread, the card's treatment
+            // (a phone got something like it at the top from the status bar's edge effect; a
+            // wide column has no status bar, and the text read crisp through the header and
+            // past the composer).
+            .overlay(alignment: .bottom) { dockBand }
             .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity) }
+            .overlay(alignment: .top) { headerBand }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // The keyboard as the window has it (in window space, re-placed on every resize or
             // fold); the thread moves by the same value, so the two arrive together.
@@ -267,6 +271,36 @@ struct ConversationView: View {
                 }
             }
     }
+    #if os(iOS)
+    /// The page's own background, solid over the header's full height (plus the top inset) and
+    /// fading to clear over the 28 pt below the pill: the thread fades out under the header the
+    /// way it would under a bar's soft edge, never a grey slab (Matt, in dark mode the band read
+    /// as a panel; black must stay black).
+    private var headerBand: some View {
+        let solid = headerHeight + windowGeometry.safeArea.top
+        let height = solid + 28
+        return Rectangle().fill(Color(.systemBackground))
+            .frame(height: height)
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+    /// The same above the composer: clear 28 pt above the field, the page's background from the
+    /// field's top edge down to the window's bottom (the keyboard's share included). Around the
+    /// field itself that is the page, so nothing shows between the field and the keyboard.
+    private var dockBand: some View {
+        let solid = dockHeight + keyboardInset + windowGeometry.safeArea.bottom
+        let height = solid + 28
+        return Rectangle().fill(Color(.systemBackground))
+            .frame(height: height)
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 28 / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
+            .ignoresSafeArea(.container, edges: .bottom)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+    #endif
+
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
@@ -280,7 +314,8 @@ struct ConversationView: View {
     private func header(_ chat: ChatSession) -> some View {
         // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
         FoldReader { fold in
-            ChatHeader(chat: chat, fold: fold, showBack: !(wide && Self.backHiddenWhenWide),
+            // Back stays on a wide window too (Matt, 2026-10-10): it clears the column.
+            ChatHeader(chat: chat, fold: fold, showBack: true,
                        onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                        onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                 // The header's own size and bottom edge (the reader around it is thread-sized):
