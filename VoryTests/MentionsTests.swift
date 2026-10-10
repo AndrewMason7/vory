@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Testing
+import VoryCore
 @testable import Vory
 
 /// "@name" mentions (#302): which words count, where, and that code is left alone.
@@ -47,5 +48,17 @@ import Testing
         let url = try #require(Mentions.url(for: "ops-bot"))
         #expect(Mentions.bot(from: url) == "ops-bot")
         #expect(Mentions.bot(from: URL(string: "https://example.com/bot/ops")!) == nil)
+    }
+
+    /// A bot answers to its folder name, the gateway's display name and the name Vory keeps
+    /// for it (#315), each once.
+    @Test func aBotAnswersToAllItsNames() {
+        let kept = ProfileInfo.ownNames
+        defer { ProfileInfo.ownNames = kept }
+        ProfileInfo.ownNames = { $0 == "work" ? ProfileOwnNames(displayName: "Scribe") : nil }
+        let bots = [ProfileInfo(name: "work", displayName: "Work bot"), ProfileInfo(name: "default")]
+        #expect(Mentions.botNames(for: bots) == ["work", "Work bot", "Scribe", "default"])
+        let names = Mentions.Names(bots: Mentions.botNames(for: bots), person: nil)
+        #expect(Mentions.find(in: "Ask @Scribe or @work; @default keeps the log", names: names).count == 3)
     }
 }

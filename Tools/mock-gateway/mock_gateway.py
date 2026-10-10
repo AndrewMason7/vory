@@ -66,6 +66,13 @@ _http11.Request.parse = classmethod(_lenient_request_parse)
 
 TOKEN = "mock-token"
 PROFILES = ["default", "work"]
+# The bots as the dashboard lists them; PATCH /api/profiles/{name} renames one in place (#315).
+PROFILE_ROWS: list[dict] = [
+    {"name": "default", "path": "/home/hermes/.hermes", "is_default": True, "description": "Main agent", "skill_count": 18},
+    {"name": "work", "path": "/home/hermes/.hermes-work", "is_default": False, "description": "Work profile", "skill_count": 11},
+]
+# The default bot's rename lands as a display name only, as the real gateway's does.
+DISPLAY_NAMES: dict[str, str] = {}
 MODEL = "anthropic/claude-sonnet-4.6"
 PROVIDER = "anthropic"
 CONTEXT_MAX = 200_000
@@ -552,14 +559,16 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         return 200, {"ok": True, "version": "0.21.4", "auth_required": False}
     if base == "/api/profiles":
         return 200, {"profiles": [
-            {"name": "default", "path": "/home/hermes/.hermes", "is_default": True, "model": MODEL,
-             "provider": PROVIDER, "description": "Main agent", "skill_count": 18, "has_env": True},
-            {"name": "work", "path": "/home/hermes/.hermes-work", "is_default": False, "model": MODEL,
-             "provider": PROVIDER, "description": "Work profile", "skill_count": 11, "has_env": True}]}
+            {**row, "model": MODEL, "provider": PROVIDER, "has_env": True,
+             **({"display_name": DISPLAY_NAMES[row["name"]]} if row["name"] in DISPLAY_NAMES else {})}
+            for row in PROFILE_ROWS]}
     if base.startswith("/api/profiles/") and base.endswith("/soul"):
         return 200, {"content": "# Workshop assistant\n\nYou are a careful operator. Prefer read-only commands, ask before deleting, and summarize what you changed.", "exists": True}
     if base == "/api/profiles/active":
         return 200, {"active": "default", "current": "default"}
+    if base == "/api/_mock/profile-renames":
+        # Every rename as it arrived, for a test that checks what the app sent.
+        return 200, {"renames": PROFILE_RENAMES}
     if base == "/api/sessions":
         # The real gateway refuses a page over 100 (FastAPI le=100 → 422), as a tester's Home found out.
         if int(query.get("limit") or 20) > 100:
@@ -717,6 +726,45 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
 
 
 RESTART: dict = {}
+PROFILE_RENAMES: list[dict] = []
+
+
+def rename_profile(name: str, payload: dict) -> tuple[int, object]:
+    """PATCH /api/profiles/{name}: what hermes_cli.profiles.rename_profile answers. The folder
+    moves, the stored chats move with it, and the bot's sockets drop as its gateway stops and
+    starts again under the new name. The default bot only gets a display name."""
+    new = str(payload.get("new_name") or "").strip()
+    PROFILE_RENAMES.append({"name": name, "new_name": new})
+    if not new:
+        return 400, {"detail": "profile name cannot be empty"}
+    row = next((r for r in PROFILE_ROWS if r["name"] == name), None)
+    if row is None:
+        return 404, {"detail": f"Profile '{name}' does not exist"}
+    if name == "default":
+        DISPLAY_NAMES["default"] = new
+        return 200, {"ok": True, "name": "default", "display_name": new, "path": row["path"]}
+    canon = new.lower()
+    if canon == "default":
+        return 400, {"detail": "Cannot rename to 'default' - it is reserved."}
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", canon):
+        return 400, {"detail": f"Invalid profile name {canon!r}"}
+    if any(r["name"] == canon for r in PROFILE_ROWS):
+        return 400, {"detail": f"Profile '{canon}' already exists"}
+    row["name"] = canon
+    row["path"] = f"/home/hermes/.hermes-{canon}"
+    PROFILES[:] = [r["name"] for r in PROFILE_ROWS]
+    for s in STORED_SESSIONS:
+        if s.get("profile") == name:
+            s["profile"] = canon
+    dropped = 0
+    for gw in list(GATEWAYS):
+        try:
+            gw.ws.transport.abort()
+            dropped += 1
+        except Exception:  # noqa: BLE001
+            pass
+    print(f"[mock] renamed profile {name} -> {canon}, dropped {dropped} socket(s)", flush=True)
+    return 200, {"ok": True, "name": canon, "path": row["path"]}
 ROOMS: list = []
 ROOM_LOGS: dict = {}
 
@@ -1295,6 +1343,13 @@ def process_request(connection, request):
             payload = {}
         payload = payload if isinstance(payload, dict) else {}
         result = kanban_rest(method, base, query, payload) if base.startswith("/api/plugins/kanban/") else audio_rest(method, base, payload)
+    elif method == "OPTIONS" and re.fullmatch(r"/api/profiles/[^/]+", base):
+        # Starlette's answer for a path whose routes take other methods: 405 naming the first
+        # route's methods. Vory reads `Allow` to know the gateway has the rename (#315).
+        body = b""
+        return Response(405, "Method Not Allowed", Headers([("Allow", "PATCH"), ("Content-Length", "0")]), body)
+    elif method == "PATCH" and re.fullmatch(r"/api/profiles/[^/]+", base):
+        result = rename_profile(unquote(base.split("/")[3]), body_json if isinstance(body_json, dict) else {})
     elif method == "PATCH" and base.startswith("/api/sessions/"):
         # Title rename from the chat info sheet; the body is not readable here (websockets only
         # hands us headers), so echo a plausible title so the sheet's "saved" path is exercised.
@@ -1977,9 +2032,10 @@ class Gateway:
         if method == "ping":
             return ok({"pong": True})
         if method == "profiles.list":
-            return ok({"profiles": [{"name": "default", "is_default": True},
-                                    {"name": "work", "is_default": False,
-                                     "canonical_session": {"id": "20260930_221000_work01", "resolved_id": "20260930_221000_work01", "title": "Bot Chat", "message_count": 4}}]})
+            # The same bots as /api/profiles, renamed ones included (#315).
+            return ok({"profiles": [{"name": r["name"], "is_default": r["is_default"]} if r["is_default"] else
+                                    {"name": r["name"], "is_default": False, "canonical_session": {"id": "20260930_221000_work01", "resolved_id": "20260930_221000_work01", "title": "Bot Chat", "message_count": 4}}
+                                    for r in PROFILE_ROWS]})
         if method == "session.active_list":
             return ok({"sessions": [{"id": l.sid, "session_key": l.stored, "title": l.title, "source": "ios",
                                      "status": "streaming" if l.running else "idle", "current": False}

@@ -198,9 +198,11 @@ struct CloudMerge {
     private func reconcileLooks(_ mode: Mode, joined: Double, stamps: inout [String: Double], seen: inout [String: String], out: inout Outcome) {
         var colors = Self.map(defaults.string(forKey: BotColors.storageKey))
         var avatars = Self.map(defaults.string(forKey: BotAvatarStore.storageKey))
-        let original = (colors, avatars)
+        // The bot's own name and title (#315) travel in the same entry as its look.
+        var ownNames = Self.mapOfMaps(defaults.string(forKey: BotNames.storageKey))
+        let original = (colors, avatars, ownNames)
 
-        var names = Set(colors.keys).union(avatars.keys)
+        var names = Set(colors.keys).union(avatars.keys).union(ownNames.keys)
         for key in cloud.cloudKeys where key.hasPrefix(Self.lookPrefix) {
             if let n = (cloud.cloudValue(key) as? [String: Any])?["n"] as? String { names.insert(n) }
         }
@@ -210,32 +212,43 @@ struct CloudMerge {
             let entry = cloud.cloudValue(ck) as? [String: Any]
             let gone = entry?["gone"] as? Bool == true
             let hex = colors[name], avatar = avatars[name]
-            let local: String? = (hex == nil && avatar == nil) ? nil
-                : Self.lookFingerprint(hex: hex, avatar: avatar, photo: avatar == "photo" ? photoStamp(name) : nil)
+            let own = ownNames[name], ownName = own?["n"], ownTitle = own?["t"]
+            let local: String? = (hex == nil && avatar == nil && ownName == nil && ownTitle == nil) ? nil
+                : Self.lookFingerprint(hex: hex, avatar: avatar, photo: avatar == "photo" ? photoStamp(name) : nil, name: ownName, title: ownTitle)
             let cloudFP: String? = (entry == nil || gone) ? nil
-                : Self.lookFingerprint(hex: entry?["hex"] as? String, avatar: entry?["avatar"] as? String, photo: entry?["ph"] as? String)
+                : Self.lookFingerprint(hex: entry?["hex"] as? String, avatar: entry?["avatar"] as? String, photo: entry?["ph"] as? String,
+                                       name: entry?["dn"] as? String, title: entry?["bt"] as? String)
 
             step(ck, local: local, cloud: cloudFP, cloudTime: entry?["t"] as? Double, mode: mode, joined: joined, stamps: &stamps, seen: &seen, out: &out,
                  push: { t in
                     guard local != nil else { cloud.setCloudValue(["n": name, "gone": true, "t": t], for: ck); return }
                     var e: [String: Any] = ["n": name, "t": t]
                     e["hex"] = hex; e["avatar"] = avatar
+                    e["dn"] = ownName; e["bt"] = ownTitle
                     if avatar == "photo", let data = photoData(name), data.count <= Self.photoLimit {
                         e["photo"] = data; e["ph"] = Self.hash(data)
                     }
                     cloud.setCloudValue(e, for: ck)
                  },
                  apply: {
-                    guard let entry, !gone else { colors[name] = nil; avatars[name] = nil; return nil }
+                    guard let entry, !gone else { colors[name] = nil; avatars[name] = nil; ownNames[name] = nil; return nil }
                     colors[name] = entry["hex"] as? String
                     avatars[name] = entry["avatar"] as? String
+                    var e: [String: String] = [:]
+                    if let dn = entry["dn"] as? String, !dn.isEmpty { e["n"] = dn }
+                    if let bt = entry["bt"] as? String, !bt.isEmpty { e["t"] = bt }
+                    ownNames[name] = e.isEmpty ? nil : e
                     if let data = entry["photo"] as? Data { savePhoto(name, data) }
-                    return Self.lookFingerprint(hex: colors[name], avatar: avatars[name], photo: avatars[name] == "photo" ? photoStamp(name) : nil)
+                    return Self.lookFingerprint(hex: colors[name], avatar: avatars[name], photo: avatars[name] == "photo" ? photoStamp(name) : nil,
+                                                name: ownNames[name]?["n"], title: ownNames[name]?["t"])
                  })
         }
 
         if colors != original.0 { defaults.set(Self.string(colors), forKey: BotColors.storageKey) }
         if avatars != original.1 { defaults.set(Self.string(avatars), forKey: BotAvatarStore.storageKey) }
+        if ownNames != original.2 {
+            if ownNames.isEmpty { defaults.removeObject(forKey: BotNames.storageKey) } else { defaults.set(Self.stringOfMaps(ownNames), forKey: BotNames.storageKey) }
+        }
     }
 
     // MARK: What is there
@@ -269,8 +282,17 @@ struct CloudMerge {
     /// the cloud (a Bool is a number on both sides).
     static func fingerprint(_ value: Any) -> String { "\(value)" }
 
-    static func lookFingerprint(hex: String?, avatar: String?, photo: String?) -> String {
-        "\(hex ?? "")|\(avatar ?? "")|\(photo ?? "")"
+    static func lookFingerprint(hex: String?, avatar: String?, photo: String?, name: String? = nil, title: String? = nil) -> String {
+        "\(hex ?? "")|\(avatar ?? "")|\(photo ?? "")|\(name ?? "")|\(title ?? "")"
+    }
+
+    /// `{bot: {field: value}}` as stored for the bots' own names.
+    static func mapOfMaps(_ raw: String?) -> [String: [String: String]] {
+        guard let raw, let data = raw.data(using: .utf8), let m = try? JSONDecoder().decode([String: [String: String]].self, from: data) else { return [:] }
+        return m
+    }
+    static func stringOfMaps(_ m: [String: [String: String]]) -> String {
+        (try? JSONEncoder().encode(m)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
     /// The cloud's keys hold 64 bytes: a long bot name goes in by its hash.
@@ -743,6 +765,7 @@ final class CloudSync {
         var parts = CloudMerge.syncedSettings.map { d.object(forKey: $0).map(CloudMerge.fingerprint) ?? "" }
         parts.append(d.string(forKey: BotColors.storageKey) ?? "")
         parts.append(d.string(forKey: BotAvatarStore.storageKey) ?? "")
+        parts.append(d.string(forKey: BotNames.storageKey) ?? "")
         return parts.joined(separator: "\u{1f}")
     }
 

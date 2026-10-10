@@ -141,6 +141,9 @@ private struct MainSplitView: View {
                     Sidebar(tabs: tabs)
                 } content: {
                     ChatListView(detailPath: $chatPath)
+                        // A renamed bot's open chat is stale (#315): back to the placeholder;
+                        // the list has the chat again under the new name.
+                        .onReceive(NotificationCenter.default.publisher(for: .hermesBotRenamed)) { _ in chatPath = NavigationPath() }
                         .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 560)
                 } detail: {
                     // The chat beside the list (`ChatNavigation`): shared with the iPad and the
