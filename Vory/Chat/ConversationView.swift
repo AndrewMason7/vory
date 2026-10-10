@@ -167,6 +167,11 @@ struct ConversationView: View {
             // Like Messages: header and dock float over the thread and the text scrolls under their glass.
             // On a wide layout the dock keeps to the reading column, as on the Mac.
             .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity) }
+            // The thread blurs and fades under the header across the whole column, down to below
+            // the pill: a band of material that thins out, the card's treatment (a phone got
+            // something like it from the status bar's edge effect; a wide column has no status
+            // bar at its top, and the text read crisp through the header).
+            .overlay(alignment: .top) { headerBand }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // The keyboard as the window has it (in window space, re-placed on every resize or
             // fold); the thread moves by the same value, so the two arrive together.
@@ -264,6 +269,18 @@ struct ConversationView: View {
                 }
             }
     }
+    #if os(iOS)
+    private var headerBand: some View {
+        let height = headerHeight + windowGeometry.safeArea.top + 24
+        return Rectangle().fill(.regularMaterial)
+            .frame(height: height)
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.55), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+    #endif
+
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)

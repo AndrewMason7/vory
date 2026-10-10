@@ -199,10 +199,10 @@ struct ChatListView: View {
                 #else
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
-                    if model.tabBarVertical && !model.wideLayout {
+                    if model.tabBarVertical {
                         // The system lays these items down the same strip Vory's tab bar stands in
-                        // (the closed Duo; on the open display the list's items stay in its own
-                        // column): sort and filters share one View menu there, so the strip holds both.
+                        // (the closed Duo), or beside a narrow column on the open one: sort and
+                        // filters share one View menu there, so the strip and the title keep room.
                         Menu { sortMenu; filterMenu } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
                             .accessibilityLabel("View")
                             .accessibilityIdentifier("chats.view")

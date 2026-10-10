@@ -2123,11 +2123,8 @@ private struct ThreadWindowWatch: ViewModifier {
     }
 }
 
-/// The thread's room for the floating header. On iOS it is a safe-area edge, not a content
-/// margin, so the system's soft edge effect blurs and fades the thread under the header across
-/// the thread's full width (the status bar gave a phone that for free; a wide column has no
-/// status bar at its top, and the text read crisp through the header). The Mac keeps its margin.
-/// On iOS the thread is also masked at its sides: the times wait 20 pt beyond the rows (the
+/// The thread's room for the floating header (the blur under the header is the conversation's
+/// own band, see `ConversationView.headerBand`). On iOS the thread is also masked at its sides: the times wait 20 pt beyond the rows (the
 /// slide brings them in), which the screen's edge hid on a phone but the iPhone Duo's side
 /// strip and a second column would show. The sides only: the thread keeps running under the
 /// header's blur and the dock above and below.
@@ -2137,9 +2134,7 @@ private struct ThreadTopEdge: ViewModifier {
         #if os(iOS)
         content
             .mask { Rectangle().padding(.vertical, -4000) }
-            // A bar's worth of room, not a padding: a bar is what the scroll view blurs under.
-            .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: inset) }
-            .scrollEdgeEffectStyle(.soft, for: .top)
+            .contentMargins(.top, inset, for: .scrollContent)
         #else
         content.contentMargins(.top, inset, for: .scrollContent)
         #endif
