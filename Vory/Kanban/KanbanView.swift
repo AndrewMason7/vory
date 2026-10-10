@@ -123,7 +123,7 @@ struct KanbanView: View {
                 Label("Live", systemImage: "dot.radiowaves.left.and.right").font(.caption2).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.vertical, 4).background(.thinMaterial, in: .capsule).padding(12)
                     // Above the floating tab bar, which otherwise covered it on the phone.
-                    .padding(.bottom, Self.liveCapsuleLift(hidden: model.tabBarHidden, in: windowGeometry))
+                    .padding(.bottom, Self.liveCapsuleLift(hidden: model.tabBarHidden || model.tabBarVertical, in: windowGeometry))
                     .accessibilityLabel("Live updates on")
             }
         }

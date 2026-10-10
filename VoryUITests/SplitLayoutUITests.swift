@@ -138,5 +138,13 @@ final class SplitLayoutUITests: XCTestCase {
         XCTAssertTrue(row("Disk cleanup")?.isHittable == true, "the list went away in portrait")
         shot("split-4-portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
+        // A chat short enough to fit the column: its first bubble sits clear of the header pill.
+        if let short = row("Bot Chat") { short.tap() }
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        sleep(3)
+        shot("split-5-short-chat")
+        let first = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'export is paused'")).firstMatch
+        let pillFrame = app.buttons["chat.titlePill"].firstMatch.frame
+        if first.waitForExistence(timeout: 10) { XCTAssertGreaterThan(first.frame.minY, pillFrame.maxY - 1, "the first bubble runs under the header pill: \(first.frame) vs \(pillFrame)") }
     }
 }

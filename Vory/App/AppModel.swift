@@ -93,6 +93,9 @@ final class AppModel {
     /// The window is regular width (iPad, the open Duo): the chat list stands beside the open
     /// chat, and the tab bar stays while a chat is open. Set by the root from the size class.
     var wideLayout = false
+    /// The tab bar stands as a vertical strip on a side edge (the closed iPhone Duo, the open
+    /// Duo in landscape): nothing is reserved along the bottom then. Set by the root.
+    var tabBarVertical = false
     /// The gateway's companion plugin is older than the one this build ships: Settings › Notifications ›
     /// Background Notifications carry a badge until it is updated.
     var companionUpdateAvailable = false

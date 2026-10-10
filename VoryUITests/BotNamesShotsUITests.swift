@@ -99,7 +99,9 @@ final class BotNamesShotsUITests: XCTestCase {
         XCTAssertTrue(becomesHittable(save), "no Save on the name sheet")
         save.tap()
         XCTAssertTrue(text("Ops on the workshop host").firstMatch.waitForExistence(timeout: 10), "the saved title is not under the name")
-        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        // The card grows back to its full height once the name sheet has gone; the picture
+        // waits for that, or the thread behind shows through the sheet's edge mid-resize.
+        RunLoop.current.run(until: Date().addingTimeInterval(3))
         shot("315-1-name-and-title")
         app.buttons["profile.close"].firstMatch.tap()
 
