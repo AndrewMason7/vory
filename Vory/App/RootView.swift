@@ -56,6 +56,20 @@ struct RootView: View {
         }
         .animation(.default, value: model.lock.isLocked)
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        #if DEBUG
+        // `-vory-geometry-probe`: the window's numbers in the corner, for reading a pose off a
+        // screenshot (the Duo simulator has no other way to report its insets).
+        .overlay(alignment: .topLeading) {
+            if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
+                VerticalBarEdge { edge in
+                    let g = windowGeometry
+                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", sizeClass == .regular ? "yes" : "no"))
+                        .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
+                        .padding(.top, 40).allowsHitTesting(false)
+                }
+            }
+        }
+        #endif
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window (iPad, the open Duo), the phone layout otherwise.
         .environment(\.wideLayout, sizeClass == .regular)
@@ -229,11 +243,19 @@ struct MainTabView: View {
                     // foot under those items, so the pages keep the width the strip leaves them.
                     // A strip too narrow for the capsule gets the bar beside it instead.
                     let strip = edge == .leading ? windowGeometry.safeArea.leading : windowGeometry.safeArea.trailing
-                    if strip >= 56 {
-                        pages.overlay(alignment: edge == .leading ? .bottomLeading : .bottomTrailing) {
+                    if strip >= VoryTabBar.stripItemWidth {
+                        // One column with the system's items: their width, their centre line
+                        // (measured on the closed Duo: 50 pt wide, centred 48 pt from the edge).
+                        // On the closed display the stack sits at the strip's foot, under the
+                        // page's navigation items; on the open display (wide) it starts at the
+                        // top, under the status items, as Apple orders vertical bars (Matt).
+                        let outer = VoryTabBar.stripCentreFromEdge - VoryTabBar.stripItemWidth / 2
+                        pages.overlay(alignment: wideAlignment(edge)) {
                             bar
-                                .frame(width: strip)
-                                .padding(.bottom, max(8, windowGeometry.safeArea.bottom))
+                                .frame(width: VoryTabBar.stripItemWidth)
+                                .padding(edge == .leading ? .leading : .trailing, outer)
+                                .padding(.top, model.wideLayout ? VoryTabBar.stripStatusAllowance : 0)
+                                .padding(.bottom, model.wideLayout ? 0 : max(8, windowGeometry.safeArea.bottom))
                                 .ignoresSafeArea(.container, edges: edge == .leading ? .leading : .trailing)
                         }
                     } else {
@@ -281,6 +303,16 @@ struct MainTabView: View {
     private func leaveForChats() {
         model.composeReturnTab = model.selectedTab == .chats ? nil : model.selectedTab
         model.selectedTab = .chats
+    }
+
+    /// Where the vertical bar stands in the strip: the foot on a closed display, the top on an open one.
+    private func wideAlignment(_ edge: HorizontalEdge) -> Alignment {
+        switch (edge, model.wideLayout) {
+        case (.leading, true): .topLeading
+        case (.leading, false): .bottomLeading
+        case (.trailing, true): .topTrailing
+        case (.trailing, false): .bottomTrailing
+        }
     }
 
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {
