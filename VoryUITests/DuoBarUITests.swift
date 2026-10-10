@@ -55,6 +55,17 @@ final class DuoBarUITests: XCTestCase {
         let closedDuo = abs(window.width - 466) < 2 && window.height > window.width
         if closedDuo {
             XCTAssertTrue(vertical, "on the closed Duo the bar should stand on the side: chats \(chats.frame), settings \(settings.frame)")
+            // One column with the system's own strip items (Matt): the navigation bar's "+"
+            // (New bot) and the profile menu share a centre line; ours must sit on it, within 1 pt.
+            let plus = app.buttons["New bot"].firstMatch
+            let items = [("New bot", plus), ("chats.view", app.buttons["chats.view"].firstMatch), ("chats.voice", app.buttons["chats.voice"].firstMatch), ("chats.new", app.buttons["chats.new"].firstMatch), ("tab.chats", chats), ("tab.settings", settings)]
+            for (name, e) in items where e.exists { print("STRIP-ITEM \(name) \(e.frame)") }
+            if plus.exists {
+                let axis = plus.frame.midX
+                for (name, e) in items where e.exists {
+                    XCTAssertEqual(e.frame.midX, axis, accuracy: 1, "\(name) is off the strip's centre line: \(e.frame.midX) vs \(axis)")
+                }
+            }
             // On the strip's edge, within its own width of it, and the tabs stacked in order.
             let nearEdge = chats.frame.maxX > window.maxX - 80 || chats.frame.minX < 80
             XCTAssertTrue(nearEdge, "the vertical bar is not on an edge: \(chats.frame)")

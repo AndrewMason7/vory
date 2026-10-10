@@ -65,17 +65,26 @@ struct VoryTabBar: View {
     nonisolated static func reservedHeight(safeBottom: CGFloat) -> CGFloat { 56 - overhang(safeBottom: safeBottom) + max(0, 13 - safeBottom) }
     /// The same, for this window as it is now.
     static func reservedHeight(in geometry: WindowGeometry) -> CGFloat { reservedHeight(safeBottom: geometry.safeArea.bottom) }
-    /// What a vertical strip takes from the window's width: the capsule plus a margin each side.
+    /// What a vertical strip takes from the window's width when the bar stands beside it (a strip
+    /// too narrow to hold it): the capsule plus a margin each side.
     static let reservedWidth: CGFloat = 56 + 2 * 10
+    /// The system's strip items, measured on the closed iPhone Duo: 50 pt wide, their centre
+    /// line 48 pt in from the window's edge, 10 pt between groups; the status items at the top
+    /// of the strip end about 150 pt down. Ours line up with them (Matt).
+    static let stripItemWidth: CGFloat = 50
+    static let stripCentreFromEdge: CGFloat = 48
+    static let stripGroupGap: CGFloat = 10
+    static let stripStatusAllowance: CGFloat = 156
     /// Down a strip the bar is compact, like the system's vertical bars: icons only, in 46 pt
     /// slots and circles, so it fits under the navigation items the strip already holds.
     private let verticalSlot: CGFloat = 42
     private var circleSize: CGFloat { axis == .vertical ? 42 : barHeight }
 
     var body: some View {
-        GlassEffectContainer(spacing: circleGap) {
+        let gap = axis == .horizontal ? circleGap : Self.stripGroupGap
+        GlassEffectContainer(spacing: gap) {
             // The capsule then the circles, side by side along the bottom or stacked down a strip.
-            let layout = axis == .horizontal ? AnyLayout(HStackLayout(spacing: circleGap)) : AnyLayout(VStackLayout(spacing: circleGap))
+            let layout = axis == .horizontal ? AnyLayout(HStackLayout(spacing: gap)) : AnyLayout(VStackLayout(spacing: gap))
             layout {
                 capsule
                 // Voice: one tap is a fresh chat with the current bot, straight into voice mode;
@@ -127,7 +136,7 @@ struct VoryTabBar: View {
         // Along the bottom: reserve only the part above the home-indicator area, like the
         // system bar group; the capsule itself is drawn overflowing into it. Down a strip: the
         // strip's width, the stack kept to its top like the system's.
-        .frame(width: axis == .vertical ? Self.reservedWidth : nil, height: axis == .horizontal ? Self.reservedHeight(in: windowGeometry) : nil,
+        .frame(width: axis == .vertical ? Self.stripItemWidth : nil, height: axis == .horizontal ? Self.reservedHeight(in: windowGeometry) : nil,
                alignment: axis == .horizontal ? .top : .top)
         .animation(.snappy(duration: 0.25), value: showVoice)
     }

@@ -27,9 +27,6 @@ struct ConversationView: View {
     /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
     /// there, whatever safe area or camera strip the header stands in, and it moves with them.
     @State private var headerBottom: CGFloat = 0
-    /// One switch, Matt's call: on a wide window (the list beside the chat) the header's Back
-    /// circle, which only clears the column, can go, as it is not there in Messages on iPad.
-    static let backHiddenWhenWide = false
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.wideLayout) private var wide
@@ -280,7 +277,8 @@ struct ConversationView: View {
     private func header(_ chat: ChatSession) -> some View {
         // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
         FoldReader { fold in
-            ChatHeader(chat: chat, fold: fold, showBack: !(wide && Self.backHiddenWhenWide),
+            // Back stays on a wide window too (Matt, 2026-10-10): it clears the column.
+            ChatHeader(chat: chat, fold: fold, showBack: true,
                        onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                        onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                 // The header's own size and bottom edge (the reader around it is thread-sized):
