@@ -331,6 +331,8 @@ struct SlashMenuList: View {
     /// The model list is still loading: one quiet row says so.
     var loading = false
     var cap: CGFloat
+    /// Its own glass (floating over the thread) or none (inside the composer's card).
+    var glass = true
     var pick: (SlashMenu.Item) -> Void
 
     static let rowHeight: CGFloat = 38
@@ -376,7 +378,7 @@ struct SlashMenuList: View {
         // A fixed height; the dock's keyboard handling is manual (ConversationView) so this
         // scroll view cannot swallow the keyboard inset.
         .frame(height: min(cap, CGFloat(max(items.count, loading ? 1 : 0)) * Self.rowHeight + 8))
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .glassEffect(glass ? .regular : .identity, in: .rect(cornerRadius: 16))
     }
 
     private func reveal(_ ids: [String], _ proxy: ScrollViewProxy) {

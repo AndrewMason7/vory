@@ -56,6 +56,7 @@ struct ComposerView: View {
     /// The fold of a partly open Duo, when it runs across the window above the composer (a
     /// laptop pose): the lists that grow up from the field stop under it (Step D).
     @Environment(\.reservedRegions) private var regions
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var composerFrame = CGRect.zero
     /// How far up from the field's top a list may grow before the fold: nil with no such fold.
     private var roomUnderFold: CGFloat? {
@@ -231,111 +232,7 @@ struct ComposerView: View {
 
     private var composerStack: some View {
         VStack(spacing: 8) {
-            if !menuItems.isEmpty || menuLoading {
-                SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap) { pick($0) }
-                    // In place, not sliding up from under the keyboard.
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))            }
-            if let holdNote {
-                Text(holdNote)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .accessibilityIdentifier("composer.holdNote")
-                    .transition(.opacity)
-            }
-            if !mentionSuggestions.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(mentionSuggestions) { p in
-                            Button { pickMention(p) } label: {
-                                HStack(spacing: 10) {
-                                    BotAvatar(profile: p.name, size: 26)
-                                    Text("@" + p.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                                    if let m = p.model?.split(separator: "/").last { Text(String(m)).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                                    Spacer(minLength: 0)
-                                }
-                                .frame(height: 34)
-                                .padding(.vertical, 3)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            if p.id != mentionSuggestions.last?.id { Divider() }
-                        }
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 4)
-                }
-                .frame(height: min(commandListCap, CGFloat(mentionSuggestions.count) * 40 + 8))
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
-            }
-            if longTextOffer {
-                // A big paste: offer to send it as a file rather than a wall of text.
-                HStack(spacing: 10) {
-                    Image(systemName: "doc.text").foregroundStyle(.secondary)
-                    Text("That's a lot of text.").font(.subheadline)
-                    Spacer(minLength: 0)
-                    Button("Keep") { withAnimation(.snappy) { longTextOffer = false } }.font(.subheadline)
-                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).buttonStyle(.glassProminent)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            if !chat.staged.isEmpty {
-                // Cards with a real preview of each file, the kind on a pill, × on the corner.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(chat.staged) { a in
-                            StagedCard(attachment: a, onOpen: { stagedPreview = a.localURL },
-                                       onRemove: { withAnimation(.snappy) { chat.removeStaged(a.id) } })
-                                .transition(.scale(scale: 0.9).combined(with: .opacity))
-                        }
-                    }
-                    .padding(.leading, 2)
-                }
-                .quickLookPreview($stagedPreview)
-            }
-            if !quote.isEmpty {
-                // What the reply answers: the first lines of the bubble, with a way out.
-                HStack(alignment: .top, spacing: 8) {
-                    RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                    Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain).accessibilityLabel("Cancel reply")
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                // The bar beside the words is flexible in height; without this the strip took
-                // the whole screen.
-                .fixedSize(horizontal: false, vertical: true)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            // Same shape as the Messages app: a round attach button outside the field, and one
-            // thin capsule holding the text with the mic or send control inside its trailing edge.
-            HStack(alignment: .bottom, spacing: 8) {
-                attachMenu
-                HStack(alignment: .bottom, spacing: 6) {
-                    if dictation.isListening {
-                        // The field is the waveform while the mic listens; the words land when it stops.
-                        DictationWaveform(dictation: dictation)
-                            .padding(.leading, 14).padding(.vertical, 7)
-                            .transition(.opacity)
-                    } else {
-                        textField
-                    }
-                    trailingControl
-                        .padding(.trailing, 4).padding(.bottom, 4)
-                }
-                .frame(minHeight: 36)
-                // Plain glass, not interactive: an interactive capsule answers touches itself,
-                // and on the phone that swallowed the taps meant for the text field's Paste menu.
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
-                .glassEffectID("dock", in: namespace)
-            }
+            card
             if chat.isRunning, !text.isEmpty {
                 HStack {
                     Text("Agent is working. Send queues the message.").font(.caption2).foregroundStyle(.secondary)
@@ -426,7 +323,7 @@ struct ComposerView: View {
     /// The field itself (its own view: the body's one expression grew past what the compiler
     /// types in reasonable time).
     private var textField: some View {
-        ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
+        ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, maxLines: visibleLines, accessibilityID: "composer.text",
                          onSend: { Task { await send() } },
                          onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
                          onArrow: { moveSelection($0) || recallHistory($0) },
@@ -435,7 +332,8 @@ struct ComposerView: View {
                          menuOpen: !menuItems.isEmpty || menuLoading,
                          onTab: { completeOnTab() },
                          onEscape: { dismissMenu() })
-            .padding(.leading, 14).padding(.vertical, 7)
+            .padding(.horizontal, 4).padding(.top, 2)
+            .frame(minHeight: 30)
             .task { catalog = await chat.commandsCatalog() }
             // The model list loads when "/model " is first typed, and is kept for this chat.
             .task(id: menuContext?.kind == .model) { if menuContext?.kind == .model { await loadModelOptions() } }
@@ -451,6 +349,167 @@ struct ComposerView: View {
                 if new.count >= limit, old.count < limit || new.count - old.count > 400 { withAnimation(.snappy) { longTextOffer = true } }
                 else if new.count < limit { longTextOffer = false }
             }
+    }
+
+    /// One rounded glass card (#320, Matt: "expands up as you type or do / commands", the
+    /// attachments added at the top): the staged files' thumbnails along the top, the reply
+    /// strip, then whatever opens for "/" or "@" above the words, the words themselves (growing
+    /// upward to about 40% of the visible height, then scrolling inside), and under them a row
+    /// of controls: +, the chat's model and reasoning level (the existing menus), the mic or
+    /// send (stop while a turn runs). Shared with the Mac, which adds its own keys, drops and
+    /// hover.
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !chat.staged.isEmpty { thumbnails }
+            if !quote.isEmpty { quoteStrip }
+            if !menuItems.isEmpty || menuLoading {
+                SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap, glass: false) { pick($0) }
+                    // In place, not sliding up from under the keyboard.
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                Divider()
+            }
+            if let holdNote {
+                Text(holdNote)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .accessibilityIdentifier("composer.holdNote")
+                    .transition(.opacity)
+            }
+            if !mentionSuggestions.isEmpty {
+                mentionList
+                Divider()
+            }
+            if longTextOffer {
+                // A big paste: offer to send it as a file rather than a wall of text.
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.text").foregroundStyle(.secondary)
+                    Text("That's a lot of text.").font(.subheadline)
+                    Spacer(minLength: 0)
+                    Button("Keep") { withAnimation(.snappy) { longTextOffer = false } }.font(.subheadline)
+                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).buttonStyle(.glassProminent)
+                }
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            if dictation.isListening {
+                // The field is the waveform while the mic listens; the words land when it stops.
+                DictationWaveform(dictation: dictation)
+                    .padding(.horizontal, 6).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            } else {
+                textField
+            }
+            HStack(alignment: .center, spacing: 8) {
+                attachMenu.layoutPriority(1)
+                // The chip gives way first: at the accessibility sizes it shortened to its
+                // level alone and the send button was cut by the card's edge.
+                modelChip
+                Spacer(minLength: 0)
+                trailingControl.layoutPriority(1)
+            }
+        }
+        .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
+        // Plain glass, not interactive: an interactive shape answers touches itself, and on the
+        // phone that swallowed the taps meant for the text field's Paste menu.
+        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        .glassEffectID("dock", in: namespace)
+    }
+
+    /// The staged files, along the top of the card: a real preview of each, × on the corner.
+    private var thumbnails: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(chat.staged) { a in
+                    StagedCard(attachment: a, onOpen: { stagedPreview = a.localURL },
+                               onRemove: { withAnimation(.snappy) { chat.removeStaged(a.id) } })
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                }
+            }
+            .padding(.leading, 2).padding(.vertical, 2)
+        }
+        .quickLookPreview($stagedPreview)
+    }
+
+    /// What the reply answers: the first lines of the bubble, with a way out.
+    private var quoteStrip: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .buttonStyle(.plain).accessibilityLabel("Cancel reply")
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        // The bar beside the words is flexible in height; without this the strip took the whole screen.
+        .fixedSize(horizontal: false, vertical: true)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    /// The bots "@" can mean, in the card above the words.
+    private var mentionList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(mentionSuggestions) { p in
+                    Button { pickMention(p) } label: {
+                        HStack(spacing: 10) {
+                            BotAvatar(profile: p.name, size: 26)
+                            Text("@" + p.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                            if let m = p.model?.split(separator: "/").last { Text(String(m)).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                            Spacer(minLength: 0)
+                        }
+                        .frame(height: 34)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if p.id != mentionSuggestions.last?.id { Divider() }
+                }
+            }
+            .padding(.horizontal, 6).padding(.vertical, 4)
+        }
+        .frame(height: min(commandListCap, CGFloat(mentionSuggestions.count) * 40 + 8))
+        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+    }
+
+    /// The chat's model and reasoning level on one small chip; a tap opens the same menus the
+    /// header's … menu has (models by provider, then the reasoning levels).
+    private var modelChip: some View {
+        Menu {
+            Section("Model") { ModelMenuContent(chat: chat) }
+            ReasoningEffortMenu(chat: chat)
+        } label: {
+            HStack(spacing: 4) {
+                Text(chat.modelName.isEmpty ? "Model" : Self.shortModel(chat.modelName)).lineLimit(1).truncationMode(.middle)
+                Text("·").foregroundStyle(.tertiary)
+                Text(dynamicTypeSize.isAccessibilitySize ? ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "") : ReasoningEffort.title(current: chat.info?.reasoningEffort)).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.quaternary.opacity(0.6), in: .capsule)
+            .contentShape(.capsule)
+        }
+        .menuOrder(.fixed)
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("composer.modelChip")
+        .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.title(current: chat.info?.reasoningEffort))")
+    }
+
+    static func shortModel(_ m: String) -> String {
+        let last = m.split(separator: "/").last.map(String.init) ?? m
+        return last.count > 22 ? String(last.prefix(21)) + "…" : last
+    }
+
+    /// Lines the words may grow to before they scroll inside the card: about 40% of what is
+    /// visible above the keyboard, never under four.
+    private var visibleLines: Int {
+        let visible = windowGeometry.bounds.height - windowGeometry.keyboardOverlap
+        return max(4, Int(visible * 0.4 / 22))
     }
 
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
@@ -504,6 +563,7 @@ struct ComposerView: View {
                 .frame(width: 36, height: 36)
                 .glassEffect(.regular.interactive(), in: .circle)
                 .glassEffectID(showAttach ? "attach-open" : "attach", in: namespace)
+            .accessibilityIdentifier("composer.attach")
         }
         .buttonStyle(.plain)
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
