@@ -7,12 +7,13 @@ import Testing
 /// what the item says.
 @Suite struct ReasoningEffortTests {
     @Test func theKnownLevelsAreListedByStrengthAndUnknownOnesAfter() {
-        #expect(ReasoningEffort.levels(offered: nil) == ["low", "medium", "high"])
-        #expect(ReasoningEffort.levels(offered: ["", "minimal", "low", "medium", "high", "xhigh", "max"]) == ["minimal", "low", "medium", "high", "xhigh", "max"])
+        // Nothing from the gateway: the full known set, never three (#319).
+        #expect(ReasoningEffort.levels(offered: nil) == ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+        #expect(ReasoningEffort.levels(offered: ["", "minimal", "low", "medium", "high", "xhigh", "max"]) == ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
         // Whatever order the gateway lists them in, the known ones go by strength; repeats and
         // blanks are dropped; a level only the gateway knows comes last, in the gateway's order.
-        #expect(ReasoningEffort.levels(offered: ["max", " ", "high", "xhigh", "max"]) == ["low", "medium", "high", "xhigh", "max"])
-        #expect(ReasoningEffort.levels(offered: ["ultra", "max", "deep"]) == ["low", "medium", "high", "max", "ultra", "deep"])
+        #expect(ReasoningEffort.levels(offered: ["max", " ", "high", "xhigh", "max"]) == ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+        #expect(ReasoningEffort.levels(offered: ["ultra", "max", "deep"]) == ["minimal", "low", "medium", "high", "xhigh", "max", "ultra", "deep"])
         // Hermes's full set, as its schema lists it, in one order whatever the gateway's (#319).
         #expect(ReasoningEffort.levels(offered: ["ultra", "xhigh", "", "minimal", "max", "high", "low", "medium"]) == ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
     }
@@ -35,7 +36,15 @@ import Testing
         let json = #"{"fields": {"agent.reasoning_effort": {"type": "select", "options": ["", "low", "medium", "high", "max"]}, "model": {"type": "string"}}}"#
         let schema = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
         #expect(ReasoningEffort.offered(in: schema) == ["", "low", "medium", "high", "max"])
+        // Hermes's real schema (#319): agent.reasoning_effort has a type but no options; the
+        // delegation select carries the set.
+        let real = #"{"fields": {"agent.reasoning_effort": {"type": "string", "category": "agent"}, "delegation.reasoning_effort": {"type": "select", "options": ["", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]}}}"#
+        let hermes = try JSONDecoder().decode(JSONValue.self, from: Data(real.utf8))
+        #expect(ReasoningEffort.offered(in: hermes) == ["", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+        #expect(ReasoningEffort.levels(offered: ReasoningEffort.offered(in: hermes)) == ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+        // Neither key, or a schema that could not be fetched: the full known set.
         let none = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"fields": {}}"#.utf8))
         #expect(ReasoningEffort.offered(in: none) == nil)
+        #expect(ReasoningEffort.levels(offered: ReasoningEffort.offered(in: none)).count == 7)
     }
 }

@@ -119,8 +119,9 @@ struct ModelMenuContent: View {
 /// now, and a short list to pick from. Hidden once the model is known to have no reasoning
 /// setting; until the model list has loaded it is offered as is.
 enum ReasoningEffort {
-    /// The levels every model is offered.
-    static let standard = ["low", "medium", "high"]
+    /// The levels every model is offered when the gateway says nothing at all: Hermes's own set
+    /// (`VALID_REASONING_EFFORTS`), never just three (#319).
+    static let standard = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
     /// The known levels, weakest first: the order the list keeps whichever of them appear.
     /// Hermes's own set (`VALID_REASONING_EFFORTS`); a level only a gateway knows goes after.
     static let byStrength = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
@@ -153,9 +154,16 @@ enum ReasoningEffort {
         return c.isEmpty ? "Reasoning: not set" : "Reasoning: \(name(of: c))"
     }
 
-    /// The schema's offered levels, from `/api/config/schema`.
+    /// The schema's offered levels, from `GET /api/config/schema`: `fields["agent.reasoning_effort"].options`
+    /// when the gateway lists them, else `fields["delegation.reasoning_effort"].options` (the one
+    /// reasoning select Hermes's schema carries; `agent.reasoning_effort` is built from the config
+    /// with a type but no options, which is what left the menu at three levels, #319), else nil
+    /// and the full known set is shown.
     static func offered(in schema: JSONValue) -> [String]? {
-        schema["fields"]?["agent.reasoning_effort"]?["options"]?.arrayValue?.compactMap(\.stringValue)
+        for key in ["agent.reasoning_effort", "delegation.reasoning_effort"] {
+            if let o = schema["fields"]?[key]?["options"]?.arrayValue?.compactMap(\.stringValue), !o.isEmpty { return o }
+        }
+        return nil
     }
 }
 
@@ -188,8 +196,14 @@ struct ReasoningEffortMenu: View {
                     capabilities = o.providers.first { $0.slug == chat.info?.provider }?.capabilities?[chat.modelName]
                 }
                 let profile = ChatSession.modelOptionsProfile(chat: chat.profile, selected: chat.runtime.selectedProfile)
-                if let schema: JSONValue = try? await chat.runtime.api.get("/api/config/schema", profile: profile) {
+                do {
+                    let schema: JSONValue = try await chat.runtime.api.get("/api/config/schema", profile: profile)
                     offered = ReasoningEffort.offered(in: schema)
+                } catch {
+                    // The full known set still shows; the failure is only worth a line in the log.
+                    #if DEBUG
+                    print("reasoning levels: the config schema could not be read (\(error.localizedDescription)); showing the known set")
+                    #endif
                 }
             }
         }
