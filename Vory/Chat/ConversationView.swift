@@ -303,7 +303,11 @@ struct ConversationView: View {
     /// padding): summing heights counted the home indicator twice with the keyboard up.
     private var dockBand: some View {
         GeometryReader { g in
-            let bottom = g.frame(in: .global).maxY
+            // Down to the window's own bottom edge: with the keyboard up the reader stops at the
+            // container inset, 34 pt short, and the thread showed through the keyboard's
+            // translucent bottom row; the band is pushed the rest of the way.
+            let readerBottom = g.frame(in: .global).maxY
+            let bottom = max(readerBottom, windowGeometry.bounds.maxY)
             // The field's bottom edge is 8 pt inside the dock (`BottomDock`); the band starts 6 pt inside the field.
             let solid = dockBottom > 0 ? max(0, bottom - (dockBottom - 14)) : windowGeometry.safeArea.bottom + keyboardInset
             let soft: CGFloat = 8
@@ -312,6 +316,7 @@ struct ConversationView: View {
                 .frame(height: height)
                 .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: soft / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
                 .frame(maxHeight: .infinity, alignment: .bottom)
+                .offset(y: bottom - readerBottom)
         }
         .ignoresSafeArea(.container, edges: .bottom)
         .allowsHitTesting(false)
