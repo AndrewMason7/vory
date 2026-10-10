@@ -62,22 +62,42 @@ final class BotApprovalShotUITests: XCTestCase {
             wait(for: [expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: newChat)], timeout: 60)
             newChat.tap()
             XCTAssertTrue(app.buttons["chat.titlePill"].firstMatch.waitForExistence(timeout: 30), "no title pill")
-            // Thinking: the mock takes its time on "think", so the orb holds for a shot.
+            // One turn of the mock's default flow, started with "think": 20 s of silence (the
+            // orb), the first words, a terminal tool for 1.4 s (the toolbox), a todo and a word
+            // to the other bot, more words, then the approval (the exclamation, eyes gone);
+            // approved, a second tool and the rest of the reply, then the bot at rest.
             send("think it over")
             settle(1.6)
             shot("motion-\(scheme)-1-thinking")
-            _ = text("tok/s").firstMatch.waitForExistence(timeout: 90)
-            settle(2.0)
-            shot("motion-\(scheme)-2-rest-after-turn")
-            // A tool then an approval: the toolbox, then the exclamation with the eyes gone.
-            send("marathon 2")
-            settle(1.2)
-            shot("motion-\(scheme)-3-tool")
-            XCTAssertTrue(text("Approval needed").firstMatch.waitForExistence(timeout: 40), "no approval card")
+            // The terminal tool runs 1.4 s, less than a query of the tree takes to notice it: a
+            // burst of plain frames from the end of the silence until the approval, named by
+            // their time since the prompt; the toolbox is picked from them by eye.
+            let sent = Date()
+            let approval = text("Approval needed").firstMatch
+            var frames = 0
+            while !approval.exists, Date().timeIntervalSince(sent) < 60 {
+                if Date().timeIntervalSince(sent) > 19 {
+                    let s = XCUIScreen.main.screenshot()
+                    let ms = Int(Date().timeIntervalSince(sent) * 1000)
+                    let d = ProcessInfo.processInfo.environment["HERMES_E2E_SHOTS"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? URL(fileURLWithPath: NSTemporaryDirectory())
+                    try? s.pngRepresentation.write(to: d.appendingPathComponent("burst-\(scheme)-\(ms).png"))
+                    frames += 1
+                } else {
+                    settle(0.5)
+                }
+            }
+            print("BURST \(scheme) \(frames) frames")
+            XCTAssertTrue(text("Approval needed").firstMatch.waitForExistence(timeout: 60), "no approval card")
             settle(1.5)
             hideKeyboard()
             settle(1)
-            shot("motion-\(scheme)-4-approval")
+            shot("motion-\(scheme)-3-approval")
+            let once = app.buttons.matching(NSPredicate(format: "label == 'Once'")).firstMatch
+            XCTAssertTrue(once.waitForExistence(timeout: 5), "no Once button")
+            once.tap()
+            XCTAssertTrue(text("filesystem is back").firstMatch.waitForExistence(timeout: 60), "the turn did not finish")
+            settle(2.5)
+            shot("motion-\(scheme)-4-rest-after-turn")
             app.terminate()
         }
     }
