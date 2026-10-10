@@ -32,9 +32,10 @@ extension BotFace {
         return (0.5 + (seat.x - 0.5) * k, rest.y + (seat.y - rest.y) * k, rest.spread + (seat.spread - rest.spread) * k)
     }
 
-    /// Draws `spec` in `size` from `frame`. `flat`: the painted body (the view draws live glass
-    /// itself and asks only for the parts it cannot). `light`: a light background.
-    public static func drawFrame(_ spec: BotLookSpec, in ctx: inout GraphicsContext, size: CGSize, frame f: BotMotionFrame, light: Bool = false, parts: Part = .all) {
+    /// Draws `spec` in `size` from `frame`. `light`: a light background. `bodyAndEyes`: false
+    /// draws only what sits over a live glass plate (the extra parts, the panels and marks, the
+    /// glint, the arcs); the view draws the plate and the eyes as glass itself.
+    public static func drawFrame(_ spec: BotLookSpec, in ctx: inout GraphicsContext, size: CGSize, frame f: BotMotionFrame, light: Bool = false, parts: Part = .all, bodyAndEyes: Bool = true) {
         let box = CGRect(origin: .zero, size: size)
         let s = min(size.width, size.height)
         let tint = Color(botHex: spec.hex) ?? Color(red: 0.49, green: 0.36, blue: 1)
@@ -70,7 +71,7 @@ extension BotFace {
             return BotRings.body(spec, toward: leading, amount: lead, in: box)
         }()
         if parts != .eyes {
-            fillBody(body, tint: tint, in: &ctx, box: box, s: s, light: light, dim: f.dim, pale: pale, glass: spec.isGlass)
+            if bodyAndEyes { fillBody(body, tint: tint, in: &ctx, box: box, s: s, light: light, dim: f.dim, pale: pale, glass: spec.isGlass) }
             // The parts a symbol is made of beyond the body: the other bubbles, the exclamation's
             // dot, each growing (or shrinking) in place with the symbol's amount.
             if leading == .bubbles {
@@ -116,13 +117,13 @@ extension BotFace {
                     }
                 }
             }
-            if f.dim > 0.01 {
+            if f.dim > 0.01, bodyAndEyes {
                 ctx.drawLayer { layer in layer.clip(to: body); layer.fill(Path(box), with: .color(.black.opacity(0.22 * f.dim))) }
             }
         }
 
         // The eyes: seated for the symbol, blinking, orbiting the body on a finish, clipped to it.
-        if parts != .body, f.eyeOpacity > 0.001 {
+        if parts != .body, bodyAndEyes, f.eyeOpacity > 0.001 {
             let seat = eyeSeat(spec, toward: leading, amount: lead)
             var m = Motion()
             m.eyeOpen = f.eyeOpen
@@ -169,5 +170,21 @@ extension BotFace {
             }
         }
         if pale { drawInnerStroke(body, in: &ctx, s: s) }
+    }
+}
+
+/// The body as a Shape from a frame, for live glass: the rest silhouette morphing into the
+/// symbol the frame leads with. `inset` > 0 gives the rim mask (each piece toward its centre).
+public struct BotFrameShape: Shape {
+    public var spec: BotLookSpec
+    public var visual: BotVisual?
+    public var amount: Double
+    public var inset: CGFloat = 0
+    public init(spec: BotLookSpec, visual: BotVisual?, amount: Double, inset: CGFloat = 0) {
+        self.spec = spec; self.visual = visual; self.amount = amount; self.inset = inset
+    }
+    public func path(in rect: CGRect) -> Path {
+        let p = visual.map { BotRings.body(spec, toward: $0, amount: amount, in: rect) } ?? BotFace.bodyPath(spec.shape, in: rect, time: 0, active: false, phase: 0)
+        return inset > 0 ? BotFace.rimInner(p, inset: inset) : p
     }
 }

@@ -1013,10 +1013,18 @@ public struct BotEyesShape: Shape {
     public var strain = false
     public var glanceFree = true
     public var motion: BotFace.Motion = .still
-    public init(spec: BotLookSpec, time: Double, active: Bool, gaze: CGPoint, strain: Bool = false, glanceFree: Bool = true, motion: BotFace.Motion = .still) {
+    /// A seat from a symbol (1.5), nil for the shape's own.
+    public var seatX: CGFloat? = nil
+    public var seatY: CGFloat? = nil
+    public var seatSpread: CGFloat? = nil
+    public init(spec: BotLookSpec, time: Double, active: Bool, gaze: CGPoint, strain: Bool = false, glanceFree: Bool = true, motion: BotFace.Motion = .still, seat: (x: CGFloat, y: CGFloat, spread: CGFloat)? = nil) {
         self.spec = spec; self.time = time; self.active = active; self.gaze = gaze; self.strain = strain; self.glanceFree = glanceFree; self.motion = motion
+        self.seatX = seat?.x; self.seatY = seat?.y; self.seatSpread = seat?.spread
     }
-    public func path(in rect: CGRect) -> Path { BotFace.eyePaths(spec, size: rect.size, time: time, active: active, gaze: gaze, strain: strain, glanceFree: glanceFree, motion: motion).path.offsetBy(dx: rect.minX, dy: rect.minY) }
+    public func path(in rect: CGRect) -> Path {
+        let seat: (x: CGFloat, y: CGFloat, spread: CGFloat)? = seatX.flatMap { x in seatY.flatMap { y in seatSpread.map { (x, y, $0) } } }
+        return BotFace.eyePaths(spec, size: rect.size, time: time, active: active, gaze: gaze, strain: strain, glanceFree: glanceFree, motion: motion, anchor: seat).path.offsetBy(dx: rect.minX, dy: rect.minY)
+    }
 }
 
 /// The bot as a view. `active` runs the animation (blink, glance, the blob's morph and the
@@ -1242,6 +1250,65 @@ public struct BotFaceView: View {
         }
     }
 
+    /// The glass bot from a motion frame (1.5): the same plate as `liveGlass`, its shape the
+    /// body morphing into the frame's symbol, the orb's pulse as a scale of the whole, the
+    /// eyes a darker glass seated for the symbol and fading with it; the panels, marks, extra
+    /// parts, glint and arcs painted over it.
+    @ViewBuilder private func liveGlassFrame(frame f: BotMotionFrame) -> some View {
+        let tint = Color(botHex: spec.hex) ?? Color(red: 0.49, green: 0.36, blue: 1)
+        let leading = f.leading
+        let lead = leading.map { f.amount(of: $0) } ?? 0
+        let plate = BotFrameShape(spec: spec, visual: leading, amount: lead)
+        let hairline = BotFrameShape(spec: spec, visual: leading, amount: lead, inset: 1)
+        let pale = BotFace.isLight(spec.hex)
+        let seat = BotFace.eyeSeat(spec, toward: leading, amount: lead)
+        let pulse: CGFloat = leading == .orb && lead > 0.5 ? BotFace.orbPulse(f.loopTime) : 1
+        var eyeMotion = BotFace.Motion()
+        let _ = { eyeMotion.eyeOpen = f.eyeOpen; eyeMotion.eyeX = f.eyeX; eyeMotion.eyeY = f.eyeY; eyeMotion.freezeGlance = true }()
+        ZStack {
+            plate.fill(tint.opacity(colorScheme == .light ? 0.62 : 0.28))
+            if f.dim > 0.01 { plate.fill(.black.opacity(0.30 * f.dim)) }
+            GlassEffectContainer {
+                Color.clear
+                    .glassEffect(.regular.tint(tint.opacity((colorScheme == .light ? 0.45 : 0.72) * (1 - 0.5 * f.dim))), in: plate)
+                    .glassEffectTransition(.identity)
+            }
+            if pale {
+                plate.fill(Color(red: 0.816, green: 0.816, blue: 0.835).opacity(0.4))
+                    .mask { ZStack { plate.fill(.white); hairline.fill(.black).blendMode(.destinationOut) }.compositingGroup() }
+                    .allowsHitTesting(false)
+            }
+            if BotFace.isDark(spec.hex), colorScheme == .dark {
+                plate.fill(Color.white.opacity(0.32))
+                    .mask { ZStack { plate.fill(.white); hairline.fill(.black).blendMode(.destinationOut) }.compositingGroup() }
+                    .allowsHitTesting(false)
+            }
+            // What sits over the plate: panels, marks, the other parts, the glint, the arcs.
+            Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
+                BotFace.drawFrame(spec, in: &ctx, size: sz, frame: f, light: colorScheme == .light, bodyAndEyes: false)
+            }
+            .allowsHitTesting(false)
+            if f.eyeOpacity > 0.001 {
+                Group {
+                    if spec.eyes == "sleepy" {
+                        Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
+                            BotFace.draw(spec, in: &ctx, size: sz, time: 0, active: false, gaze: .zero, part: .eyes, breathe: false, idleEyes: false, move: false, glanceFree: false, motion: eyeMotion)
+                        }
+                    } else {
+                        GlassEffectContainer {
+                            Color.clear
+                                .glassEffect(.clear.tint(BotFace.ink.opacity(0.92)), in: BotEyesShape(spec: spec, time: 0, active: false, gaze: .zero, glanceFree: false, motion: eyeMotion, seat: seat))
+                                .glassEffectTransition(.identity)
+                        }
+                    }
+                }
+                .mask(plate)
+                .opacity(f.eyeOpacity)
+            }
+        }
+        .scaleEffect(x: pulse * CGFloat(f.sx), y: pulse * CGFloat(f.sy), anchor: UnitPoint(x: 0.5, y: 0.96))
+    }
+
     public var body: some View {
         // Whether this bot moves at all. On the Mac every bot cost CPU all the time, in the
         // background too (#248): it moves only while its window is visible and in front, the
@@ -1272,7 +1339,7 @@ public struct BotFaceView: View {
         let finished = finishedAt
         let tapped = tappedAt
         let state = state
-        let engine = BotFace.motionEngine && !drawn && !(spec.isGlass && BotFace.liveGlass && scenePhase == .active)
+        let engine = BotFace.motionEngine && !drawn
         let targets = BotMotionTargets.targets(for: state == .working && !active ? .idle : state)
         // The frame blends from the last pose for 0.4 s after a state change.
         let leaving = Date().timeIntervalSince(exitAt) < 0.5
@@ -1295,24 +1362,26 @@ public struct BotFaceView: View {
             // nod or blend part-way through, and the idle eyes open.
             let m = pose(time: t, now: timeline.date, since: timeline.date.timeIntervalSince(stateSince), finished: finished, tapped: tapped, held: !live && !drawn)
             let _ = { shown.pose = m }()
+            // The motion model's frame, once per tick: held or under Reduce Motion it is snapped
+            // to the state's still. The eyes held (the Mac idle, a stacked face): open, no blink.
+            let frame: BotMotionFrame? = {
+                guard engine else { return nil }
+                if !live || reduceMotion { model.snap(to: targets, at: t) }
+                var f = model.advance(to: t, targets: targets)
+                if !eyeLife { f.eyeOpen = max(f.eyeOpen, 1) }
+                f.eyeX += Double(g.x); f.eyeY += Double(g.y)
+                return f
+            }()
             Group {
                 if spec.isGlass && BotFace.liveGlass && !drawn && scenePhase == .active {
-                    liveGlass(time: t, gaze: g, glanceFree: !held, motion: m, wobble: wobble, eyeLife: eyeLife)
-                } else if engine {
-                    // The motion model's frame: advanced here to the timeline's clock (held or
-                    // under Reduce Motion it is snapped to the state's still), then painted.
+                    if let frame {
+                        liveGlassFrame(frame: frame)
+                    } else {
+                        liveGlass(time: t, gaze: g, glanceFree: !held, motion: m, wobble: wobble, eyeLife: eyeLife)
+                    }
+                } else if let frame {
                     Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
-                        let frame: BotMotionFrame
-                        if !live || reduceMotion {
-                            model.snap(to: targets, at: t); frame = model.advance(to: t, targets: targets)
-                        } else {
-                            frame = model.advance(to: t, targets: targets)
-                        }
-                        var f = frame
-                        // The eyes held (the Mac idle, a stacked face): open, no blink.
-                        if !eyeLife { f.eyeOpen = max(f.eyeOpen, 1) }
-                        f.eyeX += Double(g.x); f.eyeY += Double(g.y)
-                        BotFace.drawFrame(spec, in: &ctx, size: sz, frame: f, light: colorScheme == .light)
+                        BotFace.drawFrame(spec, in: &ctx, size: sz, frame: frame, light: colorScheme == .light)
                     }
                 } else {
                     // The painted twin: the view applies the transforms, so it gets them zeroed;
