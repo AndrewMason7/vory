@@ -24,6 +24,7 @@ struct ChatRoute: Hashable {
 
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
     /// and a click replaces the one showing. On the phone the list owns its own stack and pushes.
     var detailPath: Binding<NavigationPath>? = nil
@@ -598,7 +599,7 @@ struct ChatListView: View {
         // lands behind the bar. The pill floats just above the bar, and at the bottom edge
         // when the bar is away (search with the keyboard up).
         .overlay(alignment: .bottom) {
-            SummaryProgressStrip().padding(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 6)
+            SummaryProgressStrip().padding(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 6)
         }
         #endif
         #if os(macOS)

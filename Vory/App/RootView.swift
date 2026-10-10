@@ -4,6 +4,10 @@ import VoryCore
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// The window's geometry for this scene, read from the window on every layout (see
+    /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
+    @State private var windowGeometry = WindowGeometry()
     /// DEBUG: `-vory-show-tour` shows the first-run tour over a configured app.
     static let forceTour: Bool = {
         #if DEBUG
@@ -51,6 +55,10 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.lock.isLocked)
+        .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        .environment(\.windowGeometry, windowGeometry)
+        // Wide on a regular-width window (iPad, the open Duo), the phone layout otherwise.
+        .environment(\.wideLayout, sizeClass == .regular)
         // The probe answered and the chosen page is on the bar now: open on it, unless the
         // person has already gone somewhere else.
         .onChange(of: model.hiddenTabs) { was, hidden in
@@ -173,10 +181,12 @@ struct LockScreenView: View {
 
 struct MainTabView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     @AppStorage(TabLayout.storageKey) private var layoutRaw = ""
 
     var body: some View {
         let tabs = TabLayout.parse(layoutRaw).visible(hiding: model.hiddenTabs)
+        let barHeight = VoryTabBar.reservedHeight(in: windowGeometry)
         ZStack {
             // Every page stays alive (its navigation stack, scroll position, drafts); only the
             // selected one is visible and touchable, which is what the system TabView does too.
@@ -199,7 +209,7 @@ struct MainTabView: View {
                 // The slide and fade animate; the reserved height below does not. Animating the
                 // safe-area inset while a chat opened made its thread bounce up and down.
                 .animation(.snappy(duration: 0.3), value: model.tabBarHidden)
-                .frame(height: model.tabBarHidden ? 0 : VoryTabBar.reservedHeight, alignment: .top)
+                .frame(height: model.tabBarHidden ? 0 : barHeight, alignment: .top)
                 // Not tappable while it slides away: a tap then switched tabs under an open chat.
                 .allowsHitTesting(!model.tabBarHidden)
                 .accessibilityHidden(model.tabBarHidden)
@@ -208,7 +218,7 @@ struct MainTabView: View {
         // inset on this iOS (their last rows ended under the bar), so their scroll content gets
         // the bar's height plus a breath of room. Inside a chat the bar is hidden and this is 0;
         // the thread measures its own margin against the composer.
-        .contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 16, for: .scrollContent)
+        .contentMargins(.bottom, model.tabBarHidden ? 0 : barHeight + 16, for: .scrollContent)
         // No blank band under the bar at the top of any page: the first card sits right there.
         .contentMargins(.top, 0, for: .scrollContent)
         // "Read replies aloud" listens for finished replies in the chat in front.

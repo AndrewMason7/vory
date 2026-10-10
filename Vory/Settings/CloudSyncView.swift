@@ -133,10 +133,11 @@ struct CloudSyncView: View {
 struct TabBarClearance: ViewModifier {
     #if os(iOS)
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     #endif
     func body(content: Content) -> some View {
         #if os(iOS)
-        content.contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 16, for: .scrollContent)
+        content.contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
         #else
         content
         #endif

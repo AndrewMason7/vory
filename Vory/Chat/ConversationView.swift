@@ -24,13 +24,12 @@ struct ConversationView: View {
     @State private var headerHeight: CGFloat = 96
     #endif
     @State private var dockTop: CGFloat = 0
-    private var safeTop: CGFloat {
-        #if os(iOS)
-        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.first ?? 0
-        #else
-        0
-        #endif
-    }
+    /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
+    /// there, whatever safe area or camera strip the header stands in, and it moves with them.
+    @State private var headerBottom: CGFloat = 0
+    /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.wideLayout) private var wide
     /// The keyboard's height above the home-indicator area. Tracked by hand for the dock as the
     /// transcript does for itself: SwiftUI's own avoidance hands the inset to any scroll view in
     /// the dock (the command list) instead of lifting the dock, which left the composer under
@@ -116,7 +115,7 @@ struct ConversationView: View {
                 .ignoresSafeArea()
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                dock(chat).frame(maxWidth: ChatStyle.macColumn).frame(maxWidth: .infinity)
+                dock(chat).frame(maxWidth: ChatStyle.readingColumn).frame(maxWidth: .infinity)
             }
             .navigationSubtitle(macSubtitle(chat))
             // No toolbar strip over the thread: the bot and the menu float on the window, as in
@@ -163,9 +162,14 @@ struct ConversationView: View {
         // without it the first message starts under the pill.
         thread(chat)
             // Like Messages: header and dock float over the thread and the text scrolls under their glass.
-            .overlay(alignment: .bottom) { dock(chat) }
+            // On a wide layout the dock keeps to the reading column, as on the Mac.
+            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity) }
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification), perform: keyboardChanged)
+            // The keyboard as the window has it (in window space, re-placed on every resize or
+            // fold); the thread moves by the same value, so the two arrive together.
+            .onChange(of: windowGeometry.keyboardOverlap, initial: true) { _, inset in
+                withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) { keyboardInset = inset }
+            }
             .overlay(alignment: .top) { header(chat) }
             // Voice mode runs out of sight under its pill, and in front on its own screen.
             .overlay(alignment: .top) {
@@ -236,10 +240,11 @@ struct ConversationView: View {
         // The dock is a bottom inset on the Mac: the thread needs no margins of its own.
         let (dockTopArg, fallback, top): (CGFloat, CGFloat, CGFloat) = (0, 0, 0)
         #else
-        let (dockTopArg, fallback, top) = (dockTop, dockHeight + keyboardInset, headerHeight + safeTop)
+        // Until the header has been measured, its default height plus the status bar's usual share.
+        let (dockTopArg, fallback, top) = (dockTop, dockHeight + keyboardInset, headerHeight + windowGeometry.safeArea.top)
         #endif
         return TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
-                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top)
+                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top, headerBottom: headerBottom)
             #if os(iOS)
             // The thread's margins (header above, dock and keyboard below) add up to a minimum
             // height. On a small phone with the keyboard up, or any phone with a tall card in
@@ -270,6 +275,8 @@ struct ConversationView: View {
         ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                    onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+            // Its bottom edge in window space, for the thread's top margin.
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { headerBottom = $0 }
             // One group for VoiceOver, placed after the thread and the dock in the accessibility
             // order. The accessibility hit test (XCUITest's isHittable, touch to explore) tries
             // the screen's elements from the last one back, as if the last were on top, and goes
@@ -282,24 +289,6 @@ struct ConversationView: View {
             .accessibilityElement(children: .contain)
             .accessibilitySortPriority(-1)
     }
-    #if os(iOS)
-    private func keyboardChanged(_ n: Notification) {
-        guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-        let screen = UIScreen.main.bounds
-        // A frame that is not a keyboard's (a floating or hardware keyboard's accessory, a frame
-        // from another scene, a whole-screen rect) must not push the dock to the top of the
-        // screen, as it did for a tester mid-turn. A keyboard sits on the bottom edge and is
-        // less than two thirds of the screen tall.
-        let onScreen = end.intersection(screen)
-        guard end.height < screen.height * 0.66, onScreen.isNull || onScreen.maxY >= screen.maxY - 1 || end.minY >= screen.maxY else { return }
-        let covered = max(0, screen.maxY - end.minY)
-        let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
-        withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
-            keyboardInset = min(max(0, covered - safeBottom), screen.height * 0.6)
-        }
-    }
-    #endif
-
     // The confirmation alert's pieces live apart from the body: inside it they tipped the type
     // checker over its limit.
     private var confirmShown: Binding<Bool> {
