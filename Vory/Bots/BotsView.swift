@@ -45,6 +45,8 @@ struct BotsView: View {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-vory-shape-grid") { ShapeSeatGrid() }
                 if ProcessInfo.processInfo.arguments.contains("-vory-motion-demo") { MotionDemoView() }
+                // The brief's measuring scene (section 6): six bots on screen, one of them working.
+                if ProcessInfo.processInfo.arguments.contains("-vory-motion-bench") { MotionDemoView(bench: true) }
                 #endif
             }
             .toolbar {
@@ -201,6 +203,17 @@ private struct ShapeSeatGrid: View {
 /// DEBUG `-vory-motion-demo` over the Bots tab.
 struct MotionDemoView: View {
     private struct Cell: Identifiable { let id: String; let spec: BotLookSpec; let state: BotFace.State; let active: Bool }
+    /// Six bots at rest and one working: the scene the CPU and frame time are measured on.
+    var bench = false
+    private static let benchCells: [Cell] = [
+        Cell(id: "working · blob", spec: BotLookSpec(shape: "blob", eyes: "curious", hex: "#E07A5F"), state: .working, active: true),
+        Cell(id: "idle · triangle", spec: BotLookSpec(shape: "triangle", eyes: "bold", hex: "#F5A524"), state: .idle, active: false),
+        Cell(id: "idle · pill", spec: BotLookSpec(shape: "pill", eyes: "wide", hex: "#F4F4F5", finish: "glass"), state: .idle, active: false),
+        Cell(id: "idle · cloud", spec: BotLookSpec(shape: "cloud", eyes: "classic", hex: "#4C8DFF"), state: .idle, active: false),
+        Cell(id: "idle · circle", spec: BotLookSpec(shape: "circle", eyes: "classic", hex: "#111111", finish: "glass"), state: .idle, active: false),
+        Cell(id: "idle · drop", spec: BotLookSpec(shape: "drop", eyes: "tiny", hex: "#2BB5A0"), state: .idle, active: false),
+        Cell(id: "idle · hexagon", spec: BotLookSpec(shape: "hexagon", eyes: "round", hex: "#8E6CFF"), state: .idle, active: false),
+    ]
     private let cells: [Cell] = [
         Cell(id: "working · blob", spec: BotLookSpec(shape: "blob", eyes: "curious", hex: "#E07A5F"), state: .working, active: true),
         Cell(id: "working · triangle", spec: BotLookSpec(shape: "triangle", eyes: "bold", hex: "#F5A524"), state: .working, active: true),
@@ -225,7 +238,7 @@ struct MotionDemoView: View {
         ScrollView {
             VStack(spacing: 8) {
                 LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(cells) { c in
+                    ForEach(bench ? Self.benchCells : cells) { c in
                         let state: BotFace.State = holding || c.state == .working || c.state == .guide ? c.state : .idle
                         VStack(spacing: 6) {
                             BotFaceView(spec: c.spec, size: 72, active: c.active && (holding || c.state == .working), mood: BotFaceView.Mood(profile: "demo-\(c.id)", state: state))
