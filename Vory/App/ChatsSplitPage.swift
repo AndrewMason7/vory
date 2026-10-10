@@ -11,7 +11,19 @@ import VoryCore
 /// chat, and `ChatNavigation` (shared with the Mac) decides what selecting a row does to it.
 struct ChatsSplitPage: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.wideLayout) private var wide
     @State private var columns = NavigationSplitViewVisibility.doubleColumn
+
+    /// The list's column: 380 pt where the window is wide enough for both columns at that (the
+    /// iPad, the open Duo in landscape), narrower on a window like the open Duo in portrait
+    /// (669 pt), where a 380 pt list left the split view no room for the chat and it put the
+    /// list over the chat as a dimmed overlay instead of beside it.
+    private var listWidth: (min: CGFloat, ideal: CGFloat) {
+        let w = windowGeometry.bounds.width
+        return (280, min(380, max(280, (w * 0.42).rounded(.down))))
+    }
 
     /// The model's path as a binding: the list selects into it, the detail stack shows it.
     private var chatPath: Binding<NavigationPath> {
@@ -21,11 +33,29 @@ struct ChatsSplitPage: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
             ChatListView(detailPath: chatPath)
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 480)
+                .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
         } detail: {
             ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
         }
         .navigationSplitViewStyle(.balanced)
+        // One column where the layout is not wide (the open Duo upright, a narrow window): the
+        // split view collapses as it does on a phone, the chat pushed over the list, rather
+        // than the dimmed list overlay the system gives a regular-width portrait window.
+        .modifier(CollapseWhenNarrow(wide: wide, sizeClass: sizeClass))
+    }
+}
+
+/// Collapses the split view where the layout is not wide (iOS: the size class written as
+/// compact). The Mac's split never collapses and its key path is read-only.
+private struct CollapseWhenNarrow: ViewModifier {
+    let wide: Bool
+    let sizeClass: UserInterfaceSizeClass?
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.environment(\.horizontalSizeClass, wide ? sizeClass : .compact)
+        #else
+        content
+        #endif
     }
 }
 

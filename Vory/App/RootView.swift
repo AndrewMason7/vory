@@ -5,6 +5,12 @@ import VoryCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
+    /// Two columns and the wide chat layout: see `wideLayout` below.
+    private var wide: Bool { Self.isWide(regular: sizeClass == .regular, size: windowGeometry.bounds.size) }
+    nonisolated static func isWide(regular: Bool, size: CGSize) -> Bool {
+        guard size.width > 0, size.height > 0 else { return regular }   // not measured yet
+        return regular && (size.width > size.height || size.width >= 700)
+    }
     /// The window's geometry for this scene, read from the window on every layout (see
     /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
     @State private var windowGeometry = WindowGeometry()
@@ -56,6 +62,8 @@ struct RootView: View {
         }
         .animation(.default, value: model.lock.isLocked)
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        // The fold and the camera, for every floating piece below (Step D).
+        .modifier(ReservedRegionsEnvironment())
         #if DEBUG
         // `-vory-geometry-probe`: the window's numbers in the corner, for reading a pose off a
         // screenshot (the Duo simulator has no other way to report its insets).
@@ -63,7 +71,7 @@ struct RootView: View {
             if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
                 VerticalBarEdge { edge in
                     let g = windowGeometry
-                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", sizeClass == .regular ? "yes" : "no"))
+                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no"))
                         .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
                         .padding(.top, 40).allowsHitTesting(false)
                 }
@@ -71,9 +79,12 @@ struct RootView: View {
         }
         #endif
         .environment(\.windowGeometry, windowGeometry)
-        // Wide on a regular-width window (iPad, the open Duo), the phone layout otherwise.
-        .environment(\.wideLayout, sizeClass == .regular)
-        .onChange(of: sizeClass, initial: true) { _, s in model.wideLayout = s == .regular }
+        // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
+        // iPad, the open Duo in landscape); the phone layout otherwise, which includes the open
+        // Duo upright (669 pt: Matt chose one column there, 2026-10-10) and a narrow Stage
+        // Manager or Split View window. The window's shape decides, never the device or a pose.
+        .environment(\.wideLayout, wide)
+        .onChange(of: wide, initial: true) { _, w in model.wideLayout = w }
         // The probe answered and the chosen page is on the bar now: open on it, unless the
         // person has already gone somewhere else.
         .onChange(of: model.hiddenTabs) { was, hidden in
@@ -332,5 +343,13 @@ struct MainTabView: View {
         case .projects: NavigationStack { ProjectsView().tabRoot(.projects) }
         case .status: NavigationStack { StatusView().tabRoot(.status) }
         }
+    }
+}
+
+
+/// Publishes the window's reserved regions (the fold, the camera) into the environment.
+private struct ReservedRegionsEnvironment: ViewModifier {
+    func body(content: Content) -> some View {
+        ReservedRegionsReader { content }
     }
 }

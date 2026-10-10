@@ -17,6 +17,19 @@ struct ConversationView: View {
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
+    @State private var dockBottom: CGFloat = 0
+    #if os(iOS)
+    /// The tab bar's height under the chat, when it is there and runs along the bottom.
+    private var barReserve: CGFloat { model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) }
+    /// The fold of a partly open Duo across the window (Step D): a dock the keyboard has pushed
+    /// onto it moves up above it, with Apple's margin, so the field is never under the fold.
+    @Environment(\.reservedRegions) private var regions
+    private var foldLift: CGFloat {
+        guard let fold = regions.horizontalFold, dockBottom > dockTop, dockTop > 0,
+              fold.maxY + ReservedRegions.margin > dockTop, fold.minY < dockBottom else { return 0 }
+        return dockBottom - fold.minY + ReservedRegions.margin
+    }
+    #endif
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
     #if os(macOS)
     @State private var headerHeight: CGFloat = 0
@@ -172,7 +185,10 @@ struct ConversationView: View {
             // wide column has no status bar, and the text read crisp through the header and
             // past the composer).
             .overlay(alignment: .bottom) { dockBand }
-            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity) }
+            // Above the tab bar when the bar stands under the chat (a wide layout with the bar
+            // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
+            // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
+            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift) }
             .overlay(alignment: .top) { headerBand }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // The keyboard as the window has it (in window space, re-placed on every resize or
@@ -277,27 +293,49 @@ struct ConversationView: View {
     /// way it would under a bar's soft edge, never a grey slab (Matt, in dark mode the band read
     /// as a panel; black must stay black).
     private var headerBand: some View {
-        let solid = headerHeight + windowGeometry.safeArea.top
-        let height = solid + ChatStyle.bandFade
-        return Rectangle().fill(Color(.systemBackground))
-            .frame(height: height)
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-            .ignoresSafeArea(.container, edges: .top)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        // Measured from the header itself: the band is solid down to the header's bottom edge
+        // (`headerBottom`, in window space, like the band's own frame), then fades. The sum
+        // of the header's height and the top inset was the same thing until measured.
+        GeometryReader { g in
+            let top = g.frame(in: .global).minY
+            let solid = headerBottom > 0 ? max(0, headerBottom - top) : headerHeight + windowGeometry.safeArea.top
+            let height = solid + ChatStyle.bandFade
+            Rectangle().fill(Color(.systemBackground))
+                .frame(height: height)
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
-    /// The same above the composer: clear 28 pt above the field, the page's background from the
-    /// field's top edge down to the window's bottom (the keyboard's share included). Around the
-    /// field itself that is the page, so nothing shows between the field and the keyboard.
+    /// Below the bar only (Matt, 2026-10-10: the fade above the bar was "too high", he wants
+    /// the thread's text seen through the field's Liquid Glass as in 1.4): the page's own
+    /// background from a few points inside the field's bottom edge down to the window's bottom
+    /// (the keyboard's share included), so nothing of the thread shows between the field and
+    /// the keyboard or under the home indicator. The short soft edge sits inside the glass.
+    /// Measured from the dock's bottom edge (`dockBottom`, window space, above the keyboard
+    /// padding): summing heights counted the home indicator twice with the keyboard up.
     private var dockBand: some View {
-        let solid = dockHeight + keyboardInset + windowGeometry.safeArea.bottom
-        let height = solid + ChatStyle.bandFade
-        return Rectangle().fill(Color(.systemBackground))
-            .frame(height: height)
-            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: ChatStyle.bandFade / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
-            .ignoresSafeArea(.container, edges: .bottom)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        GeometryReader { g in
+            // Down to the window's own bottom edge: with the keyboard up the reader stops at the
+            // container inset, 34 pt short, and the thread showed through the keyboard's
+            // translucent bottom row; the band is pushed the rest of the way.
+            let readerBottom = g.frame(in: .global).maxY
+            let bottom = max(readerBottom, windowGeometry.bounds.maxY)
+            // The field's bottom edge is 8 pt inside the dock (`BottomDock`); the band starts 6 pt inside the field.
+            let solid = dockBottom > 0 ? max(0, bottom - (dockBottom - 14)) : windowGeometry.safeArea.bottom + keyboardInset
+            let soft: CGFloat = 8
+            let height = solid + soft
+            Rectangle().fill(Color(.systemBackground))
+                .frame(height: height)
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: soft / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .offset(y: bottom - readerBottom)
+        }
+        .ignoresSafeArea(.container, edges: .bottom)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
     #endif
 
@@ -306,6 +344,8 @@ struct ConversationView: View {
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
             // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
+            // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
             .padding(.bottom, keyboardInset)
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this.
@@ -750,6 +790,19 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
 #endif
 
 /// Unsent composer text, per session, so leaving a chat and coming back does not lose it.
+/// What a chat's views had when they went away and get back when they return: the composer's
+/// keyboard focus and the thread's distance from its end. A layout switch (the open Duo turned
+/// upright or back: one column to two) rebuilds the chat's views; the open chat is in
+/// `AppModel.chatPath`, the draft in `ComposerDrafts`, and these two are the rest of what the
+/// person had under their hands. In memory only, for the app's run.
+@MainActor enum ChatViewMemory {
+    static func key(for chat: ChatSession) -> String { chat.storedID ?? chat.runtimeID }
+    private(set) static var focused: Set<String> = []
+    private(set) static var distanceFromEnd: [String: CGFloat] = [:]
+    static func setFocused(_ on: Bool, for chat: ChatSession) { if on { focused.insert(key(for: chat)) } else { focused.remove(key(for: chat)) } }
+    static func setDistanceFromEnd(_ d: CGFloat?, for chat: ChatSession) { distanceFromEnd[key(for: chat)] = d }
+}
+
 @MainActor
 enum ComposerDrafts {
     private static func key(for chat: ChatSession) -> String { "composerDraft." + (chat.storedID ?? chat.runtimeID) }

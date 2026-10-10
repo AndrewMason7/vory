@@ -89,15 +89,15 @@ final class ChatScrollUITests: XCTestCase {
         return bottom
     }
 
-    /// Back at the end, the last row ends above the dock band's fade (`ChatStyle.bandFade`, 28 pt),
-    /// whole and not read through the fade (1.5, the bands).
+    /// Back at the end, the last row ends clear of the bar (an 8 pt margin): nothing is hidden
+    /// at rest, only while scrolling does text pass behind the field's glass.
     private func assertEndClearsTheDock(_ label: String) throws {
         let dock = app.otherElements["chat.dock"].firstMatch
         XCTAssertTrue(dock.exists, "\(label): no dock")
         let bottom = try XCTUnwrap(lowestRowBottom(), "\(label): no rows")
         let gap = dock.frame.minY - bottom
-        if gap < 27 { shot("scroll-end-under-band-\(label)") }
-        XCTAssertGreaterThanOrEqual(gap, 27, "\(label): the last row ends \(Int(gap)) pt above the dock, inside the 28 pt fade")
+        if gap < 6 { shot("scroll-end-under-dock-\(label)") }
+        XCTAssertGreaterThanOrEqual(gap, 6, "\(label): the last row ends \(Int(gap)) pt above the dock: under the bar")
     }
 
     private func sendMarathon(_ steps: Int) {

@@ -90,6 +90,10 @@ final class AppModel {
     /// Duo or resizing an iPad window (the split view collapsing or expanding) keeps the open
     /// chat; the routes are Codable for the same reason.
     var chatPath = NavigationPath()
+    /// The chat list's highlighted row (the open chat's selection id): in the model, not the
+    /// list's own state, so a layout switch that rebuilds the list (the open Duo turned upright
+    /// and back) keeps the highlight.
+    var chatSelectionID: String?
     /// The window is regular width (iPad, the open Duo): the chat list stands beside the open
     /// chat, and the tab bar stays while a chat is open. Set by the root from the size class.
     var wideLayout = false

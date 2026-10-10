@@ -80,14 +80,15 @@ final class ThreadLayoutUITests: XCTestCase {
     private var dock: XCUIElement { app.otherElements["chat.dock"].firstMatch }
     private var header: XCUIElement { app.otherElements["chat.header"].firstMatch }
 
-    /// At the end of the thread, its last row (a card, the typing bubble, the status line) ends
-    /// above the dock band's fade: whole, not read through the fade (1.5, the bands).
+    /// At the end of the thread, its last row (a card, the typing bubble "thread.typing", the
+    /// status line "thread.status") ends clear of the bar (an 8 pt margin): nothing is hidden
+    /// at rest; only while scrolling does text pass behind the field's glass.
     private func checkEndClearsTheDock(_ label: String) {
         let rows = threadRows().filter { $0.frame.height > 0 }
         guard let last = rows.max(by: { $0.frame.maxY < $1.frame.maxY }), dock.exists else { XCTFail("\(label): no rows or no dock"); return }
         let gap = dock.frame.minY - last.frame.maxY
-        if gap < bandFade - 1 { shot("thread-end-under-band-\(label)") }
-        XCTAssertGreaterThanOrEqual(gap, bandFade - 1, "\(label): \(last.id) ends \(Int(gap)) pt above the dock, inside the \(Int(bandFade)) pt fade")
+        if gap < 6 { shot("thread-end-under-dock-\(label)") }
+        XCTAssertGreaterThanOrEqual(gap, 6, "\(label): \(last.id) ends \(Int(gap)) pt above the dock: under the bar")
     }
 
     /// At the top of the thread, its first row starts below the header band's fade.

@@ -63,8 +63,10 @@ struct TranscriptView: View {
     /// The floating header's bottom edge in window space (0 = not measured): the thread's top
     /// margin ends there, however much safe area the header stands in.
     var headerBottom: CGFloat = 0
-    /// The bands' fade (`ChatStyle.bandFade` on iOS, 0 where there are no bands): added to both
-    /// margins and to what the overlays clear.
+    /// The header band's fade (`ChatStyle.bandFade` on iOS, 0 where there is no band): added to
+    /// the top margin so the first row reads whole. The bottom has no fade above the bar (the
+    /// thread shows through the field's glass, Matt 2026-10-10): the last row ends 8 pt above
+    /// the dock, as before.
     var bandFade: CGFloat = 0
     /// `scrollTop` is 0 when the thread starts at the window's top edge (it runs under the status
     /// bar), which is the usual case, so only the header's measurement gates this.
@@ -230,7 +232,7 @@ struct TranscriptView: View {
             .scrollPosition($scrollPosition)
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
-            .contentMargins(.bottom, bottomInset + bandFade + 8, for: .scrollContent)
+            .contentMargins(.bottom, bottomInset + 8, for: .scrollContent)
             .modifier(ThreadTopEdge(inset: effectiveTopInset + bandFade + 8))
             // The keyboard is handled by hand (below) so the last message rides up with it instead
             // of vanishing under the composer; SwiftUI's own avoidance would then double the inset.
@@ -239,7 +241,7 @@ struct TranscriptView: View {
                 metrics.reportedInsetBottom = v
                 guard autoInsetFixed == nil, dockTop > 0 else { return }
                 #if os(iOS)
-                let raw = max(0, v - (bottomInset + bandFade + 8))
+                let raw = max(0, v - (bottomInset + 8))
                 let safe = windowGeometry.safeArea.bottom
                 autoInsetFixed = safe > 0 && raw > safe / 2 ? safe : 0
                 #else
@@ -312,7 +314,7 @@ struct TranscriptView: View {
                     if showBots, chat.isRunning {
                         // Plain while the reply writes (the thread's own typing bubble says so, decision A).
                         BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState == .streaming ? .working : chat.botState))
-                            .padding(.leading, 16).padding(.bottom, dockReach + bandFade + 12)
+                            .padding(.leading, 16).padding(.bottom, dockReach + 12)
                             .transition(.scale(scale: 0.6).combined(with: .opacity))
                             .allowsHitTesting(false)
                     }
@@ -333,7 +335,7 @@ struct TranscriptView: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 JumpToBottomButton(visible: awayFromBottom) { jumpToBottom() }
-                .padding(.trailing, 16).padding(.bottom, dockReach + bandFade + 12)
+                .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
             .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide).withAppModel() }
             .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame().withAppModel() }
@@ -355,6 +357,10 @@ struct TranscriptView: View {
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [visibleItems.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear { openedAt = Date(); refreshMentionNames() }
+            // The thread's place after a layout switch rebuilt it: the distance from the end it
+            // had (`ChatViewMemory`), put back once the content is laid out; at the end, nothing.
+            .onDisappear { ChatViewMemory.setDistanceFromEnd(metrics.stickToBottom || metrics.distanceFromBottom < 24 ? nil : metrics.distanceFromBottom, for: chat) }
+            .task { await restoreDistanceFromEnd() }
             // The names "@" can mean: the gateway's bots (name and label) and the person's own.
             .onChange(of: chat.runtime.profiles.map(\.name)) { _, _ in refreshMentionNames() }
             // Once the history is in and laid out, make sure the end is really on screen.
@@ -482,6 +488,20 @@ extension TranscriptView {
             #endif
             withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
         }
+    }
+
+    /// Puts the thread back where it was before a layout switch (see `ChatViewMemory`).
+    private func restoreDistanceFromEnd() async {
+        guard let d = ChatViewMemory.distanceFromEnd[ChatViewMemory.key(for: chat)], d > 24 else { return }
+        ChatViewMemory.setDistanceFromEnd(nil, for: chat)
+        // The content is laid out and the default anchor has it at the end.
+        for _ in 0..<40 {
+            if metrics.contentHeight > metrics.containerHeight, metrics.offsetY > 0 { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        guard metrics.contentHeight > metrics.containerHeight else { return }
+        metrics.stickToBottom = false
+        scrollPosition.scrollTo(y: max(0, metrics.offsetY - d))
     }
 
     private func landAfterResume() async {
@@ -933,10 +953,10 @@ enum ChatStyle {
     /// The reading column on a wide layout (the Mac, iPad, the open Duo): thread and composer
     /// share it, centred in the pane.
     static let readingColumn: CGFloat = 860
-    /// The soft edge of the header's and the dock's bands on iOS: the page's background fades
-    /// out over this much thread above the composer and below the header. The thread's margins
-    /// clear it, so the last row (a pinned bot, the status line, a card) and the first one read
-    /// whole, not through the fade.
+    /// The soft edge of the header's band on iOS: the page's background fades out over this
+    /// much thread below the header. The thread's top margin clears it, so the first row reads
+    /// whole, not through the fade. (The dock's band sits below the bar and has no fade above
+    /// it: the thread shows through the field's glass.)
     static let bandFade: CGFloat = 28
     /// "small", "default" or "large": one Dynamic Type step down or up for the thread only.
     static let textSize = "chat.textSize"
