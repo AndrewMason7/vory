@@ -143,12 +143,9 @@ private struct MainSplitView: View {
                     ChatListView(detailPath: $chatPath)
                         .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 560)
                 } detail: {
-                    NavigationStack(path: $chatPath) {
-                        NoChatView()
-                            // No back chevron: the list beside it is the way between chats.
-                            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).id(route).navigationBarBackButtonHidden(true) }
-                            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).id(r).navigationBarBackButtonHidden(true) }
-                    }
+                    // The chat beside the list (`ChatNavigation`): shared with the iPad and the
+                    // open Duo in 1.5; no back chevron, the list is the way between chats.
+                    ChatDetailStack(path: $chatPath) { NoChatView() }
                 }
             } else {
                 NavigationSplitView(columnVisibility: $columns) {

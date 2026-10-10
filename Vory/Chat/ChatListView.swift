@@ -1,7 +1,7 @@
 import SwiftUI
 import VoryCore
 
-struct ChatRoute: Hashable {
+struct ChatRoute: Hashable, Codable {
     var storedID: String?
     var title: String?
     /// Sessions are profile-scoped on the gateway; when set, the chat screen selects this bot first.
@@ -20,6 +20,10 @@ struct ChatRoute: Hashable {
     /// Voice mode as soon as the chat exists (the Chats page's mic, the sheet's Voice mode),
     /// after the first message if there is one.
     var startVoice: Bool = false
+
+    /// Saved and restored without the picked files: `AttachmentPreview` carries local file
+    /// URLs and is not Codable, and a route is only ever restored for a chat that exists.
+    private enum CodingKeys: String, CodingKey { case storedID, title, profile, initialText, readOnly, cwd, token, startVoice }
 }
 
 struct ChatListView: View {
@@ -116,7 +120,7 @@ struct ChatListView: View {
         let current = list.firstIndex { e in
             switch e {
             case .session(let s): return s.id == selectedID
-            case .room(let r): return "room:" + r.roomId == selectedID
+            case .room(let r): return ChatNavigation.selectionID(ofRoom: r.roomId) == selectedID
             }
         }
         let next = current.map { min(max($0 + direction, 0), list.count - 1) } ?? 0
@@ -127,32 +131,32 @@ struct ChatListView: View {
     }
     #endif
 
-    /// Opens a chat or a group chat: pushed on the phone; on the Mac it replaces whatever the
-    /// detail column shows, the way selecting a conversation does in Messages. `back` is the tab
-    /// to return to when this chat closes (the compose circle tapped elsewhere); any other way
-    /// in forgets a pending one.
+    /// Opens a chat or a group chat: pushed when the list owns its stack (the phone); beside a
+    /// detail column (the Mac; the iPad and the open Duo in 1.5) it replaces whatever the column
+    /// shows, the way selecting a conversation does in Messages (`ChatNavigation`). `back` is the
+    /// tab to return to when this chat closes (the compose circle tapped elsewhere); any other
+    /// way in forgets a pending one.
     private func open(_ route: some Hashable, returningTo back: AppModel.AppTab? = nil) {
         model.composeReturnTab = back
-        #if os(macOS)
-        if var chat = route as? ChatRoute, chat.storedID == nil {
-            chat.token = UUID()
-            path.wrappedValue = NavigationPath([chat])
+        if detailPath != nil {
+            ChatNavigation.select(route, in: &path.wrappedValue)
+            selectedID = ChatNavigation.selectionID(of: route)
         } else {
-            path.wrappedValue = NavigationPath([route])
+            ChatNavigation.push(route, onto: &path.wrappedValue)
         }
-        selectedID = (route as? ChatRoute)?.storedID ?? (route as? RoomRoute).map { "room:" + $0.room.roomId }
-        #else
-        path.wrappedValue.append(route)
-        #endif
     }
 
     var body: some View {
-        #if os(macOS)
-        // A column of the split view; the detail column's stack (`detailPath`) shows the chats.
-        content
-        #else
-        NavigationStack(path: path) { content }
-        #endif
+        if detailPath != nil {
+            // A column of the split view; the detail column's stack (`detailPath`) shows the chats.
+            content
+        } else {
+            NavigationStack(path: path) {
+                content
+                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
+            }
+        }
     }
 
     private var content: some View {
@@ -231,11 +235,6 @@ struct ChatListView: View {
                     .withAppModel()
                 }
             }
-            #if os(iOS)
-            // The Mac's destinations are on the detail column's stack.
-            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
-            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
-            #endif
             .onChange(of: searchText) { _, q in Task { await search(q) } }
             .refreshable { await load() }
             .task(id: runtime?.connection.id) { await load() }
@@ -957,7 +956,7 @@ struct ChatListView: View {
         let archived = archivedRooms.contains(room.roomId)
         let log = roomLogs[room.roomId] ?? []
         let summary = summarizer.shown(summarizer.summary(forRoom: room, events: log), title: room.name, preview: Self.lastLine(room, log) ?? "")
-                rowLink(RoomRoute(room: room, initialText: nil), selected: selectedID == "room:" + room.roomId) {
+                rowLink(RoomRoute(room: room, initialText: nil), selected: selectedID == ChatNavigation.selectionID(ofRoom: room.roomId)) {
                     HStack(spacing: 12) {
                         HStack(spacing: -12) {
                             ForEach(Array(room.members.prefix(3).enumerated()), id: \.offset) { _, m in
@@ -1237,7 +1236,7 @@ enum ChatRowStyle {
 }
 
 /// A group chat as a navigation value, with the first message when it was just started.
-struct RoomRoute: Hashable {
+struct RoomRoute: Hashable, Codable {
     var room: Room
     var initialText: String?
 }
