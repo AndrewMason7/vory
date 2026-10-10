@@ -5,6 +5,12 @@ import VoryCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
+    /// Two columns and the wide chat layout: see `wideLayout` below.
+    private var wide: Bool { Self.isWide(regular: sizeClass == .regular, size: windowGeometry.bounds.size) }
+    nonisolated static func isWide(regular: Bool, size: CGSize) -> Bool {
+        guard size.width > 0, size.height > 0 else { return regular }   // not measured yet
+        return regular && (size.width > size.height || size.width >= 700)
+    }
     /// The window's geometry for this scene, read from the window on every layout (see
     /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
     @State private var windowGeometry = WindowGeometry()
@@ -71,9 +77,12 @@ struct RootView: View {
         }
         #endif
         .environment(\.windowGeometry, windowGeometry)
-        // Wide on a regular-width window (iPad, the open Duo), the phone layout otherwise.
-        .environment(\.wideLayout, sizeClass == .regular)
-        .onChange(of: sizeClass, initial: true) { _, s in model.wideLayout = s == .regular }
+        // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
+        // iPad, the open Duo in landscape); the phone layout otherwise, which includes the open
+        // Duo upright (669 pt: Matt chose one column there, 2026-10-10) and a narrow Stage
+        // Manager or Split View window. The window's shape decides, never the device or a pose.
+        .environment(\.wideLayout, wide)
+        .onChange(of: wide, initial: true) { _, w in model.wideLayout = w }
         // The probe answered and the chosen page is on the bar now: open on it, unless the
         // person has already gone somewhere else.
         .onChange(of: model.hiddenTabs) { was, hidden in

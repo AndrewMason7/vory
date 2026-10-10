@@ -385,6 +385,9 @@ struct ComposerView: View {
         #if os(iOS)
         // The camera question answered before the + panel can need it (see cameraAvailable).
         .task { try? await Task.sleep(for: .seconds(1)); _ = Self.cameraAvailable }
+        // The cursor comes back after a layout switch rebuilt the chat (`ChatViewMemory`).
+        .onAppear { if ChatViewMemory.focused.contains(ChatViewMemory.key(for: chat)) { focused = true } }
+        .onDisappear { ChatViewMemory.setFocused(focused, for: chat) }
         #endif
         #if os(macOS)
         // A new chat on the Mac (⌘N, the list's button, an intent) opens with the cursor in

@@ -18,8 +18,10 @@ struct ConversationView: View {
     @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
     @State private var dockBottom: CGFloat = 0
+    #if os(iOS)
     /// The tab bar's height under the chat, when it is there and runs along the bottom.
     private var barReserve: CGFloat { model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) }
+    #endif
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
     #if os(macOS)
     @State private var headerHeight: CGFloat = 0
@@ -780,6 +782,19 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
 #endif
 
 /// Unsent composer text, per session, so leaving a chat and coming back does not lose it.
+/// What a chat's views had when they went away and get back when they return: the composer's
+/// keyboard focus and the thread's distance from its end. A layout switch (the open Duo turned
+/// upright or back: one column to two) rebuilds the chat's views; the open chat is in
+/// `AppModel.chatPath`, the draft in `ComposerDrafts`, and these two are the rest of what the
+/// person had under their hands. In memory only, for the app's run.
+@MainActor enum ChatViewMemory {
+    static func key(for chat: ChatSession) -> String { chat.storedID ?? chat.runtimeID }
+    private(set) static var focused: Set<String> = []
+    private(set) static var distanceFromEnd: [String: CGFloat] = [:]
+    static func setFocused(_ on: Bool, for chat: ChatSession) { if on { focused.insert(key(for: chat)) } else { focused.remove(key(for: chat)) } }
+    static func setDistanceFromEnd(_ d: CGFloat?, for chat: ChatSession) { distanceFromEnd[key(for: chat)] = d }
+}
+
 @MainActor
 enum ComposerDrafts {
     private static func key(for chat: ChatSession) -> String { "composerDraft." + (chat.storedID ?? chat.runtimeID) }
