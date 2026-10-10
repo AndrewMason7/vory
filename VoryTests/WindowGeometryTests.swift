@@ -41,6 +41,7 @@ import Testing
         #expect(abs(WindowGeometry.keyboardOverlap(window: half, keyboard: kb, safeBottom: 20) - 280) < 0.001)
     }
 
+    #if os(iOS)
     @Test func theTabBarReservesLessOnAHomeButtonPhone() {
         // With a home indicator the capsule hangs 13 pt into its area; without one it cannot hang,
         // so the bar keeps those 13 pt as a gap above the window's edge instead.
@@ -48,6 +49,7 @@ import Testing
         #expect(abs(VoryTabBar.reservedHeight(safeBottom: 0) - 69) < 0.001)
         #expect(VoryTabBar.overhang(safeBottom: 8) == 8)
     }
+    #endif
 
     @Test func wideGridsGetAnEvenColumnCount() {
         #expect(EvenColumns.count(width: 720, minimum: 150, spacing: 18) == 4)
