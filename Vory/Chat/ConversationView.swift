@@ -21,6 +21,14 @@ struct ConversationView: View {
     #if os(iOS)
     /// The tab bar's height under the chat, when it is there and runs along the bottom.
     private var barReserve: CGFloat { model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) }
+    /// The fold of a partly open Duo across the window (Step D): a dock the keyboard has pushed
+    /// onto it moves up above it, with Apple's margin, so the field is never under the fold.
+    @Environment(\.reservedRegions) private var regions
+    private var foldLift: CGFloat {
+        guard let fold = regions.horizontalFold, dockBottom > dockTop, dockTop > 0,
+              fold.maxY + ReservedRegions.margin > dockTop, fold.minY < dockBottom else { return 0 }
+        return dockBottom - fold.minY + ReservedRegions.margin
+    }
     #endif
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
     #if os(macOS)
@@ -180,7 +188,7 @@ struct ConversationView: View {
             // Above the tab bar when the bar stands under the chat (a wide layout with the bar
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
-            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve) }
+            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift) }
             .overlay(alignment: .top) { headerBand }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // The keyboard as the window has it (in window space, re-placed on every resize or

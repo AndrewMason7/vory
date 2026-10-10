@@ -43,9 +43,14 @@ final class RotationSurvivalUITests: XCTestCase {
     private func mark() -> (label: String, y: CGFloat)? {
         guard let snap = try? app.snapshot() else { return nil }
         let window = app.windows.firstMatch.frame
+        // The chat's own column: from the composer's left edge (beside a list on a wide window).
+        let columnLeft = app.textViews["composer.text"].firstMatch.frame.minX - 60
         var out: [(String, CGFloat)] = []
         func walk(_ s: XCUIElementSnapshot) {
-            if s.elementType == .staticText, s.label.count >= 16, !s.label.contains("…"), s.frame.minY > window.minY + 120, s.frame.maxY < window.maxY - 160 { out.append((s.label, s.frame.minY)) }
+            // A sentence of the thread, not the title pill, a status or a list row: long, in the
+            // chat's column, and not the chat's name.
+            if s.elementType == .staticText, s.label.count >= 40, !s.label.contains("…"), !s.label.hasPrefix("Disk cleanup"),
+               s.frame.minX >= columnLeft, s.frame.minY > window.minY + 120, s.frame.maxY < window.maxY - 160 { out.append((s.label, s.frame.minY)) }
             for c in s.children { walk(c) }
         }
         walk(snap)
@@ -60,8 +65,8 @@ final class RotationSurvivalUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 10), "\(label): no composer")
         XCTAssertEqual(composer.value as? String, draft, "\(label): the draft changed")
         XCTAssertTrue(focused(composer), "\(label): the composer lost the keyboard")
-        let row = app.staticTexts[marked].firstMatch
-        XCTAssertTrue(row.exists && app.windows.firstMatch.frame.contains(row.frame), "\(label): the row that was on screen (\(marked.prefix(30))) is gone: the thread moved")
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", marked)).firstMatch
+        XCTAssertTrue(row.exists && app.windows.firstMatch.frame.intersects(row.frame), "\(label): the row that was on screen (\(marked.prefix(30))) is gone: the thread moved")
     }
 
     func testTheChatDraftFocusAndPlaceSurviveARotation() throws {

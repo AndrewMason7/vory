@@ -49,7 +49,11 @@ struct ChatListView: View {
     /// The row a force click is peeking (Mac).
     @State private var peeking: StoredSession?
     /// The chat showing in the detail column (Mac), for the row's highlight.
-    @State private var selectedID: String?
+    /// The highlighted row: `AppModel.chatSelectionID`, so it survives the list being rebuilt.
+    private var selectedID: String? {
+        get { model.chatSelectionID }
+        nonmutating set { model.chatSelectionID = newValue }
+    }
     @State private var pendingDelete: StoredSession?
     @State private var lastRouted: PendingRoute?
     /// Every profile's chats in one list, newest first, with the bot's avatar on each row.
@@ -170,6 +174,10 @@ struct ChatListView: View {
             }
             .navigationTitle(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats")
             .navigationBarTitleDisplayMode(.inline)
+            // One column on a window wider than a phone (the open Duo upright, 669 pt): the
+            // bar centred its title, which landed beside the trailing buttons; the title goes
+            // into the leading group after the bot circle, as on a phone.
+            .modifier(LeadingTitle(title: selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !model.wideLayout))
             .background(InteractivePopEnabler())
             // Driven by the stack's own path rather than by the pushed screen: the bar starts
             // coming back the instant a pop begins instead of after the transition settles.
@@ -1257,4 +1265,31 @@ enum ChatRowStyle {
 struct RoomRoute: Hashable, Codable {
     var room: Room
     var initialText: String?
+}
+
+
+/// The bar's title at the leading edge, after the leading items, instead of centred (iOS,
+/// where the layout is not wide). The navigation title stays for accessibility and the back
+/// label; only the bar's own drawing of it is removed.
+private struct LeadingTitle: ViewModifier {
+    let title: String
+    let on: Bool
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if on {
+            content
+                .toolbar(removing: .title)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
 }

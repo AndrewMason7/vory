@@ -53,6 +53,16 @@ struct ComposerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(AppModel.self) private var model
+    /// The fold of a partly open Duo, when it runs across the window above the composer (a
+    /// laptop pose): the lists that grow up from the field stop under it (Step D).
+    @Environment(\.reservedRegions) private var regions
+    @State private var composerFrame = CGRect.zero
+    /// How far up from the field's top a list may grow before the fold: nil with no such fold.
+    private var roomUnderFold: CGFloat? {
+        guard let ceiling = regions.ceiling(for: composerFrame), composerFrame.height > 0 else { return nil }
+        // The field's top: the stack's bottom edge less a one-line field and its padding.
+        return max(SlashMenuList.rowHeight + 8, composerFrame.maxY - 46 - 10 - ceiling)
+    }
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
     private var mentionQuery: String? {
@@ -111,7 +121,10 @@ struct ComposerView: View {
 
     /// The command list scrolls inside a cap: about 30 % of the window, so with the keyboard up
     /// it stops well short of the bot header at the top.
-    private var commandListCap: CGFloat { max(120, min(280, windowGeometry.bounds.height * 0.30)) }
+    private var commandListCap: CGFloat {
+        let cap = max(120, min(280, windowGeometry.bounds.height * 0.30))
+        return roomUnderFold.map { min(cap, $0) } ?? cap
+    }
 
     /// A row tapped or taken with Return, or completed with Tab (see SlashMenu.outcome): a
     /// command that takes nothing runs as if typed and sent, a model switches this chat the way
@@ -212,6 +225,8 @@ struct ComposerView: View {
         // panel's and fold back into it (#285): the matching glassEffectIDs below did nothing
         // outside a container, and the panel just scaled in.
         GlassEffectContainer(spacing: 0) { composerStack }
+            // Where the composer stands in the window, for the fold above it (`roomUnderFold`).
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composerFrame = $0 }
     }
 
     private var composerStack: some View {
@@ -478,7 +493,8 @@ struct ComposerView: View {
             // The panel takes the keyboard's place, as the + tray does in Messages: with the
             // keyboard up it grew over the thread and covered the header (a tester, on the
             // first build with Voice mode in it).
-            if !showAttach { focused = false; attachTappedAt = Date() }
+            // The slash list closes with it: on the Duo the two stood open together, the panel pushed up onto the fold.
+            if !showAttach { focused = false; attachTappedAt = Date(); menuDismissed = true }
             withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding
