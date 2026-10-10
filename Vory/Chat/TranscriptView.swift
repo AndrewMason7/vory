@@ -63,8 +63,10 @@ struct TranscriptView: View {
     /// The floating header's bottom edge in window space (0 = not measured): the thread's top
     /// margin ends there, however much safe area the header stands in.
     var headerBottom: CGFloat = 0
-    /// The bands' fade (`ChatStyle.bandFade` on iOS, 0 where there are no bands): added to both
-    /// margins and to what the overlays clear.
+    /// The header band's fade (`ChatStyle.bandFade` on iOS, 0 where there is no band): added to
+    /// the top margin so the first row reads whole. The bottom has no fade above the bar (the
+    /// thread shows through the field's glass, Matt 2026-10-10): the last row ends 8 pt above
+    /// the dock, as before.
     var bandFade: CGFloat = 0
     /// `scrollTop` is 0 when the thread starts at the window's top edge (it runs under the status
     /// bar), which is the usual case, so only the header's measurement gates this.
@@ -230,7 +232,7 @@ struct TranscriptView: View {
             .scrollPosition($scrollPosition)
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
-            .contentMargins(.bottom, bottomInset + bandFade + 8, for: .scrollContent)
+            .contentMargins(.bottom, bottomInset + 8, for: .scrollContent)
             .modifier(ThreadTopEdge(inset: effectiveTopInset + bandFade + 8))
             // The keyboard is handled by hand (below) so the last message rides up with it instead
             // of vanishing under the composer; SwiftUI's own avoidance would then double the inset.
@@ -239,7 +241,7 @@ struct TranscriptView: View {
                 metrics.reportedInsetBottom = v
                 guard autoInsetFixed == nil, dockTop > 0 else { return }
                 #if os(iOS)
-                let raw = max(0, v - (bottomInset + bandFade + 8))
+                let raw = max(0, v - (bottomInset + 8))
                 let safe = windowGeometry.safeArea.bottom
                 autoInsetFixed = safe > 0 && raw > safe / 2 ? safe : 0
                 #else
@@ -311,7 +313,7 @@ struct TranscriptView: View {
                 ZStack {
                     if showBots, chat.isRunning {
                         BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(state: chat.botState))
-                            .padding(.leading, 16).padding(.bottom, dockReach + bandFade + 12)
+                            .padding(.leading, 16).padding(.bottom, dockReach + 12)
                             .transition(.scale(scale: 0.6).combined(with: .opacity))
                             .allowsHitTesting(false)
                     }
@@ -332,7 +334,7 @@ struct TranscriptView: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 JumpToBottomButton(visible: awayFromBottom) { jumpToBottom() }
-                .padding(.trailing, 16).padding(.bottom, dockReach + bandFade + 12)
+                .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
             .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide).withAppModel() }
             .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame().withAppModel() }
@@ -932,10 +934,10 @@ enum ChatStyle {
     /// The reading column on a wide layout (the Mac, iPad, the open Duo): thread and composer
     /// share it, centred in the pane.
     static let readingColumn: CGFloat = 860
-    /// The soft edge of the header's and the dock's bands on iOS: the page's background fades
-    /// out over this much thread above the composer and below the header. The thread's margins
-    /// clear it, so the last row (a pinned bot, the status line, a card) and the first one read
-    /// whole, not through the fade.
+    /// The soft edge of the header's band on iOS: the page's background fades out over this
+    /// much thread below the header. The thread's top margin clears it, so the first row reads
+    /// whole, not through the fade. (The dock's band sits below the bar and has no fade above
+    /// it: the thread shows through the field's glass.)
     static let bandFade: CGFloat = 28
     /// "small", "default" or "large": one Dynamic Type step down or up for the thread only.
     static let textSize = "chat.textSize"
