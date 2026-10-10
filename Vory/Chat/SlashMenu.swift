@@ -333,7 +333,7 @@ struct SlashMenuList: View {
     var cap: CGFloat
     var pick: (SlashMenu.Item) -> Void
 
-    private static let rowHeight: CGFloat = 38
+    static let rowHeight: CGFloat = 38
 
     var body: some View {
         ScrollViewReader { proxy in
