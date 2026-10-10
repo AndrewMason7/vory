@@ -1281,7 +1281,8 @@ private struct LeadingTitle: ViewModifier {
                 .toolbar(removing: .title)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+                        // Its whole width: squeezed by the trailing group on a phone it read "Ch…".
+                        Text(title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
                     }
                     .sharedBackgroundVisibility(.hidden)
                 }
