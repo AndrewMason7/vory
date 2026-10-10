@@ -48,18 +48,19 @@ struct VoryTabBar: View {
     /// Between the capsule and the circles, and between the circles: half what it was (the
     /// bar had a gap on each side of the mic that read as empty space).
     private let circleGap: CGFloat = 6
-    /// The window's bottom safe-area inset: 34 pt on phones with a home indicator, 0 on a
-    /// home-button phone (iPhone SE), which iOS 26 still runs on.
-    private static var safeBottom: CGFloat {
-        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 34
-    }
+    /// The window's bottom safe-area inset, read from the window as it is now (`WindowGeometry`):
+    /// 34 pt on phones with a home indicator, 0 on a home-button phone (iPhone SE), which iOS 26
+    /// still runs on, and whatever the window has after a fold or a resize.
+    @Environment(\.windowGeometry) private var windowGeometry
     /// How far the capsule hangs into the home-indicator area: the full 13 pt when there is one.
     /// Without one the capsule would hang off the screen, so it hangs by what is there (nothing on
     /// an SE) and keeps the rest as a gap above the screen edge instead.
-    static var overhang: CGFloat { min(13, safeBottom) }
+    nonisolated static func overhang(safeBottom: CGFloat) -> CGFloat { min(13, safeBottom) }
     /// What the bar reserves above the home-indicator area (the system bar group's 49 pt); the
     /// capsule is drawn overflowing below it.
-    static var reservedHeight: CGFloat { 56 - overhang + max(0, 13 - safeBottom) }
+    nonisolated static func reservedHeight(safeBottom: CGFloat) -> CGFloat { 56 - overhang(safeBottom: safeBottom) + max(0, 13 - safeBottom) }
+    /// The same, for this window as it is now.
+    static func reservedHeight(in geometry: WindowGeometry) -> CGFloat { reservedHeight(safeBottom: geometry.safeArea.bottom) }
 
     var body: some View {
         GlassEffectContainer(spacing: circleGap) {
@@ -113,7 +114,7 @@ struct VoryTabBar: View {
         .padding(.horizontal, sideMargin)
         // Reserve only the part above the home-indicator area, like the system bar group; the
         // capsule itself is drawn overflowing into it.
-        .frame(height: Self.reservedHeight, alignment: .top)
+        .frame(height: Self.reservedHeight(in: windowGeometry), alignment: .top)
         .animation(.snappy(duration: 0.25), value: showVoice)
     }
 

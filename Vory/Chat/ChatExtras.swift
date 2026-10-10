@@ -155,24 +155,26 @@ struct SelectTextSheet: View {
 
 /// Small decoded previews of attachment images, by file and size, so a row never holds the
 /// full-resolution bitmap.
+/// `scale` is the display's scale where the picture will show (`\.displayScale` in the view
+/// that asks), not the main screen's: an external display or the Duo's other display can differ.
 enum AttachmentThumbs {
     @MainActor private static let cache = NSCache<NSString, UIImage>()
-    private static func key(_ url: URL, _ side: CGFloat) -> NSString { "\(url.path)|\(Int(side))" as NSString }
+    private static func key(_ url: URL, _ side: CGFloat, _ scale: CGFloat) -> NSString { "\(url.path)|\(Int(side))|\(scale)" as NSString }
 
-    @MainActor static func image(at url: URL, side: CGFloat) -> UIImage? {
-        let key = key(url, side)
+    @MainActor static func image(at url: URL, side: CGFloat, scale: CGFloat) -> UIImage? {
+        let key = key(url, side, scale)
         if let hit = cache.object(forKey: key) { return hit }
-        guard let image = decode(at: url, pixels: Int(side * UIScreen.main.scale)) else { return nil }
+        guard let image = decode(at: url, pixels: Int(side * scale)) else { return nil }
         cache.setObject(image, forKey: key)
         return image
     }
 
     /// The same, decoded off the main thread: a row's thumbnails and the viewer's picture are
     /// made where a scroll does not wait for them.
-    @MainActor static func imageAsync(at url: URL, side: CGFloat) async -> UIImage? {
-        let key = key(url, side)
+    @MainActor static func imageAsync(at url: URL, side: CGFloat, scale: CGFloat) async -> UIImage? {
+        let key = key(url, side, scale)
         if let hit = cache.object(forKey: key) { return hit }
-        let pixels = Int(side * UIScreen.main.scale)
+        let pixels = Int(side * scale)
         let box = await Task.detached(priority: .userInitiated) { Box(decode(at: url, pixels: pixels)) }.value
         if let image = box.image { cache.setObject(image, forKey: key) }
         return box.image

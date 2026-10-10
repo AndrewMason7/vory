@@ -46,14 +46,21 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
             h.didMove(toParent: self)
             host = h
         }
-        let width = view.bounds.width > 0 ? view.bounds.width : UIScreen.main.bounds.width - 16
+        let width = view.bounds.width > 0 ? view.bounds.width : sceneBounds.width - 16
         preferredContentSize = CGSize(width: width, height: fittedHeight(width: width))
+    }
+
+    /// The scene this extension's view is in, as it is now: what the card's size is a share of.
+    /// Before the view is in a window (the first layout) its own bounds stand in.
+    private var sceneBounds: CGRect {
+        if let scene = view.window?.windowScene { return scene.effectiveGeometry.coordinateSpace.bounds }
+        return view.bounds
     }
 
     /// The card's natural height, capped at what iOS shows above the reply field and keyboard.
     private func fittedHeight(width: CGFloat) -> CGFloat {
         let h = host?.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height ?? 120
-        let cap = max(200, UIScreen.main.bounds.height * 0.29)
+        let cap = max(200, sceneBounds.height * 0.29)
         return min(max(h, 96), cap)
     }
 
