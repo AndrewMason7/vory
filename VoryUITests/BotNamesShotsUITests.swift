@@ -81,9 +81,9 @@ final class BotNamesShotsUITests: XCTestCase {
         // to land on the name button, which is the card's top part.
         print("HEADER-FRAME \(header.frame) window \(app.windows.firstMatch.frame)")
         shot("315-0-card")
-        // The pencil beside the name: the one visible mark of the button, found by its frame.
-        let pencil = app.images.matching(NSPredicate(format: "label == 'pencil'")).firstMatch
-        if pencil.exists { pencil.tap() } else { header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap() }
+        // The header element spans the face and the card under it; the name row (with the
+        // pencil) is the card's top line, about four fifths of the way down the element.
+        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
         let name = app.textFields["botName.name"].firstMatch
         if !name.waitForExistence(timeout: 10) {
             shot("315-0-after-tap")
