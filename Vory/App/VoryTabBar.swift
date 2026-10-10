@@ -13,6 +13,10 @@ import VoryCore
 struct VoryTabBar: View {
     @Environment(AppModel.self) private var model
     var tabs: [AppModel.AppTab]
+    /// Horizontal along the bottom (every phone, the open Duo held upright), or a vertical
+    /// strip on a side edge where the system lays its own bars that way (the closed iPhone
+    /// Duo, the open Duo in landscape): the same capsule and circles, stacked.
+    var axis: Axis = .horizontal
     var compose: () -> Void
     /// The full New Message sheet (bots, project, files).
     var composeFull: () -> Void = {}
@@ -61,10 +65,16 @@ struct VoryTabBar: View {
     nonisolated static func reservedHeight(safeBottom: CGFloat) -> CGFloat { 56 - overhang(safeBottom: safeBottom) + max(0, 13 - safeBottom) }
     /// The same, for this window as it is now.
     static func reservedHeight(in geometry: WindowGeometry) -> CGFloat { reservedHeight(safeBottom: geometry.safeArea.bottom) }
+    /// What a vertical strip takes from the window's width: the capsule plus a margin each side.
+    static let reservedWidth: CGFloat = 56 + 2 * 10
+    /// A vertical slot: a little taller than wide, so the label fits under the icon.
+    private let verticalSlot: CGFloat = 58
 
     var body: some View {
         GlassEffectContainer(spacing: circleGap) {
-            HStack(spacing: circleGap) {
+            // The capsule then the circles, side by side along the bottom or stacked down a strip.
+            let layout = axis == .horizontal ? AnyLayout(HStackLayout(spacing: circleGap)) : AnyLayout(VStackLayout(spacing: circleGap))
+            layout {
                 capsule
                 // Voice: one tap is a fresh chat with the current bot, straight into voice mode;
                 // held, it offers the bots (#237). With four tabs at most the capsule keeps 49 pt
@@ -111,23 +121,32 @@ struct VoryTabBar: View {
                 .accessibilityIdentifier("chats.new")
             }
         }
-        .padding(.horizontal, sideMargin)
-        // Reserve only the part above the home-indicator area, like the system bar group; the
-        // capsule itself is drawn overflowing into it.
-        .frame(height: Self.reservedHeight(in: windowGeometry), alignment: .top)
+        .padding(axis == .horizontal ? .horizontal : .vertical, sideMargin)
+        // Along the bottom: reserve only the part above the home-indicator area, like the
+        // system bar group; the capsule itself is drawn overflowing into it. Down a strip: the
+        // strip's width, the stack kept to its top like the system's.
+        .frame(width: axis == .vertical ? Self.reservedWidth : nil, height: axis == .horizontal ? Self.reservedHeight(in: windowGeometry) : nil,
+               alignment: axis == .horizontal ? .top : .top)
         .animation(.snappy(duration: 0.25), value: showVoice)
     }
 
     private var capsule: some View {
         GeometryReader { geo in
-            let slotWidth = max(1, (geo.size.width - inset * 2) / CGFloat(max(1, tabs.count)))
-            let slotHeight = geo.size.height - inset * 2
+            // The slots run along the capsule's length (x along the bottom, y down a strip).
+            let length = axis == .horizontal ? geo.size.width : geo.size.height
+            let thickness = axis == .horizontal ? geo.size.height : geo.size.width
+            let slotAlong = max(1, (length - inset * 2) / CGFloat(max(1, tabs.count)))
+            let slotAcross = thickness - inset * 2
+            let slotWidth = axis == .horizontal ? slotAlong : slotAcross
+            let slotHeight = axis == .horizontal ? slotAcross : slotAlong
             let selectedIndex = CGFloat(tabs.firstIndex(of: model.selectedTab) ?? 0)
             let dragging = dragX != nil
-            let lensX: CGFloat = {
-                guard let x = dragX else { return inset + selectedIndex * slotWidth }
-                return min(max(inset, x - slotWidth / 2), geo.size.width - inset - slotWidth)
+            let lensAlong: CGFloat = {
+                guard let x = dragX else { return inset + selectedIndex * slotAlong }
+                return min(max(inset, x - slotAlong / 2), length - inset - slotAlong)
             }()
+            let lensX = axis == .horizontal ? lensAlong : inset
+            let lensY = axis == .horizontal ? inset : lensAlong
             ZStack(alignment: .topLeading) {
                 // The lens: clear glass under the selected slot, or wherever the finger holds it
                 // (grown a little while lifted). Under the icons at rest so the selected one stays
@@ -138,8 +157,8 @@ struct VoryTabBar: View {
                         .glassEffect(.clear.interactive(), in: .capsule)
                 }
                 .scaleEffect(dragging ? 1.12 : 1)
-                .offset(x: lensX, y: inset)
-                .animation(dragging ? .interactiveSpring(response: 0.18) : .snappy(duration: 0.32), value: lensX)
+                .offset(x: lensX, y: lensY)
+                .animation(dragging ? .interactiveSpring(response: 0.18) : .snappy(duration: 0.32), value: lensAlong)
                 .animation(.snappy(duration: 0.22), value: dragging)
                 .allowsHitTesting(false)
                 .zIndex(dragging ? 2 : 0)
@@ -154,22 +173,24 @@ struct VoryTabBar: View {
                         .mask {
                             Capsule()
                                 .frame(width: lensW - 8, height: lensH - 8)
-                                .position(x: lensX + slotWidth / 2, y: inset + slotHeight / 2)
+                                .position(x: lensX + slotWidth / 2, y: lensY + slotHeight / 2)
                         }
-                        .animation(.interactiveSpring(response: 0.18), value: lensX)
+                        .animation(.interactiveSpring(response: 0.18), value: lensAlong)
                         .allowsHitTesting(false)
                         .zIndex(3)
                 }
             }
             .contentShape(Capsule())
-            .gesture(barGesture(slotWidth: slotWidth))
+            .gesture(barGesture(slotAlong: slotAlong))
         }
-        .frame(height: barHeight)
+        .frame(width: axis == .vertical ? barHeight : nil,
+               height: axis == .horizontal ? barHeight : CGFloat(max(1, tabs.count)) * verticalSlot + inset * 2)
         .glassEffect(.regular, in: .capsule)
     }
 
     private func iconRow(slotWidth: CGFloat, slotHeight: CGFloat, dragging: Bool) -> some View {
-        HStack(spacing: 0) {
+        let layout = axis == .horizontal ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
+        return layout {
             ForEach(tabs, id: \.self) { tab in
                 slot(tab, dragging: dragging).frame(width: slotWidth, height: slotHeight)
             }
@@ -207,30 +228,32 @@ struct VoryTabBar: View {
 
     /// A press moves the lens under the finger once it is held for a moment or slides sideways;
     /// the page switches as the lens passes each tab. A quick press is a tap on that tab.
-    private func barGesture(slotWidth: CGFloat) -> some Gesture {
+    private func barGesture(slotAlong: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
                 if pressStart == nil { pressStart = Date() }
                 let held = Date().timeIntervalSince(pressStart ?? Date()) > 0.22
-                let slid = abs(v.translation.width) > 8
+                let slid = abs(axis == .horizontal ? v.translation.width : v.translation.height) > 8
                 guard dragX != nil || held || slid else { return }
                 if dragX == nil { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                dragX = v.location.x
-                if let tab = tab(at: v.location.x, slotWidth: slotWidth), tab != model.selectedTab {
+                let along = axis == .horizontal ? v.location.x : v.location.y
+                dragX = along
+                if let tab = tab(at: along, slotAlong: slotAlong), tab != model.selectedTab {
                     UISelectionFeedbackGenerator().selectionChanged()
                     withAnimation(.snappy(duration: 0.28)) { model.selectedTab = tab }
                 }
             }
             .onEnded { v in
-                if dragX == nil, let tab = tab(at: v.location.x, slotWidth: slotWidth) { select(tab) }
+                let along = axis == .horizontal ? v.location.x : v.location.y
+                if dragX == nil, let tab = tab(at: along, slotAlong: slotAlong) { select(tab) }
                 dragX = nil
                 pressStart = nil
             }
     }
 
-    private func tab(at x: CGFloat, slotWidth: CGFloat) -> AppModel.AppTab? {
-        let i = Int((x - inset) / slotWidth)
-        return tabs.indices.contains(i) ? tabs[i] : (x < inset ? tabs.first : tabs.last)
+    private func tab(at along: CGFloat, slotAlong: CGFloat) -> AppModel.AppTab? {
+        let i = Int((along - inset) / slotAlong)
+        return tabs.indices.contains(i) ? tabs[i] : (along < inset ? tabs.first : tabs.last)
     }
 
     /// A tap on the selected tab while it is deeper than its root page goes back to that page,

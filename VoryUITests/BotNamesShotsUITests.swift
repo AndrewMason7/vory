@@ -79,12 +79,20 @@ final class BotNamesShotsUITests: XCTestCase {
         XCTAssertTrue(header.waitForExistence(timeout: 10), "the card's header did not show")
         // The header is one accessibility element (its action opens the sheet); a touch has
         // to land on the name button, which is the card's top part.
-        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
-        let name = any("botName.name")
-        XCTAssertTrue(name.waitForExistence(timeout: 10), "the name sheet did not open from the header")
+        print("HEADER-FRAME \(header.frame) window \(app.windows.firstMatch.frame)")
+        shot("315-0-card")
+        // The pencil beside the name: the one visible mark of the button, found by its frame.
+        let pencil = app.images.matching(NSPredicate(format: "label == 'pencil'")).firstMatch
+        if pencil.exists { pencil.tap() } else { header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap() }
+        let name = app.textFields["botName.name"].firstMatch
+        if !name.waitForExistence(timeout: 10) {
+            shot("315-0-after-tap")
+            print("AX-TREE-BEGIN\n\(app.debugDescription.prefix(5000))\nAX-TREE-END")
+        }
+        XCTAssertTrue(name.exists, "the name sheet did not open from the header")
         name.tap()
         name.typeText("Atlas")
-        let title = any("botName.title")
+        let title = app.textFields["botName.title"].firstMatch
         title.tap()
         title.typeText("Ops on the workshop host")
         let save = app.buttons["botName.save"].firstMatch
