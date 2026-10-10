@@ -117,3 +117,67 @@ enum FoldAvoidance {
         return fold.minX - frame.maxX
     }
 }
+
+/// The window's reserved regions (iOS 27.1): the fold of a partly open iPhone Duo (`divisions`)
+/// and the camera's housing or anything else that covers the display (`occlusions`), in window
+/// space, active ones only. Custom floating pieces keep their interactive content outside these
+/// frames plus a margin (`ReservedRegions.margin`); system pieces (sheets, menus, lists, the
+/// split view) already do. Read once at the root (`RootView`) and handed down the environment;
+/// empty on anything older and on the Mac.
+struct ReservedRegions: Equatable {
+    var divisions: [CGRect] = []
+    var occlusions: [CGRect] = []
+    /// Apple's margin for interactive content beside a region.
+    static let margin: CGFloat = 8
+    var isEmpty: Bool { divisions.isEmpty && occlusions.isEmpty }
+    var all: [CGRect] { divisions + occlusions }
+    /// A fold that runs across the window (a laptop pose): top and bottom halves.
+    var horizontalFold: CGRect? { divisions.first { $0.width > $0.height } }
+    /// A fold that runs up the window (a book pose): left and right halves.
+    var verticalFold: CGRect? { divisions.first { $0.height >= $0.width } }
+
+    /// Where a piece at `frame` (window space) that stands on the lower side of a horizontal
+    /// fold may reach up to: the fold's bottom edge plus the margin, or nil with no such fold.
+    func ceiling(for frame: CGRect) -> CGFloat? {
+        guard let fold = horizontalFold, frame.midY > fold.midY else { return nil }
+        return fold.maxY + Self.margin
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var reservedRegions = ReservedRegions()
+}
+
+/// Reads the window's reserved regions at the root and publishes them (window space) through
+/// the environment, with margins left for the pieces that read them.
+struct ReservedRegionsReader<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        #if os(iOS)
+        if #available(iOS 27.1, *) {
+            Reader(content: content)
+        } else {
+            content()
+        }
+        #else
+        content()
+        #endif
+    }
+
+    #if os(iOS)
+    @available(iOS 27.1, *)
+    private struct Reader: View {
+        @ViewBuilder var content: () -> Content
+        var body: some View {
+            GeometryReader { proxy in
+                let origin = proxy.frame(in: .global).origin
+                let regions = ReservedRegions(
+                    divisions: proxy.reservedRegions(kind: .division).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
+                    occlusions: proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) })
+                content().environment(\.reservedRegions, regions)
+            }
+        }
+    }
+    #endif
+}

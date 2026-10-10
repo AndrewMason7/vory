@@ -41,7 +41,21 @@ struct ChatsSplitPage: View {
         // One column where the layout is not wide (the open Duo upright, a narrow window): the
         // split view collapses as it does on a phone, the chat pushed over the list, rather
         // than the dimmed list overlay the system gives a regular-width portrait window.
-        .environment(\.horizontalSizeClass, wide ? sizeClass : .compact)
+        .modifier(CollapseWhenNarrow(wide: wide, sizeClass: sizeClass))
+    }
+}
+
+/// Collapses the split view where the layout is not wide (iOS: the size class written as
+/// compact). The Mac's split never collapses and its key path is read-only.
+private struct CollapseWhenNarrow: ViewModifier {
+    let wide: Bool
+    let sizeClass: UserInterfaceSizeClass?
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.environment(\.horizontalSizeClass, wide ? sizeClass : .compact)
+        #else
+        content
+        #endif
     }
 }
 
