@@ -166,11 +166,13 @@ struct ConversationView: View {
         thread(chat)
             // Like Messages: header and dock float over the thread and the text scrolls under their glass.
             // On a wide layout the dock keeps to the reading column, as on the Mac.
+            // The thread blurs and fades under the header and under the dock across the whole
+            // column: bands of material that thin out toward the thread, the card's treatment
+            // (a phone got something like it at the top from the status bar's edge effect; a
+            // wide column has no status bar, and the text read crisp through the header and
+            // past the composer).
+            .overlay(alignment: .bottom) { dockBand }
             .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity) }
-            // The thread blurs and fades under the header across the whole column, down to below
-            // the pill: a band of material that thins out, the card's treatment (a phone got
-            // something like it from the status bar's edge effect; a wide column has no status
-            // bar at its top, and the text read crisp through the header).
             .overlay(alignment: .top) { headerBand }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // The keyboard as the window has it (in window space, re-placed on every resize or
@@ -270,12 +272,28 @@ struct ConversationView: View {
             }
     }
     #if os(iOS)
+    /// Thick material the header's full height (plus the top inset), fading out over the
+    /// 28 pt below the pill: a bubble under the pill is blurred past reading.
     private var headerBand: some View {
-        let height = headerHeight + windowGeometry.safeArea.top + 24
-        return Rectangle().fill(.regularMaterial)
+        let solid = headerHeight + windowGeometry.safeArea.top
+        let height = solid + 28
+        return Rectangle().fill(.thickMaterial)
             .frame(height: height)
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.55), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+    /// The same behind the composer: from 28 pt above the dock down to the window's bottom
+    /// edge (the keyboard's share included), so the text fades before the field and nothing
+    /// reads below it.
+    private var dockBand: some View {
+        let solid = dockHeight + keyboardInset + windowGeometry.safeArea.bottom
+        let height = solid + 28
+        return Rectangle().fill(.thickMaterial)
+            .frame(height: height)
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 28 / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
+            .ignoresSafeArea(.container, edges: .bottom)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
