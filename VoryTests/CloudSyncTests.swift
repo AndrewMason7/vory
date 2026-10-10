@@ -189,6 +189,32 @@ struct CloudSyncTests {
         #expect(cloud.cloudKeys.allSatisfy { !$0.hasPrefix(CloudMerge.settingPrefix) })
     }
 
+    @Test func botNamesTravelWithTheLookAndClearWhenEmptied() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        func names(_ d: UserDefaults) -> [String: [String: String]] { CloudMerge.mapOfMaps(d.string(forKey: BotNames.storageKey)) }
+
+        // A name given on the phone reaches the Mac, with the colour it travels beside.
+        phoneDefaults.set(CloudMerge.string(["work": "#111111"]), forKey: BotColors.storageKey)
+        phoneDefaults.set(CloudMerge.stringOfMaps(["work": ["n": "Scribe", "t": "Minutes"]]), forKey: BotNames.storageKey)
+        phone.reconcile(.merge)
+        mac.reconcile(.restore)
+        #expect(names(macDefaults) == ["work": ["n": "Scribe", "t": "Minutes"]])
+        #expect(CloudMerge.map(macDefaults.string(forKey: BotColors.storageKey)) == ["work": "#111111"])
+
+        // The title changed on the Mac: the phone takes it.
+        macDefaults.set(CloudMerge.stringOfMaps(["work": ["n": "Scribe", "t": "Meeting notes"]]), forKey: BotNames.storageKey)
+        mac.reconcile(.merge); phone.reconcile(.merge)
+        #expect(names(phoneDefaults) == ["work": ["n": "Scribe", "t": "Meeting notes"]])
+
+        // Both names cleared on the phone: the Mac's entry goes too, the colour stays.
+        phoneDefaults.removeObject(forKey: BotNames.storageKey)
+        phone.reconcile(.merge); mac.reconcile(.merge)
+        #expect(names(macDefaults).isEmpty)
+        #expect(CloudMerge.map(macDefaults.string(forKey: BotColors.storageKey)) == ["work": "#111111"])
+    }
+
     @Test func botLooksMergePerBotAndARemovedOneStaysRemoved() {
         let cloud = MemoryCloudStore(), clock = Clock()
         let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
