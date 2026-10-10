@@ -77,7 +77,9 @@ final class BotNamesShotsUITests: XCTestCase {
         pill.tap()
         let header = any("profile.header")
         XCTAssertTrue(header.waitForExistence(timeout: 10), "the card's header did not show")
-        header.tap()
+        // The header is one accessibility element (its action opens the sheet); a touch has
+        // to land on the name button, which is the card's top part.
+        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
         let name = any("botName.name")
         XCTAssertTrue(name.waitForExistence(timeout: 10), "the name sheet did not open from the header")
         name.tap()
