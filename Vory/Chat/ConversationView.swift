@@ -17,6 +17,7 @@ struct ConversationView: View {
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
+    @State private var dockBottom: CGFloat = 0
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
     #if os(macOS)
     @State private var headerHeight: CGFloat = 0
@@ -277,27 +278,44 @@ struct ConversationView: View {
     /// way it would under a bar's soft edge, never a grey slab (Matt, in dark mode the band read
     /// as a panel; black must stay black).
     private var headerBand: some View {
-        let solid = headerHeight + windowGeometry.safeArea.top
-        let height = solid + ChatStyle.bandFade
-        return Rectangle().fill(Color(.systemBackground))
-            .frame(height: height)
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-            .ignoresSafeArea(.container, edges: .top)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        // Measured from the header itself: the band is solid down to the header's bottom edge
+        // (`headerBottom`, in window space, like the band's own frame), then fades. The sum
+        // of the header's height and the top inset was the same thing until measured.
+        GeometryReader { g in
+            let top = g.frame(in: .global).minY
+            let solid = headerBottom > 0 ? max(0, headerBottom - top) : headerHeight + windowGeometry.safeArea.top
+            let height = solid + ChatStyle.bandFade
+            Rectangle().fill(Color(.systemBackground))
+                .frame(height: height)
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
-    /// The same above the composer: clear 28 pt above the field, the page's background from the
-    /// field's top edge down to the window's bottom (the keyboard's share included). Around the
-    /// field itself that is the page, so nothing shows between the field and the keyboard.
+    /// Below the bar only (Matt, 2026-10-10: the fade above the bar was "too high", he wants
+    /// the thread's text seen through the field's Liquid Glass as in 1.4): the page's own
+    /// background from a few points inside the field's bottom edge down to the window's bottom
+    /// (the keyboard's share included), so nothing of the thread shows between the field and
+    /// the keyboard or under the home indicator. The short soft edge sits inside the glass.
+    /// Measured from the dock's bottom edge (`dockBottom`, window space, above the keyboard
+    /// padding): summing heights counted the home indicator twice with the keyboard up.
     private var dockBand: some View {
-        let solid = dockHeight + keyboardInset + windowGeometry.safeArea.bottom
-        let height = solid + ChatStyle.bandFade
-        return Rectangle().fill(Color(.systemBackground))
-            .frame(height: height)
-            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: ChatStyle.bandFade / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
-            .ignoresSafeArea(.container, edges: .bottom)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        GeometryReader { g in
+            let bottom = g.frame(in: .global).maxY
+            // The field's bottom edge is 8 pt inside the dock (`BottomDock`); the band starts 6 pt inside the field.
+            let solid = dockBottom > 0 ? max(0, bottom - (dockBottom - 14)) : windowGeometry.safeArea.bottom + keyboardInset
+            let soft: CGFloat = 8
+            let height = solid + soft
+            Rectangle().fill(Color(.systemBackground))
+                .frame(height: height)
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: soft / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
+                .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+        .ignoresSafeArea(.container, edges: .bottom)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
     #endif
 
@@ -306,6 +324,8 @@ struct ConversationView: View {
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
             // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
+            // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
             .padding(.bottom, keyboardInset)
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this.
