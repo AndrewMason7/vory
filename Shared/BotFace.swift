@@ -1061,6 +1061,10 @@ public struct BotFaceView: View {
     /// When the current state began: the one-shots at a state's start (the lean as a tool
     /// starts, the slow blink of an error) count from here.
     @State private var stateSince: Date = Date()
+    /// Reduce Motion with the engine: the state's still symbol, and a 0.2 s crossfade from the
+    /// last state's still on a change (the review's rule), instead of the springs.
+    @State private var reducedFrom: (targets: BotMotionTargets, at: Date)?
+    private static let reducedFade = 0.2
     /// The state just left and when: for 0.4 s its held pose (silhouette, roll, eyes, dim) eases
     /// out before the new state's eases in — one continuous path, even held to held.
     /// The pose that was on screen when the state last changed, and when: for 0.4 s the frame
@@ -1366,7 +1370,8 @@ public struct BotFaceView: View {
         let ticks = live && (animating || eyesBusy || gaze != shownGaze)
         let _ = spinTick
         let _ = settledTick
-        let engineTicks = engine && live && (targets.loops || !model.isSettled || eyesBusy || gaze != shownGaze)
+        let fading = reducedFrom.map { Date().timeIntervalSince($0.at) < Self.reducedFade + 0.05 } ?? false
+        let engineTicks = engine && ((live && (targets.loops || !model.isSettled || eyesBusy || gaze != shownGaze)) || fading)
         let interval = Self.tickInterval(engine: engine, size: size, animating: animating)
         let paused = Self.pausedTimeline(engine: engine, engineTicks: engineTicks, ticks: ticks, settling: settling)
         TimelineView(.animation(minimumInterval: interval, paused: paused)) { timeline in
@@ -1398,6 +1403,17 @@ public struct BotFaceView: View {
                     }
                 } else if let frame {
                     Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
+                        // Reduce Motion: the old still fades out as the new one fades in, 0.2 s.
+                        if reduceMotion, let from = reducedFrom, timeline.date.timeIntervalSince(from.at) < Self.reducedFade {
+                            let k = timeline.date.timeIntervalSince(from.at) / Self.reducedFade
+                            let old = BotMotionModel(seed: seed)
+                            old.snap(to: from.targets, at: t)
+                            var prev = old.advance(to: t, targets: from.targets)
+                            if !eyeLife { prev.eyeOpen = max(prev.eyeOpen, 1) }
+                            ctx.opacity = 1 - k
+                            BotFace.drawFrame(spec, in: &ctx, size: sz, frame: prev, light: colorScheme == .light)
+                            ctx.opacity = k
+                        }
                         BotFace.drawFrame(spec, in: &ctx, size: sz, frame: frame, light: colorScheme == .light)
                     }
                 } else {
@@ -1424,6 +1440,12 @@ public struct BotFaceView: View {
             gazeFrom = old; shownGaze = new; gazeChangedAt = Date()
         }
         .onChange(of: seed, initial: true) { _, s in if model.seed != s { model = BotMotionModel(seed: s) } }
+        // The crossfade over: nothing left to draw from, the timeline may pause again.
+        .task(id: reducedFrom?.at) {
+            guard reducedFrom != nil else { return }
+            try? await Task.sleep(for: .milliseconds(Int(Self.reducedFade * 1000) + 80))
+            reducedFrom = nil
+        }
         // A finished turn: the eyes go once round the body (decision 9), on the engine.
         .onChange(of: finished) { _, f in if engine, let f { model.spin(at: f) } }
         // Once the springs have settled and nothing loops, one more pass lets the timeline
@@ -1446,8 +1468,10 @@ public struct BotFaceView: View {
                 }
             }
         }
-        .onChange(of: state) { _, _ in
+        .onChange(of: state) { old, _ in
             let now = Date()
+            // The still to fade from under Reduce Motion (the engine's swaps are instant otherwise).
+            if engine, reduceMotion { reducedFrom = (.targets(for: old == .working && !active ? .idle : old), now) }
             exitPose = shown.pose; exitAt = now
             // A silhouette on screen unwinds first: the new state starts 0.4 s later.
             stateSince = exitPose.morph > 0.01 ? now.addingTimeInterval(0.4) : now
