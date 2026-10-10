@@ -18,6 +18,8 @@ struct ConversationView: View {
     @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
     @State private var dockBottom: CGFloat = 0
+    /// The tab bar's height under the chat, when it is there and runs along the bottom.
+    private var barReserve: CGFloat { model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) }
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
     #if os(macOS)
     @State private var headerHeight: CGFloat = 0
@@ -173,7 +175,10 @@ struct ConversationView: View {
             // wide column has no status bar, and the text read crisp through the header and
             // past the composer).
             .overlay(alignment: .bottom) { dockBand }
-            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity) }
+            // Above the tab bar when the bar stands under the chat (a wide layout with the bar
+            // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
+            // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
+            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve) }
             .overlay(alignment: .top) { headerBand }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // The keyboard as the window has it (in window space, re-placed on every resize or
