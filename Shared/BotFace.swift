@@ -858,17 +858,19 @@ public enum BotFace {
     /// never their spacing.
     /// `strain`: the bot is thinking hard — the eyes narrow to a squint. `glanceFree`: false keeps
     /// the eyes from wandering on their own (they still blink), for when they follow the phone.
-    public static func eyePaths(_ spec: BotLookSpec, size: CGSize, time t: Double, active: Bool, gaze: CGPoint = .zero, strain: Bool = false, glanceFree: Bool = true, motion: Motion = .still) -> (path: Path, stroked: Bool) {
+    /// `anchor`: where the eyes sit (fractions of the square and their spread) when a symbol
+    /// seats them elsewhere than the shape does (1.5); nil is the shape's own seat.
+    public static func eyePaths(_ spec: BotLookSpec, size: CGSize, time t: Double, active: Bool, gaze: CGPoint = .zero, strain: Bool = false, glanceFree: Bool = true, motion: Motion = .still, anchor: (x: CGFloat, y: CGFloat, spread: CGFloat)? = nil) -> (path: Path, stroked: Bool) {
         let s = min(size.width, size.height)
         let seed = spec.shape.utf8.reduce(0) { $0 + Int($1) } + spec.eyes.utf8.reduce(0) { $0 + Int($1) }
         // Tiny eyes blink faster (they are already small) and skip the double blink when small.
         let tiny = spec.eyes == "tiny"
         let live = liveliness(time: active ? t : 0, seed: seed, blinkPeriod: motion.blinkPeriod, blinkLength: tiny ? 0.09 : motion.blinkLength, doubleBlinks: !(tiny && s < 32), rare: motion.blinkPeriod == 4.3)
-        let anchor = eyeAnchor(spec.shape)
+        let anchor: (x: CGFloat, y: CGFloat, spread: CGFloat) = anchor ?? { let e = eyeAnchor(spec.shape); return (0.5, e.y, e.spread) }()
         let dx = s * anchor.spread
         let wander = glanceFree && !motion.freezeGlance
         let gx = gaze.x + CGFloat(motion.eyeX), gy = gaze.y + CGFloat(motion.eyeY)
-        let cx = size.width / 2 + (wander ? CGFloat(live.glance) * s * 0.06 : 0) + gx * s * 0.06
+        let cx = size.width * anchor.x + (wander ? CGFloat(live.glance) * s * 0.06 : 0) + gx * s * 0.06
         let cy = s * anchor.y + gy * s * 0.07
         let open = min(CGFloat(1 - live.blink * 0.92), strain ? 0.42 : 1, CGFloat(motion.eyeOpen))
         var path = Path()
