@@ -184,7 +184,7 @@ public enum BotFace {
 
     /// What a bot is doing beyond idle. Each state is a pose the eyes and body settle into;
     /// `working` is the five-second routine blocks, the rest are one-shots that hold.
-    public enum State: Equatable, Sendable { case idle, working, thinking, usingTool, streaming, awaitingApproval, error, reconnecting, guide }
+    public enum State: Equatable, Sendable { case idle, working, thinking, usingTool, streaming, awaitingApproval, error, reconnecting, guide, searching, listening }
 
     /// One frame's pose: the body's transforms (small, in place, never scaled) plus what the
     /// eyes and the glass rim are asked to do on top of their own life.
@@ -357,6 +357,13 @@ public enum BotFace {
         case .reconnecting:
             // A metronome the eye can see at any size: the eyes swing a side every 1.1 s. Body still.
             m.eyeX = 1.8 * sin(t * 2 * .pi / 2.2) * smooth(since / 0.4); m.freezeGlance = true
+        case .searching:
+            // Until the 1.5 symbols land: a search is a tool.
+            m.morphTarget = .stem; m.morph = smooth(since / 0.6)
+            m.eyeX = 0.8; m.eyeY = 0.6; m.freezeGlance = true
+        case .listening:
+            // Until the arcs land: the plain bot.
+            break
         case .working:
             // Blocks of 3.2 s: about a second of one routine, two of rest — lively, not frantic.
             // In a group the clock is shared and the bots take turns; alone, each bot's blocks

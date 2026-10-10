@@ -1,0 +1,126 @@
+import Foundation
+import Testing
+@testable import Vory
+
+/// The motion model behind the 1.5 bot (#304): symbols blend without pops however a change is
+/// interrupted, the eyes go with the symbol, blinks close, the squash never stacks, and a bot
+/// with nothing to do settles so its timeline can pause.
+@Suite struct BotMotionModelTests {
+    let states: [BotFace.State] = [.idle, .thinking, .searching, .usingTool, .streaming, .awaitingApproval, .error, .reconnecting, .listening]
+
+    private func run(_ model: BotMotionModel, _ state: BotFace.State, from t0: Double, seconds: Double, hz: Double = 60, body: (BotMotionFrame, BotMotionFrame?) -> Void = { _, _ in }) -> Double {
+        var t = t0
+        var last: BotMotionFrame?
+        let dt = 1 / hz
+        while t < t0 + seconds {
+            t += dt
+            let f = model.advance(to: t, targets: .targets(for: state))
+            body(f, last)
+            last = f
+        }
+        return t
+    }
+
+    @Test func aStateSettlesAndIdleHasNothingLeftToDo() {
+        let m = BotMotionModel(seed: 3)
+        m.advance(to: 0, targets: .targets(for: .idle))
+        _ = run(m, .thinking, from: 0, seconds: 1.5)
+        #expect(!m.isSettled, "thinking loops (the pulse) and never settles")
+        _ = run(m, .idle, from: 1.5, seconds: 1.5)
+        #expect(m.isSettled, "idle with every spring on its target should settle; still moving: \(m.unsettled)")
+        #expect(m.advance(to: 3.1, targets: .targets(for: .idle)).amount(of: .orb) < 0.001)
+    }
+
+    @Test func everyInterruptedChangeStaysSmooth() {
+        // A to B, then C before B has settled, at three moments: no symbol amount moves more
+        // than 0.15 in one 60 Hz frame, and the eyes never come back while a hiding symbol grows.
+        for a in states { for b in states where b != a { for c in states where c != b {
+            for cut in [0.05, 0.15, 0.3] {
+                let m = BotMotionModel(seed: 1)
+                _ = run(m, a, from: 0, seconds: 1.5)
+                var t = run(m, b, from: 1.5, seconds: cut)
+                var worst = 0.0
+                var eyeRose = false
+                t = run(m, c, from: t, seconds: 1.0) { f, last in
+                    guard let last else { return }
+                    for v in BotVisual.allCases { worst = max(worst, abs(f.amount(of: v) - last.amount(of: v))) }
+                    let hiding = BotVisual.allCases.filter(\.hidesEyes).contains { f.amount(of: $0) > last.amount(of: $0) + 0.001 && f.amount(of: $0) > 0.05 }
+                    if hiding, f.eyeOpacity > last.eyeOpacity + 0.001 { eyeRose = true }
+                }
+                #expect(worst <= 0.15, "\(a) → \(b) → \(c) at \(cut) s: a symbol jumped \(worst) in one frame")
+                #expect(!eyeRose, "\(a) → \(b) → \(c) at \(cut) s: the eyes came back while a symbol that hides them grew")
+                _ = t
+            }
+        } } }
+    }
+
+    @Test func theSamePathAtAnyFrameRate() {
+        func sample(hz: Double) -> [Double] {
+            let m = BotMotionModel(seed: 2)
+            m.advance(to: 0, targets: .targets(for: .idle))   // the clock starts here at every rate
+            var out: [Double] = []
+            var t = 0.0
+            let dt = 1 / hz
+            while t < 1.0 - 1e-9 {
+                t += dt
+                let f = m.advance(to: t, targets: .targets(for: .thinking))
+                if abs(t * 10 - (t * 10).rounded()) < 1e-6 { out.append(f.amount(of: .orb)) }
+            }
+            return out
+        }
+        let a = sample(hz: 30), b = sample(hz: 60), c = sample(hz: 120)
+        #expect(a.count == 10 && b.count == 10 && c.count == 10)
+        for i in 0..<10 { #expect(abs(a[i] - b[i]) < 0.002 && abs(b[i] - c[i]) < 0.002, "sample \(i): \(a[i]) \(b[i]) \(c[i])") }
+    }
+
+    @Test func blinksCloseFullyAndNeverStackWithTheSquash() {
+        let m = BotMotionModel(seed: 5)
+        var lowest = 1.0
+        _ = run(m, .idle, from: 0, seconds: 10) { f, _ in lowest = min(lowest, f.eyeOpen) }
+        #expect(lowest <= 0.12, "a blink only reached \(lowest)")
+        // Flipping states every 0.1 s: the squash is rate-limited and clamped.
+        var t = 10.0
+        var worst = 1.0
+        for i in 0..<30 {
+            let s: BotFace.State = i % 2 == 0 ? .thinking : .usingTool
+            t = run(m, s, from: t, seconds: 0.1) { f, _ in worst = min(worst, f.sy) }
+        }
+        #expect(worst >= 0.94, "sy dipped to \(worst)")
+    }
+
+    @Test func oneWakeupPerBlink() {
+        // The next blink after a moment is a real blink on the schedule, and there is none sooner.
+        let seed = 7
+        for s0 in stride(from: 0.0, to: 40.0, by: 1.3) {
+            // From a moment with no blink under way (a wakeup is scheduled from such moments).
+            var start = s0
+            while BotMotionModel.blink(at: start, seed: seed) > 0.01 { start += 0.01 }
+            let next = BotMotionModel.nextBlink(after: start, seed: seed)
+            #expect(next > start)
+            #expect(BotMotionModel.blink(at: next + 0.02, seed: seed) > 0.3, "no blink at \(next) (from \(start))")
+            var quiet = true
+            var t = start + 0.001
+            while t < next - 0.001 { if BotMotionModel.blink(at: t, seed: seed) > 0.01 { quiet = false; break }; t += 0.01 }
+            #expect(quiet, "a blink before \(next) (from \(start))")
+        }
+    }
+
+    @Test func theFinishSpinOrbitsOnceAndEnds() {
+        let m = BotMotionModel(seed: 1)
+        _ = run(m, .idle, from: 0, seconds: 1)
+        m.spin(at: 1)
+        var peak = 0.0
+        _ = run(m, .idle, from: 1, seconds: 0.6) { f, _ in peak = max(peak, f.orbit) }
+        #expect(peak > 0.5 && peak < 1)
+        _ = run(m, .idle, from: 1.6, seconds: 0.3)
+        #expect(m.advance(to: 2.0, targets: .targets(for: .idle)).orbit == 0)
+        #expect(m.isSettled)
+    }
+
+    @Test func snappingIsAStillFrameOfTheState() {
+        let m = BotMotionModel(seed: 1)
+        m.snap(to: .targets(for: .awaitingApproval), at: 0)
+        let f = m.advance(to: 0, targets: .targets(for: .awaitingApproval))
+        #expect(f.amount(of: .exclaim) == 1 && f.amount(of: .rest) == 0 && f.eyeOpacity == 0)
+    }
+}
