@@ -19,7 +19,7 @@ public struct BotLookSpec: Hashable, Sendable {
 
     public var isGlass: Bool { finish == "glass" }
 
-    public static let shapes = ["circle", "blob", "square", "pill", "triangle", "hexagon", "cloud", "drop"]
+    public static let shapes = ["circle", "blob", "square", "pill", "triangle", "hexagon", "cloud", "drop", "gem", "bubble"]
     public static let eyeStyles = ["classic", "tall", "sleepy", "tiny", "round", "wide", "curious", "bold"]
     public static let defaultShape = "blob"
     public static let defaultEyes = "classic"
@@ -45,7 +45,7 @@ public struct BotLookSpec: Hashable, Sendable {
     public var choiceString: String { "studio:\(shape):\(eyes)" + (isGlass ? ":glass" : "") }
 
     public static func name(ofShape s: String) -> String {
-        ["circle": "Circle", "blob": "Blob", "square": "Square", "pill": "Pill", "triangle": "Triangle", "hexagon": "Hex", "cloud": "Cloud", "drop": "Drop"][s] ?? s.capitalized
+        ["circle": "Circle", "blob": "Blob", "square": "Square", "pill": "Pill", "triangle": "Triangle", "hexagon": "Hex", "cloud": "Cloud", "drop": "Drop", "gem": "Gem", "bubble": "Bubble"][s] ?? s.capitalized
     }
     public static func name(ofEyes e: String) -> String { e.capitalized }
 }
@@ -78,6 +78,19 @@ public enum BotFace {
             return roundedPolygon(sides: 3, in: box2, rotation: -.pi / 2, corner: r.width * 0.24)
         case "hexagon":
             return roundedPolygon(sides: 6, in: r, rotation: -.pi / 2, corner: r.width * 0.10)
+        case "gem":
+            // A diamond on its point, corners softened (1.5, the preview's gem).
+            return roundedPolygon(sides: 4, in: r.insetBy(dx: r.width * 0.03, dy: r.height * 0.03), rotation: -.pi / 2, corner: r.width * 0.09)
+        case "bubble":
+            // A speech bubble: a wide ellipse with a short tail toward the bottom-left.
+            var p = Path()
+            let w = r.width, h = r.height
+            p.addEllipse(in: CGRect(x: r.minX + w * 0.06, y: r.minY + h * 0.14, width: w * 0.88, height: h * 0.60))
+            p.move(to: CGPoint(x: r.minX + w * 0.30, y: r.minY + h * 0.62))
+            p.addLine(to: CGPoint(x: r.minX + w * 0.16, y: r.minY + h * 0.92))
+            p.addLine(to: CGPoint(x: r.minX + w * 0.48, y: r.minY + h * 0.72))
+            p.closeSubpath()
+            return p
         case "cloud":
             var p = Path()
             let w = r.width, h = r.height
@@ -148,6 +161,8 @@ public enum BotFace {
         case "drop": return (0.62, 0.11)
         case "cloud": return (0.58, 0.11)
         case "pill": return (0.50, 0.13)
+        case "gem": return (0.48, 0.10)
+        case "bubble": return (0.44, 0.11)
         default: return (0.47, 0.13)
         }
     }
@@ -690,6 +705,8 @@ public enum BotFace {
         case "pill": return 0.795
         case "cloud": return 0.825
         case "triangle": return 0.815
+        case "gem": return 0.97
+        case "bubble": return 0.92
         default: return 0.96   // circle, square, hexagon, drop
         }
     }
