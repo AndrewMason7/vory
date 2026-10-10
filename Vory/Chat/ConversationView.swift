@@ -272,25 +272,27 @@ struct ConversationView: View {
             }
     }
     #if os(iOS)
-    /// Thick material the header's full height (plus the top inset), fading out over the
-    /// 28 pt below the pill: a bubble under the pill is blurred past reading.
+    /// The page's own background, solid over the header's full height (plus the top inset) and
+    /// fading to clear over the 28 pt below the pill: the thread fades out under the header the
+    /// way it would under a bar's soft edge, never a grey slab (Matt, in dark mode the band read
+    /// as a panel; black must stay black).
     private var headerBand: some View {
         let solid = headerHeight + windowGeometry.safeArea.top
         let height = solid + 28
-        return Rectangle().fill(.thickMaterial)
+        return Rectangle().fill(Color(.systemBackground))
             .frame(height: height)
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .ignoresSafeArea(.container, edges: .top)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
-    /// The same behind the composer: from 28 pt above the dock down to the window's bottom
-    /// edge (the keyboard's share included), so the text fades before the field and nothing
-    /// reads below it.
+    /// The same above the composer: clear 28 pt above the field, the page's background from the
+    /// field's top edge down to the window's bottom (the keyboard's share included). Around the
+    /// field itself that is the page, so nothing shows between the field and the keyboard.
     private var dockBand: some View {
         let solid = dockHeight + keyboardInset + windowGeometry.safeArea.bottom
         let height = solid + 28
-        return Rectangle().fill(.thickMaterial)
+        return Rectangle().fill(Color(.systemBackground))
             .frame(height: height)
             .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 28 / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
             .ignoresSafeArea(.container, edges: .bottom)
