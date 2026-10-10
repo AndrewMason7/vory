@@ -1,3 +1,4 @@
+#if os(iOS)
 import SwiftUI
 import Testing
 import UIKit
@@ -70,3 +71,4 @@ import UIKit
         #expect(differing.isEmpty, "stills moved from their baselines: \(differing.prefix(8))")
     }
 }
+#endif

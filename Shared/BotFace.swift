@@ -1397,7 +1397,19 @@ public struct BotFaceView: View {
             Group {
                 if spec.isGlass && BotFace.liveGlass && !drawn && scenePhase == .active {
                     if let frame {
-                        liveGlassFrame(frame: frame)
+                        // Reduce Motion: the old still fades out under the new one, 0.2 s, as the painted bots do.
+                        if reduceMotion, let from = reducedFrom, timeline.date.timeIntervalSince(from.at) < Self.reducedFade {
+                            let k = timeline.date.timeIntervalSince(from.at) / Self.reducedFade
+                            let old = BotMotionModel(seed: seed)
+                            let _ = old.snap(to: from.targets, at: t)
+                            let prev = old.advance(to: t, targets: from.targets)
+                            ZStack {
+                                liveGlassFrame(frame: prev).opacity(1 - k)
+                                liveGlassFrame(frame: frame).opacity(k)
+                            }
+                        } else {
+                            liveGlassFrame(frame: frame)
+                        }
                     } else {
                         liveGlass(time: t, gaze: g, glanceFree: !held, motion: m, wobble: wobble, eyeLife: eyeLife)
                     }
