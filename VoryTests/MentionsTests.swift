@@ -61,4 +61,11 @@ import VoryCore
         let names = Mentions.Names(bots: Mentions.botNames(for: bots), person: nil)
         #expect(Mentions.find(in: "Ask @Scribe or @work; @default keeps the log", names: names).count == 3)
     }
+    #if os(macOS)
+    /// The chip's face is drawn on the Mac too (#321), through the same memoised cache as iOS.
+    @MainActor @Test func aBotFaceIsDrawnOnTheMac() {
+        #expect(Mentions.face(for: "work") != nil)
+    }
+    #endif
+
 }

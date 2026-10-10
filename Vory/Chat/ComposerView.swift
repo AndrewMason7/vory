@@ -18,6 +18,11 @@ struct ComposerView: View {
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
     /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
+    /// A drag is over the card (the Mac): the outline says it will take the drop.
+    @State private var dropTargeted = false
+    /// The pointer is over the model chip or a mention row (the Mac).
+    @State private var chipHovered = false
+    @State private var mentionHovered: String?
     private var holdStartsVoiceMode: Bool {
         #if os(iOS)
         return VoiceSettings.HoldMicAction(rawValue: holdMicRaw) == .voiceMode
@@ -271,11 +276,18 @@ struct ComposerView: View {
         .animation(.snappy(duration: 0.25), value: menuItems.map(\.id))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
-        // Files dropped on the composer (the Finder on a Mac, another app on an iPad) are staged like picked ones.
+        #if os(macOS)
+        // Files dropped on the card from the Finder, and pictures, PDFs, movies or sounds dragged
+        // out of another app as data: staged like picked ones, the card outlined while the drag
+        // is over it (`dropTargeted`).
+        .onDrop(of: [.fileURL, .image, .pdf, .movie, .audio], isTargeted: $dropTargeted) { dropped($0) }
+        #else
+        // Files dropped on the composer (another app on an iPad) are staged like picked ones.
         .dropDestination(for: URL.self) { urls, _ in
             for u in urls { importFile(u) }
             return !urls.isEmpty
         }
+        #endif
         #if os(macOS)
         // File › Import from iPhone or iPad (Continuity Camera): a photo or a scan taken on the
         // phone is staged here, the Mac's stand-in for the camera row.
@@ -415,6 +427,14 @@ struct ComposerView: View {
         // phone that swallowed the taps meant for the text field's Paste menu.
         .glassEffect(.regular, in: .rect(cornerRadius: 22))
         .glassEffectID("dock", in: namespace)
+        // The Mac's drop outline: drawn on the card's own shape while a drag is over it.
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.vory, lineWidth: 2)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.15), value: dropTargeted)
     }
 
     /// The staged files, along the top of the card: a real preview of each, × on the corner.
@@ -464,9 +484,14 @@ struct ComposerView: View {
                         }
                         .frame(height: 34)
                         .padding(.vertical, 3)
+                        .padding(.horizontal, 6)
+                        .background(mentionHovered == p.id ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 10))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    #if os(macOS)
+                    .onHover { over in if over { mentionHovered = p.id } else if mentionHovered == p.id { mentionHovered = nil } }
+                    #endif
                     if p.id != mentionSuggestions.last?.id { Divider() }
                 }
             }
@@ -491,11 +516,15 @@ struct ComposerView: View {
             }
             .font(.caption.weight(.medium)).foregroundStyle(.secondary)
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(.quaternary.opacity(0.6), in: .capsule)
+            // Under the pointer the capsule firms up (the Mac); a touch has no hover.
+            .background(.quaternary.opacity(chipHovered ? 1 : 0.6), in: .capsule)
             .contentShape(.capsule)
         }
         .menuOrder(.fixed)
         .buttonStyle(.plain)
+        #if os(macOS)
+        .onHover { chipHovered = $0 }
+        #endif
         .accessibilityIdentifier("composer.modelChip")
         .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.title(current: chat.info?.reasoningEffort))")
     }
@@ -656,6 +685,36 @@ struct ComposerView: View {
             chat.banner = "Nothing to paste."
         }
     }
+
+    #if os(macOS)
+    /// A drop on the card: file URLs (the Finder) go through `importFile`; a picture, PDF, movie
+    /// or sound carried as data (dragged out of Safari, Photos, Preview) is staged under its
+    /// own type. True when anything was taken, so the drag's cursor says so.
+    private func dropped(_ providers: [NSItemProvider]) -> Bool {
+        var took = false
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                took = true
+                p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                    let url = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                    guard let url else { return }
+                    Task { @MainActor in importFile(url) }
+                }
+            } else if let family = [UTType.image, .pdf, .movie, .audio].first(where: { p.hasItemConformingToTypeIdentifier($0.identifier) }) {
+                took = true
+                // The provider's own concrete type (PNG, JPEG, MP4…) names the file; the family is the fallback.
+                let concrete = p.registeredTypeIdentifiers.compactMap { UTType($0) }.first { $0.conforms(to: family) } ?? family
+                _ = p.loadDataRepresentation(forTypeIdentifier: concrete.identifier) { data, _ in
+                    guard let data else { return }
+                    let ext = concrete.preferredFilenameExtension ?? family.preferredFilenameExtension ?? "bin"
+                    let base = p.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped"
+                    Task { @MainActor in stagePasted(data, name: base + "." + ext, type: concrete) }
+                }
+            }
+        }
+        return took
+    }
+    #endif
 
     /// Something other than text pasted into the field (the edit menu, or the keyboard's
     /// "Paste from Screenshots"): staged like a picked file.
