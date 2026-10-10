@@ -52,10 +52,18 @@ struct ProfileCardView: View {
     @State private var tint: Color = .accentColor
     @State private var avatar: BotAvatarChoice = .default
     @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
+    /// Read in the header so a name saved in the sheet (#315) redraws it: `label` goes through
+    /// `ProfileInfo.ownNames`, which reads this key.
+    @AppStorage(BotNames.storageKey) private var namesRaw = ""
     @State private var options: ModelOptionsResult?
     @State private var status: String?
     @State private var loaded = false
     @State private var renaming = false
+    /// The bot's own name and title (#315): the header's pencil opens it.
+    @State private var editingNames = false
+    /// Rename bot… (#315, part two): shown once the gateway says it has the route.
+    @State private var renameSupported = false
+    @State private var renamingBot = false
     @AppStorage(ChatStyle.showToolCalls) private var showToolCalls = true
     @AppStorage(ChatStyle.showReasoning) private var showReasoning = true
     @AppStorage(ChatStyle.showTurnStats) private var showTurnStats = true
@@ -72,7 +80,7 @@ struct ProfileCardView: View {
 
     private var rt: GatewayRuntime? { model.runtime }
     private var profile: ProfileInfo? { rt?.profiles.first { $0.name == profileName } }
-    private var label: String { profile?.label ?? profileName }
+    private var label: String { _ = namesRaw; return profile?.label ?? profileName }
     private var modelLabel: String {
         let s = [profile?.provider, profile?.model].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "/")
         return s.isEmpty ? "not set" : s
@@ -107,8 +115,19 @@ struct ProfileCardView: View {
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrolled = y }
         // On the card, not its Name row: the … menu over the header asks for it before the
         // list has built that row.
+        .sheet(isPresented: $editingNames) {
+            BotNameSheet(profileName: profileName, gatewayName: profile?.displayName, gatewayTitle: profile?.botTitle)
+                .sheetFrame()
+                .withAppModel()
+        }
         .sheet(isPresented: $renaming) {
             if let chat { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
+        }
+        .sheet(isPresented: $renamingBot) {
+            // The card is the old name's; it closes with the rename done.
+            BotRenameSheet(profileName: profileName) { _ in if let onClose { onClose() } else { dismiss() } }
+                .sheetFrame()
+                .withAppModel()
         }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -120,7 +139,10 @@ struct ProfileCardView: View {
             description = profile?.description ?? ""
             tint = BotColors.color(for: profileName)
             avatar = BotAvatarStore.choice(for: profileName)
-            if let rt { options = try? await rt.api.get("/api/model/options", profile: profileName) }
+            if let rt {
+                options = try? await rt.api.get("/api/model/options", profile: profileName)
+                renameSupported = await BotRename.supported(on: rt.api)
+            }
         }
     }
 
@@ -160,8 +182,21 @@ struct ProfileCardView: View {
                 Menu { modelMenuItems(o.providers) } label: { LabeledContent("Default model", value: modelLabel) }
             } else { ProgressView() }
         } footer: { Text("Writes this profile's config.yaml. Running chats keep their own model.") }
-        if let p = profile?.path {
-            Section { Text(p).font(.caption2.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled) } header: { Text("Home") }
+        Section {
+            // The folder name is the bot's id on the gateway: shown small, changed only through
+            // the gateway's own rename (part two), never typed over here.
+            LabeledContent("Folder", value: profileName).font(.caption)
+            if let p = profile?.path {
+                Text(p).font(.caption2.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled)
+            }
+            if renameSupported, profile?.isDefault != true {
+                Button { renamingBot = true } label: { Label("Rename bot…", systemImage: "folder.badge.gearshape") }
+                    .accessibilityHint("Renames the bot's folder on the gateway; the bot restarts")
+                    .accessibilityIdentifier("profile.renameBot")
+            }
+        } header: { Text("Home") } footer: {
+            if profile?.isDefault == true { Text("The default bot's folder is fixed; the name above it is the one to change.") }
+            else if renameSupported { Text("Renaming the folder restarts the bot; the name above it changes nothing on the gateway.") }
         }
     }
 
@@ -210,10 +245,29 @@ struct ProfileCardView: View {
                 BotAvatar(profile: profileName, size: 132, active: true)
                     .padding(.top, floatingControls ? 48 : 6)
                 VStack(spacing: 0) {
-                    Text(label)
-                        .font(.title.weight(.bold))
-                        .multilineTextAlignment(.center)
+                    // The name and the title are the bot's to change (#315): a pencil beside
+                    // them, like the chat's Name row, opens the sheet. The folder name is
+                    // under Model › Home and never changes.
+                    Button { editingNames = true } label: {
+                        VStack(spacing: 2) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(label)
+                                    .font(.title.weight(.bold))
+                                    .multilineTextAlignment(.center)
+                                Image(systemName: "pencil").font(.body).foregroundStyle(.tint)
+                            }
+                            if let t = profile?.title {
+                                Text(t).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            }
+                        }
                         .padding(.horizontal, 16).padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    // The header below is one element for VoiceOver, with this as its action.
+                    .focusEffectDisabled()
+                    .accessibilityHidden(true)
                     Divider().padding(.horizontal, 16)
                     Text(headerLine)
                         .font(.body)
@@ -227,7 +281,12 @@ struct ProfileCardView: View {
             .frame(maxWidth: .infinity)
             .padding(.bottom, 4)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(label). \(headerLine)")
+            .accessibilityLabel("\(label)\(profile?.title.map { ", " + $0 } ?? ""). \(headerLine)")
+            // The one element is the way to the name and title editor (#315), on the Mac's
+            // accessibility tree and under VoiceOver alike.
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("Edit the bot's name and title")
+            .accessibilityAction { editingNames = true }
             .accessibilityIdentifier("profile.header")
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)

@@ -232,6 +232,8 @@ final class AppModel {
         #if DEBUG
         DemoMode.addGateway(to: store)
         #endif
+        // The bots' own names (#315) before anything reads a label.
+        BotNames.install()
         CloudSync.shared.start(store: store)
         NotificationCenter.default.addObserver(forName: .hermesPushRegistrationNeedsSync, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in

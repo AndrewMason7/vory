@@ -415,7 +415,25 @@ public struct ProfileInfo: Codable, Hashable, Sendable, Identifiable {
     public var path: String?
     public var skillCount: Int?
     public var id: String { name }
-    public var label: String { (displayName?.isEmpty == false) ? displayName! : name }
+
+    /// The names the app keeps for a bot itself (edited in Vory, synced through its iCloud):
+    /// consulted before the gateway's `display_name` and `bot_title`. The app installs it; the
+    /// watch and the extensions leave it nil and show the gateway's names.
+    nonisolated(unsafe) public static var ownNames: (@Sendable (String) -> ProfileOwnNames?)?
+
+    /// What the bot is called: the app's own name, else the gateway's display name, else the
+    /// profile's folder name.
+    public var label: String {
+        if let own = Self.ownNames?(name)?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !own.isEmpty { return own }
+        return (displayName?.isEmpty == false) ? displayName! : name
+    }
+
+    /// The bot's title, if it has one: the app's own, else the gateway's `bot_title`.
+    public var title: String? {
+        if let own = Self.ownNames?(name)?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !own.isEmpty { return own }
+        let t = (botTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
 
     public init(name: String, displayName: String? = nil, botTitle: String? = nil, isDefault: Bool? = nil, model: String? = nil, provider: String? = nil, description: String? = nil, path: String? = nil, skillCount: Int? = nil) {
         self.name = name
@@ -428,6 +446,13 @@ public struct ProfileInfo: Codable, Hashable, Sendable, Identifiable {
         self.path = path
         self.skillCount = skillCount
     }
+}
+
+/// A bot's names as the app keeps them (see `ProfileInfo.ownNames`). Either may be empty.
+public struct ProfileOwnNames: Hashable, Sendable {
+    public var displayName: String?
+    public var title: String?
+    public init(displayName: String? = nil, title: String? = nil) { self.displayName = displayName; self.title = title }
 }
 
 public struct ProfilesResponse: Codable, Sendable { public var profiles: [ProfileInfo] }

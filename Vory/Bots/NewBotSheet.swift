@@ -21,13 +21,12 @@ struct NewBotSheet: View {
     @State private var busy = false
     @State private var error: String?
     @FocusState private var nameFocused: Bool
+    /// Rename bot… under the name when editing, where the gateway has the route (#315).
+    @State private var renameSupported = false
+    @State private var renamingBot = false
 
     /// Profile names are folder names on the gateway: letters, digits, dash and underscore.
-    private var cleanName: String {
-        name.lowercased().map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" }
-            .reduce(into: "") { if !($0.last == "-" && $1 == "-") { $0.append($1) } }
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    }
+    private var cleanName: String { BotRename.cleaned(name) }
     /// The studio stores looks by profile name; while the name is being typed they live under
     /// a draft key and move to the real name on create.
     private var draftKey: String { editing?.name ?? (cleanName.isEmpty ? "new-bot" : cleanName) }
@@ -57,9 +56,16 @@ struct NewBotSheet: View {
                     if editing == nil, !name.isEmpty, cleanName != name { Text("Saved as \(cleanName)").font(.caption).foregroundStyle(.secondary) }
                     if editing == nil, runtime.profiles.contains(where: { $0.name == cleanName }) { Text("A bot with this name already exists.").font(.caption).foregroundStyle(.red) }
                     TextField("Description", text: $description, axis: .vertical).lineLimit(1...3)
+                    if let e = editing, renameSupported, e.isDefault != true {
+                        Button { renamingBot = true } label: { Label("Rename bot…", systemImage: "folder.badge.gearshape") }
+                            .disabled(busy)
+                            .accessibilityIdentifier("editBot.renameBot")
+                    }
                 } header: { Text("Bot") } footer: {
-                    Text(editing != nil ? "The name is the bot's folder on the gateway, and Hermes has no rename yet; make a new bot with the name you want and start it from this one. The description is what other Hermes surfaces show for this bot."
-                                        : "The description is what other Hermes surfaces show for this bot.")
+                    Text(editing == nil ? "The description is what other Hermes surfaces show for this bot."
+                         : renameSupported && editing?.isDefault != true
+                         ? "The name is the bot's folder on the gateway; Rename bot… moves it and restarts the bot. The description is what other Hermes surfaces show for this bot."
+                         : "The name is the bot's folder on the gateway and stays; give the bot a name of its own from its card. The description is what other Hermes surfaces show for this bot.")
                 }
                 Section {
                     if let o = options {
@@ -112,6 +118,11 @@ struct NewBotSheet: View {
                     choice = BotAvatarStore.choice(for: e.name)
                 }
                 options = try? await runtime.api.get("/api/model/options", profile: runtime.selectedProfile)
+                if editing != nil { renameSupported = await BotRename.supported(on: runtime.api) }
+            }
+            .sheet(isPresented: $renamingBot) {
+                // This sheet edits the old name; the renamed bot's card is the place for the rest.
+                if let e = editing { BotRenameSheet(profileName: e.name) { _ in dismiss() }.sheetFrame().withAppModel() }
             }
         }
         .presentationDetents([.large])
