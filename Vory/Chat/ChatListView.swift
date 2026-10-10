@@ -175,6 +175,8 @@ struct ChatListView: View {
             // coming back the instant a pop begins instead of after the transition settles.
             .onChange(of: path.wrappedValue.isEmpty, initial: true) { was, empty in
                 model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
+                // Collapsed to one column, the list is back in front with nothing open beside it.
+                if empty { selectedID = nil }
                 // A chat composed from another tab closes back onto that tab, not onto this list.
                 if !was, empty { returnFromCompose() }
             }
@@ -883,19 +885,22 @@ struct ChatListView: View {
     }
 
     @ViewBuilder private func openLink<Label: View>(_ route: some Hashable, selected: Bool, @ViewBuilder label: () -> Label) -> some View {
-        #if os(macOS)
-        Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
-            // The open chat's row, tinted like the selected conversation in Messages. Drawn
-            // here: the Mac's list did not show a listRowBackground on these rows.
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.16))
-                        .padding(.horizontal, -8).padding(.vertical, -7)
+        if detailPath != nil {
+            // Beside a detail column (the Mac, the iPad, the open Duo, and the same split view
+            // collapsed on a phone): the row selects into the detail path (`open`), never a
+            // NavigationLink, which would push onto the list's own stack instead.
+            Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
+                // The open chat's row, tinted like the selected conversation in Messages. Drawn
+                // here: the Mac's list did not show a listRowBackground on these rows.
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.16))
+                            .padding(.horizontal, -8).padding(.vertical, -7)
+                    }
                 }
-            }
-        #else
-        NavigationLink(value: route) { label() }
-        #endif
+        } else {
+            NavigationLink(value: route) { label() }
+        }
     }
 
     /// The bot beside each chat: with All bots on the phone, always on the Mac (the list reads

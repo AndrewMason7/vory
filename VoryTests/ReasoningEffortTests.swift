@@ -13,10 +13,20 @@ import Testing
         // blanks are dropped; a level only the gateway knows comes last, in the gateway's order.
         #expect(ReasoningEffort.levels(offered: ["max", " ", "high", "xhigh", "max"]) == ["low", "medium", "high", "xhigh", "max"])
         #expect(ReasoningEffort.levels(offered: ["ultra", "max", "deep"]) == ["low", "medium", "high", "max", "ultra", "deep"])
+        // Hermes's full set, as its schema lists it, in one order whatever the gateway's (#319).
+        #expect(ReasoningEffort.levels(offered: ["ultra", "xhigh", "", "minimal", "max", "high", "low", "medium"]) == ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+    }
+
+    @Test func levelsReadAsWordsInTheMenuAndStayRawForTheGateway() {
+        #expect(ReasoningEffort.name(of: "xhigh") == "Extra high")
+        #expect(ReasoningEffort.name(of: "max") == "Max")
+        #expect(ReasoningEffort.name(of: "ultra") == "Ultra")
+        #expect(ReasoningEffort.name(of: "deep") == "Deep")
+        #expect(ReasoningEffort.title(current: "xhigh") == "Reasoning: Extra high")
     }
 
     @Test func theTitleSaysTheLevelOrThatNoneIsSet() {
-        #expect(ReasoningEffort.title(current: "medium") == "Reasoning: medium")
+        #expect(ReasoningEffort.title(current: "medium") == "Reasoning: Medium")
         #expect(ReasoningEffort.title(current: nil) == "Reasoning: not set")
         #expect(ReasoningEffort.title(current: " ") == "Reasoning: not set")
     }

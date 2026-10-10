@@ -59,6 +59,7 @@ struct RootView: View {
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window (iPad, the open Duo), the phone layout otherwise.
         .environment(\.wideLayout, sizeClass == .regular)
+        .onChange(of: sizeClass, initial: true) { _, s in model.wideLayout = s == .regular }
         // The probe answered and the chosen page is on the bar now: open on it, unless the
         // person has already gone somewhere else.
         .onChange(of: model.hiddenTabs) { was, hidden in
@@ -254,7 +255,9 @@ struct MainTabView: View {
 
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {
         switch tab {
-        case .chats: ChatListView()
+        // The list beside the open chat on a wide window; the list with the chat pushed over it
+        // on a narrow one. One view for both, so a fold or a resize keeps the open chat.
+        case .chats: ChatsSplitPage()
         case .bots: BotsView()
         case .files: FilesView()
         case .settings: SettingsView()
