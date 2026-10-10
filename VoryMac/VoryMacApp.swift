@@ -63,6 +63,7 @@ struct VoryMacApp: App {
                 .task {
                     await model.activateSavedConnection()
                     await model.refreshCompanionUpdateFlag()
+                    ActivationRecheck.companion.noteRun()
                 }
                 // Foreground on the Mac is "the frontmost app": local notifications only while not.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -77,6 +78,10 @@ struct VoryMacApp: App {
                     // A session that ran out while another app was in front: a remembered
                     // sign-in signs it in again now.
                     Task { await model.signInAgainIfExpired() }
+                    // A Companion installed from another device while the Mac ran: noticed
+                    // within a few minutes, not at the next relaunch (#243). Throttled, since
+                    // the Mac comes to the front at every app switch.
+                    ActivationRecheck.companion.runIfDue { await model.refreshCompanionUpdateFlag() }
                 }
                 .onChange(of: model.lock.isLocked) { _, locked in
                     if !locked { Task { await model.signInAgainIfExpired() } }
