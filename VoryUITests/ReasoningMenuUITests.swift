@@ -51,18 +51,19 @@ final class ReasoningMenuUITests: XCTestCase {
         app.buttons["chat.more"].firstMatch.tap()
         let item = labelled("Reasoning: ")
         XCTAssertTrue(item.waitForExistence(timeout: 10), "no Reasoning item in the chat's menu")
-        XCTAssertTrue(item.label.contains("medium"), "the item does not say the chat's level: \(item.label)")
+        XCTAssertTrue(item.label.contains("Medium"), "the item does not say the chat's level: \(item.label)")
         shot("reasoning-menu-item")
         item.tap()
-        // The short list: the standard three and the gateway's extras.
-        for level in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+        // The list as words: the standard three and the gateway's extras, "xhigh" as Extra high (#319).
+        for level in ["Minimal", "Low", "Medium", "High", "Extra high", "Max", "Ultra"] {
             XCTAssertTrue(app.buttons[level].firstMatch.waitForExistence(timeout: 5), "no \(level) in the list")
         }
-        // By strength: minimal above low, max last.
-        XCTAssertLessThan(app.buttons["minimal"].firstMatch.frame.minY, app.buttons["low"].firstMatch.frame.minY)
-        XCTAssertLessThan(app.buttons["xhigh"].firstMatch.frame.minY, app.buttons["max"].firstMatch.frame.minY)
+        // By strength: minimal above low, max above ultra.
+        XCTAssertLessThan(app.buttons["Minimal"].firstMatch.frame.minY, app.buttons["Low"].firstMatch.frame.minY)
+        XCTAssertLessThan(app.buttons["Extra high"].firstMatch.frame.minY, app.buttons["Max"].firstMatch.frame.minY)
+        XCTAssertLessThan(app.buttons["Max"].firstMatch.frame.minY, app.buttons["Ultra"].firstMatch.frame.minY)
         shot("reasoning-menu-levels")
-        app.buttons["high"].firstMatch.tap()
+        app.buttons["High"].firstMatch.tap()
         // The model list no longer nests it.
         app.buttons["chat.more"].firstMatch.tap()
         let model = labelled("Model: ")

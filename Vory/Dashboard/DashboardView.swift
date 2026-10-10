@@ -64,12 +64,8 @@ struct DashboardView: View {
             }
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
             .animation(.snappy, value: layoutRaw)
-            #if os(macOS)
-            // A reading width in the middle of the window, not cards the width of the screen.
-            .frame(maxWidth: 640)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 12)
-            #endif
+            // A reading width in the middle of a wide window, not cards the width of the screen.
+            .readingColumn(640)
         }
         .scrollPosition($scrollPosition)
         // A tap on the Home tab while it is in front brings the page back to its top, as the
@@ -242,7 +238,9 @@ struct DashboardView: View {
             let tokens = (t?.totalInput ?? 0) + (t?.totalOutput ?? 0) + (t?.totalCacheRead ?? 0)
             let messages = periodSessions.reduce(0) { $0 + ($1.messageCount ?? 0) }
             let activeDays = Set((usage?.daily ?? []).filter { ($0.sessions ?? 0) > 0 }.map(\.day)).count
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            // Three to a row everywhere: six tiles fill two rows that way, where four left a short
+            // second row on the Mac (the even-column rule is for the card grids, not these tiles).
+            LazyVGrid(columns: EvenColumns.items(3, spacing: 8), spacing: 8) {
                 tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
                 tile("Messages", Format.count(messages))
                 tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")

@@ -434,6 +434,12 @@ public final class GatewayRuntime {
         return session
     }
 
+    /// Drops a bot's open chats from the registry without closing them on the gateway: the bot
+    /// was renamed (#315), so they are reopened under the new name from the reloaded list.
+    public func forgetChats(of profile: String) {
+        for c in registry.all where c.profileName == profile { registry.remove(c) }
+    }
+
     public func closeChat(_ chat: ChatSession) {
         registry.remove(chat)
         Task { _ = try? await socket.call("session.close", params: Self.params(["session_id": .string(chat.runtimeID)], owner: chat.profile)) }
@@ -545,5 +551,8 @@ public extension Notification.Name {
     /// A reply finished (`storedID`, `text`: the whole assistant turn), for reading it aloud.
     public static let hermesReplyCompleted = Notification.Name("hermesReplyCompleted")
     public static let hermesCronChanged = Notification.Name("hermesCronChanged")
+    /// A bot's folder was renamed on the gateway (#315): userInfo "old" and "new". Open chats
+    /// of the old name are stale; the lists reload on `hermesSessionsChanged` as usual.
+    public static let hermesBotRenamed = Notification.Name("hermesBotRenamed")
     public static let hermesOpenSession = Notification.Name("hermesOpenSession")
 }

@@ -15,11 +15,15 @@ struct BotsView: View {
     @State private var editing: ProfileInfo?
     @State private var path = NavigationPath()
 
-    #if os(macOS)
-    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 18)]
-    #else
-    private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
-    #endif
+    @Environment(\.wideLayout) private var wide
+    /// The page's width as laid out, for the grid's column count.
+    @State private var pageWidth: CGFloat = 0
+    /// Two columns on the phone; on a wide layout as many 150 pt columns as fit, kept even so a
+    /// fold down the middle (the Duo's book posture) falls between cards.
+    private var columns: [GridItem] {
+        wide ? EvenColumns.items(EvenColumns.count(width: min(pageWidth, 720), minimum: 150, spacing: 18), spacing: 18)
+             : EvenColumns.items(2, spacing: 14)
+    }
 
     /// Press and hold a bot: its settings page (colour, look, description, model, instructions).
     struct BotSettingsRoute: Hashable { var profile: String }
@@ -28,11 +32,9 @@ struct BotsView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 pageContent
-                    #if os(macOS)
                     // Cards the size of the phone's, in a column, not pills the width of the window.
-                    .frame(maxWidth: 720)
-                    .frame(maxWidth: .infinity)
-                    #endif
+                    .readingColumn(720)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
             .navigationTitle("Bots")
@@ -543,11 +545,8 @@ struct RoomView: View {
                     Color.clear.frame(height: 0).id("bottom")
                 }
                 .padding()
-                #if os(macOS)
-                // The same reading column as a single chat.
-                .frame(maxWidth: ChatStyle.macColumn)
-                .frame(maxWidth: .infinity)
-                #endif
+                // The same reading column as a single chat on a wide layout.
+                .readingColumn(ChatStyle.readingColumn)
             }
             .overlay {
                 // Nothing said yet: the bots in the room, the way a new chat shows its bot.
@@ -578,9 +577,8 @@ struct RoomView: View {
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .glassEffect(.regular, in: .rect(cornerRadius: 24))
                 .padding(12)
+                .readingColumn(ChatStyle.readingColumn)
                 #if os(macOS)
-                .frame(maxWidth: ChatStyle.macColumn)
-                .frame(maxWidth: .infinity)
                 .textFieldStyle(.plain)
                 // Return sends, as in a single chat.
                 .onSubmit { Task { await send() } }
@@ -634,12 +632,15 @@ struct RoomView: View {
 
 
 private extension View {
-    /// A room bubble's share of the Mac's reading column, on its side; the phone's own width is the limit.
-    @ViewBuilder func roomBubble(_ side: Alignment) -> some View {
-        #if os(macOS)
-        frame(maxWidth: ChatStyle.macColumn * 0.72, alignment: side).frame(maxWidth: .infinity, alignment: side)
-        #else
-        self
-        #endif
+    /// A room bubble's share of the reading column on a wide layout, on its side; the phone's
+    /// own width is the limit.
+    func roomBubble(_ side: Alignment) -> some View { modifier(RoomBubbleWidth(side: side)) }
+}
+
+private struct RoomBubbleWidth: ViewModifier {
+    @Environment(\.wideLayout) private var wide
+    let side: Alignment
+    func body(content: Content) -> some View {
+        content.frame(maxWidth: wide ? ChatStyle.readingColumn * 0.72 : .infinity, alignment: side).frame(maxWidth: .infinity, alignment: side)
     }
 }

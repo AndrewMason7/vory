@@ -24,13 +24,15 @@ struct ConversationView: View {
     @State private var headerHeight: CGFloat = 96
     #endif
     @State private var dockTop: CGFloat = 0
-    private var safeTop: CGFloat {
-        #if os(iOS)
-        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.first ?? 0
-        #else
-        0
-        #endif
-    }
+    /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
+    /// there, whatever safe area or camera strip the header stands in, and it moves with them.
+    @State private var headerBottom: CGFloat = 0
+    /// One switch, Matt's call: on a wide window (the list beside the chat) the header's Back
+    /// circle, which only clears the column, can go, as it is not there in Messages on iPad.
+    static let backHiddenWhenWide = false
+    /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.wideLayout) private var wide
     /// The keyboard's height above the home-indicator area. Tracked by hand for the dock as the
     /// transcript does for itself: SwiftUI's own avoidance hands the inset to any scroll view in
     /// the dock (the command list) instead of lifting the dock, which left the composer under
@@ -40,6 +42,9 @@ struct ConversationView: View {
     @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
     private var confirmTitle: String { confirming?.choice == "deny" ? "Deny this action?" : "Approve this action?" }
+    /// Read where the bot's name shows, so a name saved on its card (#315) redraws the pill.
+    @AppStorage(BotNames.storageKey) private var namesRaw = ""
+    private func botLabel(_ chat: ChatSession) -> String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
     @Namespace private var glassNamespace
     @Environment(\.dismiss) private var dismiss
 
@@ -116,7 +121,7 @@ struct ConversationView: View {
                 .ignoresSafeArea()
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                dock(chat).frame(maxWidth: ChatStyle.macColumn).frame(maxWidth: .infinity)
+                dock(chat).frame(maxWidth: ChatStyle.readingColumn).frame(maxWidth: .infinity)
             }
             .navigationSubtitle(macSubtitle(chat))
             // No toolbar strip over the thread: the bot and the menu float on the window, as in
@@ -129,7 +134,7 @@ struct ConversationView: View {
                     Button { showProfile = true } label: {
                         HStack(spacing: 7) {
                             BotAvatar(profile: chat.profileName, size: 22)
-                            Text(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName)
+                            Text(botLabel(chat))
                                 .font(.headline).lineLimit(1)
                         }
                         .padding(.horizontal, 4)
@@ -163,9 +168,14 @@ struct ConversationView: View {
         // without it the first message starts under the pill.
         thread(chat)
             // Like Messages: header and dock float over the thread and the text scrolls under their glass.
-            .overlay(alignment: .bottom) { dock(chat) }
+            // On a wide layout the dock keeps to the reading column, as on the Mac.
+            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity) }
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification), perform: keyboardChanged)
+            // The keyboard as the window has it (in window space, re-placed on every resize or
+            // fold); the thread moves by the same value, so the two arrive together.
+            .onChange(of: windowGeometry.keyboardOverlap, initial: true) { _, inset in
+                withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) { keyboardInset = inset }
+            }
             .overlay(alignment: .top) { header(chat) }
             // Voice mode runs out of sight under its pill, and in front on its own screen.
             .overlay(alignment: .top) {
@@ -236,10 +246,11 @@ struct ConversationView: View {
         // The dock is a bottom inset on the Mac: the thread needs no margins of its own.
         let (dockTopArg, fallback, top): (CGFloat, CGFloat, CGFloat) = (0, 0, 0)
         #else
-        let (dockTopArg, fallback, top) = (dockTop, dockHeight + keyboardInset, headerHeight + safeTop)
+        // Until the header has been measured, its default height plus the status bar's usual share.
+        let (dockTopArg, fallback, top) = (dockTop, dockHeight + keyboardInset, headerHeight + windowGeometry.safeArea.top)
         #endif
         return TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
-                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top)
+                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top, headerBottom: headerBottom)
             #if os(iOS)
             // The thread's margins (header above, dock and keyboard below) add up to a minimum
             // height. On a small phone with the keyboard up, or any phone with a tall card in
@@ -267,9 +278,17 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
     }
     private func header(_ chat: ChatSession) -> some View {
-        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
-                   onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+        // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
+        FoldReader { fold in
+            ChatHeader(chat: chat, fold: fold, showBack: !(wide && Self.backHiddenWhenWide),
+                       onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
+                       onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
+                // The header's own size and bottom edge (the reader around it is thread-sized):
+                // its height, and its bottom in window space for the thread's top margin.
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { headerBottom = $0 }
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
             // One group for VoiceOver, placed after the thread and the dock in the accessibility
             // order. The accessibility hit test (XCUITest's isHittable, touch to explore) tries
             // the screen's elements from the last one back, as if the last were on top, and goes
@@ -282,24 +301,6 @@ struct ConversationView: View {
             .accessibilityElement(children: .contain)
             .accessibilitySortPriority(-1)
     }
-    #if os(iOS)
-    private func keyboardChanged(_ n: Notification) {
-        guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-        let screen = UIScreen.main.bounds
-        // A frame that is not a keyboard's (a floating or hardware keyboard's accessory, a frame
-        // from another scene, a whole-screen rect) must not push the dock to the top of the
-        // screen, as it did for a tester mid-turn. A keyboard sits on the bottom edge and is
-        // less than two thirds of the screen tall.
-        let onScreen = end.intersection(screen)
-        guard end.height < screen.height * 0.66, onScreen.isNull || onScreen.maxY >= screen.maxY - 1 || end.minY >= screen.maxY else { return }
-        let covered = max(0, screen.maxY - end.minY)
-        let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
-        withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
-            keyboardInset = min(max(0, covered - safeBottom), screen.height * 0.6)
-        }
-    }
-    #endif
-
     // The confirmation alert's pieces live apart from the body: inside it they tipped the type
     // checker over its limit.
     private var confirmShown: Binding<Bool> {
@@ -449,6 +450,10 @@ struct QueueStrip: View {
 /// the bot's avatar above the name (status while the agent works), and a glass … circle.
 struct ChatHeader: View {
     @Bindable var chat: ChatSession
+    /// The fold's frame in this header's coordinates when a partly open Duo has one here; the
+    /// pill moves to the side of it with more room (nothing interactive sits on the fold).
+    var fold: CGRect? = nil
+    var showBack = true
     var onBack: () -> Void
     var onProfile: () -> Void
     var onRename: () -> Void
@@ -463,7 +468,12 @@ struct ChatHeader: View {
     /// element would otherwise be the oldest message laid out.
     @AccessibilityFocusState private var backFocused: Bool
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
-    private var botLabel: String { chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
+    /// The pill's frame and the header's width, for keeping the pill off the fold.
+    @State private var pillFrame: CGRect = .zero
+    @State private var headerWidth: CGFloat = 0
+    /// Read here so a name saved on the bot's card (#315) redraws the header.
+    @AppStorage(BotNames.storageKey) private var namesRaw = ""
+    private var botLabel: String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
     private var headline: String { headerShowsTitle ? chat.title : botLabel }
     private var idleLine: String { headerShowsTitle ? chat.subtitle : (chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title) }
 
@@ -471,12 +481,16 @@ struct ChatHeader: View {
         // No glass container here: a container draws its glass on a layer above the rest, and
         // the pill covered the bot sitting on it.
         HStack(alignment: .top, spacing: 12) {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+            if showBack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
+                .accessibilityFocused($backFocused)
+            } else {
+                Color.clear.frame(width: 44, height: 44)
             }
-            .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
-            .accessibilityFocused($backFocused)
             Spacer(minLength: 0)
             Button {
                 // The bot on the pill turns for the tap as it does elsewhere, and the plate opens.
@@ -526,6 +540,9 @@ struct ChatHeader: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            // Off the fold of a partly open Duo: to whichever side has more room.
+            .offset(x: FoldAvoidance.offset(for: pillFrame, fold: fold, in: headerWidth))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("chatHeader")) } action: { pillFrame = $0 }
             // The pill is offered that room before the spacers beside it share what is left, so
             // it is cut short only when its text does not fit.
             .layoutPriority(1)
@@ -551,6 +568,8 @@ struct ChatHeader: View {
             .accessibilityIdentifier("chat.more")
         }
         .padding(.horizontal, 16)
+        .coordinateSpace(.named("chatHeader"))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { headerWidth = $0 }
         .padding(.top, 4)
         // The bar is one surface, like the Messages header: a tap anywhere on it stays on it and
         // never reaches the thread scrolling underneath (a tool card would otherwise expand).

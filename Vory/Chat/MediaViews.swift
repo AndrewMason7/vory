@@ -96,6 +96,7 @@ struct MediaThumb: View {
     var ref: MediaRef
     var profile: String?
     var side: CGFloat
+    @Environment(\.displayScale) private var displayScale
     @State private var image: UIImage?
     @State private var failed = false
 
@@ -124,14 +125,14 @@ struct MediaThumb: View {
         guard let rt = AppModel.shared.runtime else { failed = true; return }
         let gateway = rt.connection.id.uuidString
         if let url = await MediaStore.shared.cached(ref, gateway: gateway) {
-            image = await AttachmentThumbs.imageAsync(at: url, side: side)
+            image = await AttachmentThumbs.imageAsync(at: url, side: side, scale: displayScale)
             failed = image == nil
             return
         }
         do {
             let url = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             guard !Task.isCancelled else { return }
-            image = await AttachmentThumbs.imageAsync(at: url, side: side)
+            image = await AttachmentThumbs.imageAsync(at: url, side: side, scale: displayScale)
             failed = image == nil
         } catch {
             failed = true
@@ -145,6 +146,7 @@ struct ImageViewerSheet: View {
     var ref: MediaRef
     var profile: String?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
     @State private var url: URL?
     @State private var image: UIImage?
     @State private var error: String?
@@ -303,7 +305,7 @@ struct ImageViewerSheet: View {
         do {
             let file = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             url = file
-            image = await AttachmentThumbs.imageAsync(at: file, side: 2400)
+            image = await AttachmentThumbs.imageAsync(at: file, side: 2400, scale: displayScale)
             if image == nil { error = "This file is not an image the device can show." }
         } catch {
             self.error = "The gateway could not give this file: \(error.localizedDescription)"

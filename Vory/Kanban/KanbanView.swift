@@ -11,6 +11,7 @@ struct KanbanView: View {
     var embedded = false
 
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.dynamicTypeSize) private var typeSize
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
     @State private var showNew = false
@@ -122,7 +123,7 @@ struct KanbanView: View {
                 Label("Live", systemImage: "dot.radiowaves.left.and.right").font(.caption2).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.vertical, 4).background(.thinMaterial, in: .capsule).padding(12)
                     // Above the floating tab bar, which otherwise covered it on the phone.
-                    .padding(.bottom, Self.liveCapsuleLift(hidden: model.tabBarHidden))
+                    .padding(.bottom, Self.liveCapsuleLift(hidden: model.tabBarHidden || model.tabBarVertical, in: windowGeometry))
                     .accessibilityLabel("Live updates on")
             }
         }
@@ -130,9 +131,9 @@ struct KanbanView: View {
 
     /// How far the Live capsule sits above the bottom: over the phone's floating tab bar when it
     /// is there; the Mac has no bar.
-    static func liveCapsuleLift(hidden: Bool) -> CGFloat {
+    static func liveCapsuleLift(hidden: Bool, in geometry: WindowGeometry) -> CGFloat {
         #if os(iOS)
-        return hidden ? 0 : VoryTabBar.reservedHeight
+        return hidden ? 0 : VoryTabBar.reservedHeight(in: geometry)
         #else
         return 0
         #endif

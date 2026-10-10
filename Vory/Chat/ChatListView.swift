@@ -1,7 +1,7 @@
 import SwiftUI
 import VoryCore
 
-struct ChatRoute: Hashable {
+struct ChatRoute: Hashable, Codable {
     var storedID: String?
     var title: String?
     /// Sessions are profile-scoped on the gateway; when set, the chat screen selects this bot first.
@@ -20,10 +20,15 @@ struct ChatRoute: Hashable {
     /// Voice mode as soon as the chat exists (the Chats page's mic, the sheet's Voice mode),
     /// after the first message if there is one.
     var startVoice: Bool = false
+
+    /// Saved and restored without the picked files: `AttachmentPreview` carries local file
+    /// URLs and is not Codable, and a route is only ever restored for a chat that exists.
+    private enum CodingKeys: String, CodingKey { case storedID, title, profile, initialText, readOnly, cwd, token, startVoice }
 }
 
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
     /// and a click replaces the one showing. On the phone the list owns its own stack and pushes.
     var detailPath: Binding<NavigationPath>? = nil
@@ -116,7 +121,7 @@ struct ChatListView: View {
         let current = list.firstIndex { e in
             switch e {
             case .session(let s): return s.id == selectedID
-            case .room(let r): return "room:" + r.roomId == selectedID
+            case .room(let r): return ChatNavigation.selectionID(ofRoom: r.roomId) == selectedID
             }
         }
         let next = current.map { min(max($0 + direction, 0), list.count - 1) } ?? 0
@@ -127,32 +132,32 @@ struct ChatListView: View {
     }
     #endif
 
-    /// Opens a chat or a group chat: pushed on the phone; on the Mac it replaces whatever the
-    /// detail column shows, the way selecting a conversation does in Messages. `back` is the tab
-    /// to return to when this chat closes (the compose circle tapped elsewhere); any other way
-    /// in forgets a pending one.
+    /// Opens a chat or a group chat: pushed when the list owns its stack (the phone); beside a
+    /// detail column (the Mac; the iPad and the open Duo in 1.5) it replaces whatever the column
+    /// shows, the way selecting a conversation does in Messages (`ChatNavigation`). `back` is the
+    /// tab to return to when this chat closes (the compose circle tapped elsewhere); any other
+    /// way in forgets a pending one.
     private func open(_ route: some Hashable, returningTo back: AppModel.AppTab? = nil) {
         model.composeReturnTab = back
-        #if os(macOS)
-        if var chat = route as? ChatRoute, chat.storedID == nil {
-            chat.token = UUID()
-            path.wrappedValue = NavigationPath([chat])
+        if detailPath != nil {
+            ChatNavigation.select(route, in: &path.wrappedValue)
+            selectedID = ChatNavigation.selectionID(of: route)
         } else {
-            path.wrappedValue = NavigationPath([route])
+            ChatNavigation.push(route, onto: &path.wrappedValue)
         }
-        selectedID = (route as? ChatRoute)?.storedID ?? (route as? RoomRoute).map { "room:" + $0.room.roomId }
-        #else
-        path.wrappedValue.append(route)
-        #endif
     }
 
     var body: some View {
-        #if os(macOS)
-        // A column of the split view; the detail column's stack (`detailPath`) shows the chats.
-        content
-        #else
-        NavigationStack(path: path) { content }
-        #endif
+        if detailPath != nil {
+            // A column of the split view; the detail column's stack (`detailPath`) shows the chats.
+            content
+        } else {
+            NavigationStack(path: path) {
+                content
+                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
+            }
+        }
     }
 
     private var content: some View {
@@ -170,6 +175,8 @@ struct ChatListView: View {
             // coming back the instant a pop begins instead of after the transition settles.
             .onChange(of: path.wrappedValue.isEmpty, initial: true) { was, empty in
                 model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
+                // Collapsed to one column, the list is back in front with nothing open beside it.
+                if empty { selectedID = nil }
                 // A chat composed from another tab closes back onto that tab, not onto this list.
                 if !was, empty { returnFromCompose() }
             }
@@ -192,8 +199,17 @@ struct ChatListView: View {
                 #else
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
-                    sortMenu
-                    filterMenu
+                    if model.tabBarVertical {
+                        // The system lays these items down the same strip Vory's tab bar stands in
+                        // (the closed Duo): sort and filters share one View menu there, so the
+                        // strip holds both.
+                        Menu { sortMenu; filterMenu } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                            .accessibilityLabel("View")
+                            .accessibilityIdentifier("chats.view")
+                    } else {
+                        sortMenu
+                        filterMenu
+                    }
                 }
                 #endif
                 }
@@ -231,11 +247,6 @@ struct ChatListView: View {
                     .withAppModel()
                 }
             }
-            #if os(iOS)
-            // The Mac's destinations are on the detail column's stack.
-            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
-            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
-            #endif
             .onChange(of: searchText) { _, q in Task { await search(q) } }
             .refreshable { await load() }
             .task(id: runtime?.connection.id) { await load() }
@@ -598,7 +609,7 @@ struct ChatListView: View {
         // lands behind the bar. The pill floats just above the bar, and at the bottom edge
         // when the bar is away (search with the keyboard up).
         .overlay(alignment: .bottom) {
-            SummaryProgressStrip().padding(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 6)
+            SummaryProgressStrip().padding(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 6)
         }
         #endif
         #if os(macOS)
@@ -883,19 +894,22 @@ struct ChatListView: View {
     }
 
     @ViewBuilder private func openLink<Label: View>(_ route: some Hashable, selected: Bool, @ViewBuilder label: () -> Label) -> some View {
-        #if os(macOS)
-        Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
-            // The open chat's row, tinted like the selected conversation in Messages. Drawn
-            // here: the Mac's list did not show a listRowBackground on these rows.
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.16))
-                        .padding(.horizontal, -8).padding(.vertical, -7)
+        if detailPath != nil {
+            // Beside a detail column (the Mac, the iPad, the open Duo, and the same split view
+            // collapsed on a phone): the row selects into the detail path (`open`), never a
+            // NavigationLink, which would push onto the list's own stack instead.
+            Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
+                // The open chat's row, tinted like the selected conversation in Messages. Drawn
+                // here: the Mac's list did not show a listRowBackground on these rows.
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.16))
+                            .padding(.horizontal, -8).padding(.vertical, -7)
+                    }
                 }
-            }
-        #else
-        NavigationLink(value: route) { label() }
-        #endif
+        } else {
+            NavigationLink(value: route) { label() }
+        }
     }
 
     /// The bot beside each chat: with All bots on the phone, always on the Mac (the list reads
@@ -957,7 +971,7 @@ struct ChatListView: View {
         let archived = archivedRooms.contains(room.roomId)
         let log = roomLogs[room.roomId] ?? []
         let summary = summarizer.shown(summarizer.summary(forRoom: room, events: log), title: room.name, preview: Self.lastLine(room, log) ?? "")
-                rowLink(RoomRoute(room: room, initialText: nil), selected: selectedID == "room:" + room.roomId) {
+                rowLink(RoomRoute(room: room, initialText: nil), selected: selectedID == ChatNavigation.selectionID(ofRoom: room.roomId)) {
                     HStack(spacing: 12) {
                         HStack(spacing: -12) {
                             ForEach(Array(room.members.prefix(3).enumerated()), id: \.offset) { _, m in
@@ -1237,7 +1251,7 @@ enum ChatRowStyle {
 }
 
 /// A group chat as a navigation value, with the first message when it was just started.
-struct RoomRoute: Hashable {
+struct RoomRoute: Hashable, Codable {
     var room: Room
     var initialText: String?
 }

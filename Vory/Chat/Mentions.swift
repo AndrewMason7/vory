@@ -17,6 +17,19 @@ enum Mentions {
     /// The names the thread on screen knows, set by it from the gateway's bots and Settings.
     @MainActor static var names = Names()
 
+    /// Every name a bot answers to, for the thread's list: the folder name, the gateway's
+    /// display name, and the name Vory keeps for it (#315), without repeats.
+    static func botNames(for profiles: [ProfileInfo]) -> [String] {
+        var out: [String] = []
+        for p in profiles {
+            for n in [p.name, p.displayName ?? "", p.label] {
+                let t = n.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty, !out.contains(where: { $0.lowercased() == t.lowercased() }) { out.append(t) }
+            }
+        }
+        return out
+    }
+
     struct Mention: Equatable {
         var range: Range<String.Index>
         /// The bot's name as the gateway knows it (nil for the person).

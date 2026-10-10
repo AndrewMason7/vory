@@ -4,6 +4,10 @@ import VoryCore
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// The window's geometry for this scene, read from the window on every layout (see
+    /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
+    @State private var windowGeometry = WindowGeometry()
     /// DEBUG: `-vory-show-tour` shows the first-run tour over a configured app.
     static let forceTour: Bool = {
         #if DEBUG
@@ -51,6 +55,11 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.lock.isLocked)
+        .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        .environment(\.windowGeometry, windowGeometry)
+        // Wide on a regular-width window (iPad, the open Duo), the phone layout otherwise.
+        .environment(\.wideLayout, sizeClass == .regular)
+        .onChange(of: sizeClass, initial: true) { _, s in model.wideLayout = s == .regular }
         // The probe answered and the chosen page is on the bar now: open on it, unless the
         // person has already gone somewhere else.
         .onChange(of: model.hiddenTabs) { was, hidden in
@@ -173,42 +182,74 @@ struct LockScreenView: View {
 
 struct MainTabView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     @AppStorage(TabLayout.storageKey) private var layoutRaw = ""
 
     var body: some View {
         let tabs = TabLayout.parse(layoutRaw).visible(hiding: model.hiddenTabs)
-        ZStack {
-            // Every page stays alive (its navigation stack, scroll position, drafts); only the
-            // selected one is visible and touchable, which is what the system TabView does too.
-            ForEach(tabs, id: \.self) { tab in
-                content(for: tab)
-                    .opacity(model.selectedTab == tab ? 1 : 0)
-                    .allowsHitTesting(model.selectedTab == tab)
-                    .accessibilityHidden(model.selectedTab != tab)
+        let barHeight = VoryTabBar.reservedHeight(in: windowGeometry)
+        // Where the system would put a vertical bar (the closed Duo's strip, the open Duo in
+        // landscape), Vory's own bar goes there too, stacked on that edge (decision 1): the
+        // pages are inset by its width instead of its height. Nil: along the bottom, as ever.
+        VerticalBarEdge { edge in
+            let vertical = edge != nil
+            let pages = ZStack {
+                // Every page stays alive (its navigation stack, scroll position, drafts); only the
+                // selected one is visible and touchable, which is what the system TabView does too.
+                ForEach(tabs, id: \.self) { tab in
+                    content(for: tab)
+                        .opacity(model.selectedTab == tab ? 1 : 0)
+                        .allowsHitTesting(model.selectedTab == tab)
+                        .accessibilityHidden(model.selectedTab != tab)
+                }
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            // Reserves the bar's height so lists end above it; the bar itself is hidden (slid down)
-            // inside a chat and the setup wizard, and the pages then use the full height. The bar
-            // is never removed from the tree: an insert/remove transition got stuck on the first
-            // chat opened after launch (the bar stayed, tappable, over the composer). It slides
-            // and fades instead, and its reserved height collapses to nothing.
-            VoryTabBar(tabs: tabs, compose: { compose() }, composeFull: { composeFull() }, voice: { voiceChat($0) })
-                .offset(y: model.tabBarHidden ? 140 : 0)
+            // Reserves the bar's height (or width) so lists end before it; the bar itself is
+            // hidden (slid off its edge) inside a chat and the setup wizard, and the pages then
+            // use the full height. The bar is never removed from the tree: an insert/remove
+            // transition got stuck on the first chat opened after launch (the bar stayed,
+            // tappable, over the composer). It slides and fades instead, and its reserved
+            // size collapses to nothing.
+            let bar = VoryTabBar(tabs: tabs, axis: vertical ? .vertical : .horizontal, compose: { compose() }, composeFull: { composeFull() }, voice: { voiceChat($0) })
+                .offset(x: model.tabBarHidden && vertical ? (edge == .leading ? -140 : 140) : 0,
+                        y: model.tabBarHidden && !vertical ? 140 : 0)
                 .opacity(model.tabBarHidden ? 0 : 1)
-                // The slide and fade animate; the reserved height below does not. Animating the
+                // The slide and fade animate; the reserved size below does not. Animating the
                 // safe-area inset while a chat opened made its thread bounce up and down.
                 .animation(.snappy(duration: 0.3), value: model.tabBarHidden)
-                .frame(height: model.tabBarHidden ? 0 : VoryTabBar.reservedHeight, alignment: .top)
+                .frame(width: vertical ? (model.tabBarHidden ? 0 : VoryTabBar.reservedWidth) : nil,
+                       height: vertical ? nil : (model.tabBarHidden ? 0 : barHeight),
+                       alignment: .top)
                 // Not tappable while it slides away: a tap then switched tabs under an open chat.
                 .allowsHitTesting(!model.tabBarHidden)
                 .accessibilityHidden(model.tabBarHidden)
+            Group {
+                if let edge {
+                    // Into the system's strip itself (the window's inset on that side, where the
+                    // status bar and the navigation bars' items already stand), at the strip's
+                    // foot under those items, so the pages keep the width the strip leaves them.
+                    // A strip too narrow for the capsule gets the bar beside it instead.
+                    let strip = edge == .leading ? windowGeometry.safeArea.leading : windowGeometry.safeArea.trailing
+                    if strip >= 56 {
+                        pages.overlay(alignment: edge == .leading ? .bottomLeading : .bottomTrailing) {
+                            bar
+                                .frame(width: strip)
+                                .padding(.bottom, max(8, windowGeometry.safeArea.bottom))
+                                .ignoresSafeArea(.container, edges: edge == .leading ? .leading : .trailing)
+                        }
+                    } else {
+                        pages.safeAreaInset(edge: edge, spacing: 0) { bar }
+                    }
+                } else {
+                    pages.safeAreaInset(edge: .bottom, spacing: 0) { bar }
+                }
+            }
+            .onChange(of: vertical, initial: true) { _, v in model.tabBarVertical = v }
         }
         // Lists on every page (roots and the pages pushed over them) do not pick up the bar's
         // inset on this iOS (their last rows ended under the bar), so their scroll content gets
         // the bar's height plus a breath of room. Inside a chat the bar is hidden and this is 0;
         // the thread measures its own margin against the composer.
-        .contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 16, for: .scrollContent)
+        .contentMargins(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : barHeight + 16, for: .scrollContent)
         // No blank band under the bar at the top of any page: the first card sits right there.
         .contentMargins(.top, 0, for: .scrollContent)
         // "Read replies aloud" listens for finished replies in the chat in front.
@@ -244,7 +285,9 @@ struct MainTabView: View {
 
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {
         switch tab {
-        case .chats: ChatListView()
+        // The list beside the open chat on a wide window; the list with the chat pushed over it
+        // on a narrow one. One view for both, so a fold or a resize keeps the open chat.
+        case .chats: ChatsSplitPage()
         case .bots: BotsView()
         case .files: FilesView()
         case .settings: SettingsView()

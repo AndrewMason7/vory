@@ -36,7 +36,15 @@ struct TranscriptView: View {
     /// under the home indicator, in which case the automatic inset ends it above that. Two
     /// layouts seen in the wild: a frame that stops at the safe area (the inset is virtual) and
     /// one that runs to the screen edge (the inset is real). This reads the same in both.
-    private var visibleBottom: CGFloat { min(scrollBottom, UIScreen.main.bounds.height - autoInset) }
+    private var visibleBottom: CGFloat { min(scrollBottom, windowGeometry.bounds.height - autoInset) }
+    /// The window as it is now: its height for the bottom edge above, its keyboard for the
+    /// margin below. Read from the window on every layout, so a fold or a resize moves both.
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.wideLayout) private var wide
+    /// The scroll view's top edge in window space, for the header's bottom edge measured the
+    /// same way (`headerBottom`): the top margin is the distance between the two, whatever
+    /// safe area or camera strip the header sits in.
+    @State private var scrollTop: CGFloat = 0
     /// The margin to add so the last line ends 8 pt above the dock. Never less than the keyboard
     /// plus a one-line composer: a tester's first message in a new chat sat under both, which
     /// no dock position this view had measured could explain, so the floor holds on its own.
@@ -49,8 +57,15 @@ struct TranscriptView: View {
     /// dock's spring brought the composer there.
     @State private var keyboardFloor: CGFloat = 0
     @State private var floorTask: Task<Void, Never>?
-    /// Height of the floating header (the nav bar is hidden in a chat).
+    /// Height of the floating header (the nav bar is hidden in a chat), used until the header
+    /// has been measured.
     var topInset: CGFloat = 96
+    /// The floating header's bottom edge in window space (0 = not measured): the thread's top
+    /// margin ends there, however much safe area the header stands in.
+    var headerBottom: CGFloat = 0
+    /// `scrollTop` is 0 when the thread starts at the window's top edge (it runs under the status
+    /// bar), which is the usual case, so only the header's measurement gates this.
+    private var effectiveTopInset: CGFloat { headerBottom > 0 ? max(0, headerBottom - scrollTop) : topInset }
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     @State private var awayFromBottom = false
@@ -102,14 +117,11 @@ struct TranscriptView: View {
     @State private var openTools: Set<String> = []
     /// The Mac's reading column as laid out, for the bubbles' share of it.
     @State private var columnWidth: CGFloat = 760
-    /// How wide a bubble may grow: no limit on the phone (the screen is the limit), about
-    /// two thirds of the column on the Mac, like Messages.
+    /// How wide a bubble may grow: no limit on the phone (the window is the limit), about
+    /// two thirds of the reading column on a wide layout (the Mac, iPad, the open Duo), like
+    /// Messages.
     private var bubbleCap: CGFloat {
-        #if os(macOS)
-        return wideReplies ? columnWidth : max(320, columnWidth * 0.72)
-        #else
-        return .infinity
-        #endif
+        wide ? (wideReplies ? columnWidth : max(320, columnWidth * 0.72)) : .infinity
     }
 
     private var visibleItems: [TranscriptItem] {
@@ -193,12 +205,11 @@ struct TranscriptView: View {
                 }
                 .padding(.horizontal, wideReplies ? 10 : 16)
                 .padding(.top, 8)
-                #if os(macOS)
-                // A reading column in the middle of the pane, a page wide however wide the window is.
-                .frame(maxWidth: ChatStyle.macColumn)
+                // A reading column in the middle of the pane on a wide layout, a page wide however
+                // wide the window is; the full width on the phone.
+                .frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity)
                 .onGeometryChange(for: CGFloat.self) { ($0.size.width / 20).rounded() * 20 } action: { columnWidth = $0 }
                 .frame(maxWidth: .infinity)
-                #endif
                 .dynamicTypeSize(ChatStyle.stepped(phoneTypeSize, textSize))
                 // No animation for the stack as a whole. One used to run whenever the row count
                 // changed, and it animated everything else that changed in the same update: when
@@ -217,17 +228,16 @@ struct TranscriptView: View {
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
             .contentMargins(.bottom, bottomInset + 8, for: .scrollContent)
-            .contentMargins(.top, topInset + 8, for: .scrollContent)
+            .contentMargins(.top, effectiveTopInset + 8, for: .scrollContent)
             // The keyboard is handled by hand (below) so the last message rides up with it instead
             // of vanishing under the composer; SwiftUI's own avoidance would then double the inset.
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { scrollBottom = $0 }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, v in
                 metrics.reportedInsetBottom = v
                 guard autoInsetFixed == nil, dockTop > 0 else { return }
                 #if os(iOS)
                 let raw = max(0, v - (bottomInset + 8))
-                let safe = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
+                let safe = windowGeometry.safeArea.bottom
                 autoInsetFixed = safe > 0 && raw > safe / 2 ? safe : 0
                 #else
                 autoInsetFixed = 0   // no home indicator under a window
@@ -236,34 +246,14 @@ struct TranscriptView: View {
             .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.containerSize.height] } action: { _, v in
                 metrics.contentHeight = v[0]; metrics.containerHeight = v[1]
             }
-            #if os(iOS)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
-                guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-                let screen = UIScreen.main.bounds
-                // The same rule as the dock's: a frame that is not a keyboard's (a floating or
-                // hardware keyboard's bar, another scene's, the whole screen) must not count.
-                let onScreen = end.intersection(screen)
-                guard end.height < screen.height * 0.66, onScreen.isNull || onScreen.maxY >= screen.maxY - 1 || end.minY >= screen.maxY else { return }
-                let covered = max(0, screen.maxY - end.minY)
-                let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
-                let inset = max(0, covered - safeBottom)
-                // The keyboard moves on UIKit's own spring; this spring tracks it closely, so the
-                // thread and the composer arrive together instead of the composer overlapping.
-                withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
-                    keyboardInset = inset
-                    if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
-                }
-                floorTask?.cancel()
-                if inset == 0 { keyboardFloor = 0 } else {
-                    floorTask = Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(450))
-                        guard !Task.isCancelled else { return }
-                        keyboardFloor = inset
-                        if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
-                    }
-                }
-            }
-            #endif
+            // The window around the thread (`WindowGeometry`): its own frame in window space, the
+            // window's shape (a fold, a resize or an inset that moves makes the automatic inset
+            // measure again), and the keyboard as the window has it (in window space, only when
+            // it sits on the window's bottom edge), the same value the dock moves by.
+            .modifier(ThreadWindowWatch(geometry: windowGeometry,
+                                        frame: { scrollTop = $0.minY; scrollBottom = $0.maxY },
+                                        shapeChanged: { autoInsetFixed = nil },
+                                        keyboard: { keyboardMoved(to: $0) }))
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
                 metrics.offsetY = new
                 if metrics.userScrolling { BotAmbient.shared.scrolled(dy: new - old) }
@@ -476,7 +466,7 @@ extension TranscriptView {
             // Only when the opened row runs under the composer; then its bottom edge is
             // aligned to the visible bottom (the scroll view resolves the row itself,
             // so no offset arithmetic across coordinate spaces).
-            let limit = (dockTop > 0 ? dockTop : UIScreen.main.bounds.height - fallbackInset) - 8
+            let limit = (dockTop > 0 ? dockTop : windowGeometry.bounds.height - fallbackInset) - 8
             let overshoot = settledBottom - limit
             guard overshoot > 0 else { return }
             #if os(iOS)
@@ -500,11 +490,9 @@ extension TranscriptView {
     }
 
     private func refreshMentionNames() {
-        var bots: [String] = []
-        for p in chat.runtime.profiles {
-            bots.append(p.name)
-            if p.label != p.name { bots.append(p.label) }
-        }
+        // Every name a bot answers to: its folder name, the gateway's display name and the one
+        // given in Vory (#315), without repeats.
+        let bots = Mentions.botNames(for: chat.runtime.profiles)
         let person = UserDefaults.standard.string(forKey: "user.name")
         Mentions.names = Mentions.Names(bots: bots, person: person)
     }
@@ -522,6 +510,25 @@ extension TranscriptView {
     }
 
     /// A row came or went under a locked thread: the thread eases to its end with it.
+    /// The keyboard now covers `inset` of the window above the bottom safe area (`WindowGeometry`).
+    /// The keyboard moves on UIKit's own spring; this spring tracks it closely, so the thread and
+    /// the composer arrive together instead of the composer overlapping.
+    private func keyboardMoved(to inset: CGFloat) {
+        withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
+            keyboardInset = inset
+            if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
+        }
+        floorTask?.cancel()
+        if inset == 0 { keyboardFloor = 0 } else {
+            floorTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                keyboardFloor = inset
+                if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
+            }
+        }
+    }
+
     private func followRows(from old: Int, to new: Int) {
         guard mayFollow() else { return }
         // Rows crossing into the lazy stack change the height above the screen: the thread
@@ -919,8 +926,9 @@ enum ChatStyle {
     static let currentStepOnly = "chat.currentStepOnly"
     /// Reply bubbles run to the edge instead of leaving a margin on the right.
     static let wideReplies = "chat.wideReplies"
-    /// The Mac's reading column: thread and composer share it, centred in the pane.
-    static let macColumn: CGFloat = 860
+    /// The reading column on a wide layout (the Mac, iPad, the open Duo): thread and composer
+    /// share it, centred in the pane.
+    static let readingColumn: CGFloat = 860
     /// "small", "default" or "large": one Dynamic Type step down or up for the thread only.
     static let textSize = "chat.textSize"
     /// "tailed" (Messages), "rounded" (no tails) or "plain" (replies without a bubble, like a page).
@@ -1824,6 +1832,7 @@ struct MarkdownImageView: View {
     /// still arrives later replaces it.
     private static let loadTimeout: Duration = .seconds(15)
 
+    @Environment(\.displayScale) private var displayScale
     @State private var picture: UIImage?
     @State private var failed = false
 
@@ -1859,7 +1868,7 @@ struct MarkdownImageView: View {
             let file = dir.appendingPathComponent(name)
             try data.write(to: file)
             guard !Task.isCancelled else { return }
-            if let decoded = await AttachmentThumbs.imageAsync(at: file, side: 1200) { picture = decoded } else { failed = true }
+            if let decoded = await AttachmentThumbs.imageAsync(at: file, side: 1200, scale: displayScale) { picture = decoded } else { failed = true }
         } catch {
             failed = true
         }
@@ -1998,6 +2007,7 @@ struct CodeBlock: View {
 
 struct AttachmentStrip: View {
     var attachments: [AttachmentPreview]
+    @Environment(\.displayScale) private var displayScale
     @State private var preview: URL?
 
     var body: some View {
@@ -2006,7 +2016,7 @@ struct AttachmentStrip: View {
                 Button { if let u = a.localURL { preview = u } } label: {
                     // A thumbnail, never the full photo: a 12-megapixel bitmap per row is what a
                     // thread of screenshots turns into otherwise.
-                    if a.kind == .image, let u = a.localURL, let img = AttachmentThumbs.image(at: u, side: 96) {
+                    if a.kind == .image, let u = a.localURL, let img = AttachmentThumbs.image(at: u, side: 96, scale: displayScale) {
                         Image(uiImage: img).resizable().scaledToFill().frame(width: 96, height: 96).clipShape(.rect(cornerRadius: 12))
                     } else {
                         Label(a.name, systemImage: a.kind == .pdf ? "doc.richtext" : a.kind == .audio ? "waveform" : a.kind == .video ? "video" : "doc")
@@ -2093,5 +2103,22 @@ struct TodoChecklist: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Todo list, \(done) of \(items.count) done")
+    }
+}
+
+/// The thread's window watch, one modifier so the thread's long chain stays within what the
+/// type checker will take: the scroll view's frame in window space, the window's shape, and the
+/// keyboard overlap, each reported as it changes.
+private struct ThreadWindowWatch: ViewModifier {
+    let geometry: WindowGeometry
+    let frame: (CGRect) -> Void
+    let shapeChanged: () -> Void
+    let keyboard: (CGFloat) -> Void
+    private var shape: [CGFloat] { [geometry.bounds.width, geometry.bounds.height, geometry.safeArea.bottom] }
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame($0) }
+            .onChange(of: shape) { shapeChanged() }
+            .onChange(of: geometry.keyboardOverlap, initial: true) { _, v in keyboard(v) }
     }
 }
