@@ -62,6 +62,8 @@ struct RootView: View {
         }
         .animation(.default, value: model.lock.isLocked)
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        // The fold and the camera, for every floating piece below (Step D).
+        .modifier(ReservedRegionsEnvironment())
         #if DEBUG
         // `-vory-geometry-probe`: the window's numbers in the corner, for reading a pose off a
         // screenshot (the Duo simulator has no other way to report its insets).
@@ -69,7 +71,7 @@ struct RootView: View {
             if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
                 VerticalBarEdge { edge in
                     let g = windowGeometry
-                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", sizeClass == .regular ? "yes" : "no"))
+                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no"))
                         .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
                         .padding(.top, 40).allowsHitTesting(false)
                 }
@@ -341,5 +343,13 @@ struct MainTabView: View {
         case .projects: NavigationStack { ProjectsView().tabRoot(.projects) }
         case .status: NavigationStack { StatusView().tabRoot(.status) }
         }
+    }
+}
+
+
+/// Publishes the window's reserved regions (the fold, the camera) into the environment.
+private struct ReservedRegionsEnvironment: ViewModifier {
+    func body(content: Content) -> some View {
+        ReservedRegionsReader { content }
     }
 }
