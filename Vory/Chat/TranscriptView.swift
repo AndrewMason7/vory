@@ -2137,7 +2137,8 @@ private struct ThreadTopEdge: ViewModifier {
         #if os(iOS)
         content
             .mask { Rectangle().padding(.vertical, -4000) }
-            .safeAreaPadding(.top, inset)
+            // A bar's worth of room, not a padding: a bar is what the scroll view blurs under.
+            .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: inset) }
             .scrollEdgeEffectStyle(.soft, for: .top)
         #else
         content.contentMargins(.top, inset, for: .scrollContent)
