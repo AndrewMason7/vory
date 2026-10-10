@@ -238,11 +238,11 @@ struct PushSetupView: View {
             }
         }
         #if os(macOS)
-        // A button the size of a button, under the form's column; the second one reads as a link.
+        // A button the size of a button; the second one reads as a link.
         .buttonStyle(.borderless)
-        .frame(maxWidth: 340)
-        .frame(maxWidth: .infinity)
         #endif
+        // Under the form's column on a wide layout.
+        .readingColumn(340)
         .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
         .background(
             // Solid behind the buttons, fading out above them so the form scrolls under.
@@ -682,11 +682,8 @@ struct StepPage<Content: View, Header: View>: View {
             .contentMargins(.top, headerHeight + 10, for: .scrollContent)
             .contentMargins(.bottom, 120, for: .scrollContent)
             .overlay(alignment: .top) { top }
-            #if os(macOS)
-            // The wizard's column, as wide as a settings page.
-            .frame(maxWidth: 700)
-            .frame(maxWidth: .infinity)
-            #endif
+            // The wizard's column on a wide layout, as wide as a settings page.
+            .readingColumn(700)
     }
 
     /// Vory and the step's title, over the form; the form scrolls under it.

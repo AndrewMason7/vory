@@ -51,6 +51,7 @@ struct ComposerView: View {
     @State private var attachPanelHeight: CGFloat = 356
     @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowGeometry) private var windowGeometry
     @Environment(AppModel.self) private var model
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
@@ -108,9 +109,9 @@ struct ComposerView: View {
     /// The model list is on its way: the chooser says so rather than staying shut.
     private var menuLoading: Bool { openMenuContext?.kind == .model && modelOptions == nil && modelOptionsLoading }
 
-    /// The command list scrolls inside a cap: about 30 % of the screen, so with the keyboard up
+    /// The command list scrolls inside a cap: about 30 % of the window, so with the keyboard up
     /// it stops well short of the bot header at the top.
-    private var commandListCap: CGFloat { max(120, min(280, UIScreen.main.bounds.height * 0.30)) }
+    private var commandListCap: CGFloat { max(120, min(280, windowGeometry.bounds.height * 0.30)) }
 
     /// A row tapped or taken with Return, or completed with Tab (see SlashMenu.outcome): a
     /// command that takes nothing runs as if typed and sent, a model switches this chat the way
