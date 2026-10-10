@@ -122,12 +122,23 @@ enum ReasoningEffort {
     /// The levels every model is offered.
     static let standard = ["low", "medium", "high"]
     /// The known levels, weakest first: the order the list keeps whichever of them appear.
-    static let byStrength = ["minimal", "low", "medium", "high", "xhigh", "max"]
+    /// Hermes's own set (`VALID_REASONING_EFFORTS`); a level only a gateway knows goes after.
+    static let byStrength = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+
+    /// How a level reads in the menu; the raw value is what the gateway is sent. "xhigh" is
+    /// the one that is not a word (#319); the rest are their own name, capitalised.
+    static func name(of level: String) -> String {
+        let l = level.trimmingCharacters(in: .whitespaces)
+        if l == "xhigh" { return "Extra high" }
+        return l.prefix(1).uppercased() + l.dropFirst()
+    }
 
     /// The levels to list: the standard three plus whatever the gateway's own config schema
     /// offers for `agent.reasoning_effort`, the known ones by strength (minimal, low, medium,
-    /// high, xhigh, max), any the gateway alone knows after them in its order, without repeats
-    /// or the empty "unset" choice.
+    /// high, xhigh, max, ultra), any the gateway alone knows after them in its order, without
+    /// repeats or the empty "unset" choice. The schema is the only source: Hermes keeps each
+    /// model's own `supported_efforts` out of its model options on purpose (the catalogs
+    /// under-report levels that work), so the list is the gateway's, not the model's (#319).
     static func levels(offered: [String]?) -> [String] {
         let given = (offered ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let wanted = Set(standard + given)
@@ -139,7 +150,7 @@ enum ReasoningEffort {
     /// The item's title: the level the chat runs at, or that none is set.
     static func title(current: String?) -> String {
         let c = (current ?? "").trimmingCharacters(in: .whitespaces)
-        return c.isEmpty ? "Reasoning: not set" : "Reasoning: \(c)"
+        return c.isEmpty ? "Reasoning: not set" : "Reasoning: \(name(of: c))"
     }
 
     /// The schema's offered levels, from `/api/config/schema`.
@@ -163,7 +174,7 @@ struct ReasoningEffortMenu: View {
                             do { try await chat.setReasoning(level) } catch { chat.banner = error.localizedDescription }
                         }
                     } label: {
-                        if chat.info?.reasoningEffort == level { Label(level, systemImage: "checkmark") } else { Text(level) }
+                        if chat.info?.reasoningEffort == level { Label(ReasoningEffort.name(of: level), systemImage: "checkmark") } else { Text(ReasoningEffort.name(of: level)) }
                     }
                 }
             } label: {

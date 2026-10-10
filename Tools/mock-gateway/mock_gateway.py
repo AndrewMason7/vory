@@ -398,7 +398,7 @@ CONFIG_SCHEMA = {
         "max_live_sessions": {"type": "number", "description": "Max Live Sessions", "category": "general"},
         "approvals.mode": {"type": "select", "description": "Dangerous command approval mode", "category": "security", "options": ["manual", "smart", "off"]},
         "approvals.timeout": {"type": "number", "description": "Seconds before an unanswered prompt fails closed", "category": "security"},
-        "agent.reasoning_effort": {"type": "select", "description": "Reasoning effort", "category": "agent", "options": ["", "minimal", "low", "medium", "high", "xhigh", "max"]},
+        "agent.reasoning_effort": {"type": "select", "description": "Reasoning effort", "category": "agent", "options": ["", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]},
         "agent.max_iterations": {"type": "number", "description": "Maximum tool-loop iterations per turn", "category": "agent"},
         "display.streaming": {"type": "boolean", "description": "Stream tokens as they arrive", "category": "display"},
         "display.show_reasoning": {"type": "boolean", "description": "Show the model's reasoning blocks", "category": "display"},

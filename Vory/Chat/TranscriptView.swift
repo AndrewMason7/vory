@@ -63,7 +63,9 @@ struct TranscriptView: View {
     /// The floating header's bottom edge in window space (0 = not measured): the thread's top
     /// margin ends there, however much safe area the header stands in.
     var headerBottom: CGFloat = 0
-    private var effectiveTopInset: CGFloat { headerBottom > 0 && scrollTop > 0 ? max(0, headerBottom - scrollTop) : topInset }
+    /// `scrollTop` is 0 when the thread starts at the window's top edge (it runs under the status
+    /// bar), which is the usual case, so only the header's measurement gates this.
+    private var effectiveTopInset: CGFloat { headerBottom > 0 ? max(0, headerBottom - scrollTop) : topInset }
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     @State private var awayFromBottom = false
@@ -488,11 +490,9 @@ extension TranscriptView {
     }
 
     private func refreshMentionNames() {
-        var bots: [String] = []
-        for p in chat.runtime.profiles {
-            bots.append(p.name)
-            if p.label != p.name { bots.append(p.label) }
-        }
+        // Every name a bot answers to: its folder name, the gateway's display name and the one
+        // given in Vory (#315), without repeats.
+        let bots = Mentions.botNames(for: chat.runtime.profiles)
         let person = UserDefaults.standard.string(forKey: "user.name")
         Mentions.names = Mentions.Names(bots: bots, person: person)
     }

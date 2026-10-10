@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -84,6 +85,14 @@ final class AppModel {
     var approvalConfirm: ApprovalConfirm?
     var activationError: String?
     var selectedTab: AppTab = .chats
+    /// The Chats tab's detail path: the chat (or group chat) open beside the list on a wide
+    /// window, pushed over the list on a narrow one. Held here, not in a view, so folding the
+    /// Duo or resizing an iPad window (the split view collapsing or expanding) keeps the open
+    /// chat; the routes are Codable for the same reason.
+    var chatPath = NavigationPath()
+    /// The window is regular width (iPad, the open Duo): the chat list stands beside the open
+    /// chat, and the tab bar stays while a chat is open. Set by the root from the size class.
+    var wideLayout = false
     /// The gateway's companion plugin is older than the one this build ships: Settings › Notifications ›
     /// Background Notifications carry a badge until it is updated.
     var companionUpdateAvailable = false
@@ -211,7 +220,7 @@ final class AppModel {
     var tabReselected: [AppTab: Int] = [:]
     /// A keyboard is up somewhere: the bar hides rather than floating over it.
     var keyboardUp = false
-    var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
+    var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen && !wideLayout) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
 
     init() {
         let store = ConnectionStore()
