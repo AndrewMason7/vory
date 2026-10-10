@@ -76,6 +76,30 @@ final class ChatScrollUITests: XCTestCase {
         return candidates.first { $0.label.hasPrefix("Step ") || $0.label.hasPrefix("grep ") } ?? candidates.first
     }
 
+    /// The bottom edge of the lowest row of the thread (a card, the typing bubble, the status
+    /// line): every row is an element named "thread.…".
+    private func lowestRowBottom() -> CGFloat? {
+        guard let snap = try? app.snapshot() else { return nil }
+        var bottom: CGFloat?
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.identifier.hasPrefix("thread."), s.frame.height > 0 { bottom = max(bottom ?? -.infinity, s.frame.maxY); return }
+            for c in s.children { walk(c) }
+        }
+        walk(snap)
+        return bottom
+    }
+
+    /// Back at the end, the last row ends above the dock band's fade (`ChatStyle.bandFade`, 28 pt),
+    /// whole and not read through the fade (1.5, the bands).
+    private func assertEndClearsTheDock(_ label: String) throws {
+        let dock = app.otherElements["chat.dock"].firstMatch
+        XCTAssertTrue(dock.exists, "\(label): no dock")
+        let bottom = try XCTUnwrap(lowestRowBottom(), "\(label): no rows")
+        let gap = dock.frame.minY - bottom
+        if gap < 27 { shot("scroll-end-under-band-\(label)") }
+        XCTAssertGreaterThanOrEqual(gap, 27, "\(label): the last row ends \(Int(gap)) pt above the dock, inside the 28 pt fade")
+    }
+
     private func sendMarathon(_ steps: Int) {
         let composer = app.textViews["composer.text"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30))
@@ -131,6 +155,8 @@ final class ChatScrollUITests: XCTestCase {
         arrow.tap()
         XCTAssertTrue(end.firstMatch.waitForExistence(timeout: 10))
         RunLoop.current.run(until: Date().addingTimeInterval(1))
+        shot("scroll-back-at-end")
+        try assertEndClearsTheDock("after-arrow")
 
         // 2. After the reply: up the thread again, and nothing brings it back.
         app.swipeDown(velocity: .slow)
