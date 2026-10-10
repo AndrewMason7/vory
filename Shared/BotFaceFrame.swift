@@ -32,6 +32,30 @@ extension BotFace {
         return (0.5 + (seat.x - 0.5) * k, rest.y + (seat.y - rest.y) * k, rest.spread + (seat.spread - rest.spread) * k)
     }
 
+    /// A still frame for a Live Activity or Dynamic Island phase (decision 6): the orb for
+    /// thinking, the toolbox for a tool (the lens when the detail names a search), the bubbles
+    /// level for streaming, the warning for an error, the exclamation while an answer waits,
+    /// the rest body otherwise. No halo, no glint, no loop: `loopTime` stays 0.
+    public static func stillFrame(phase: String, detail: String, attention: Bool) -> BotMotionFrame {
+        let state: State
+        if attention { state = .awaitingApproval } else {
+            switch phase {
+            case "thinking", "working": state = .thinking
+            case "tool":
+                let d = detail.lowercased()
+                state = d.contains("search") || d.contains("grep") || d.contains("browser") || d.contains(" web") ? .searching : .usingTool
+            case "streaming": state = .streaming
+            case "error", "failed": state = .error
+            default: state = .idle
+            }
+        }
+        let m = BotMotionModel(seed: 0)
+        m.snap(to: .targets(for: state), at: 0)
+        var f = m.advance(to: 0, targets: .targets(for: state))
+        f.halo = 0; f.loopTime = 0
+        return f
+    }
+
     /// Draws `spec` in `size` from `frame`. `light`: a light background. `bodyAndEyes`: false
     /// draws only what sits over a live glass plate (the extra parts, the panels and marks, the
     /// glint, the arcs); the view draws the plate and the eyes as glass itself.
@@ -52,14 +76,7 @@ extension BotFace {
             ctx.translateBy(x: -size.width / 2, y: -size.height * 0.96)
         }
 
-        // The halo under everything: the orb's, growing with it.
-        if parts != .eyes, f.halo > 0.01, leading == .orb {
-            let glow = 0.28 + 0.55 * (0.5 + 0.5 * sin(f.loopTime / 1.15 * 2 * .pi))
-            let r = s * 0.70 * CGFloat(0.9 + 0.1 * lead)
-            let c = CGPoint(x: box.midX, y: box.midY)
-            ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)),
-                     with: .radialGradient(Gradient(colors: [tint.opacity(0.55 * f.halo * glow * lead), tint.opacity(0)]), center: c, startRadius: s * 0.36, endRadius: r))
-        }
+        // The halo is the view's (`BotHalo`), behind the bot in a layer the square does not clip.
 
         // The body: the rest silhouette morphing into the leading symbol.
         let body: Path = {
@@ -186,5 +203,29 @@ public struct BotFrameShape: Shape {
     public func path(in rect: CGRect) -> Path {
         let p = visual.map { BotRings.body(spec, toward: $0, amount: amount, in: rect) } ?? BotFace.bodyPath(spec.shape, in: rect, time: 0, active: false, phase: 0)
         return inset > 0 ? BotFace.rimInner(p, inset: inset) : p
+    }
+}
+
+/// The orb's halo (1.5): a soft round glow in the bot's colour, 1.5 times the bot across, that
+/// breathes with the pulse and fades to nothing. A view of its own behind the bot, so the bot's
+/// square never clips it (item 11); nothing below 32 pt, where it would be a smudge.
+public struct BotHalo: View {
+    public var spec: BotLookSpec
+    public var size: CGFloat
+    public var frame: BotMotionFrame
+    public init(spec: BotLookSpec, size: CGFloat, frame: BotMotionFrame) { self.spec = spec; self.size = size; self.frame = frame }
+    public var body: some View {
+        let tint = Color(botHex: spec.hex) ?? Color(red: 0.49, green: 0.36, blue: 1)
+        let lead = frame.amount(of: .orb)
+        let glow = 0.28 + 0.55 * (0.5 + 0.5 * sin(frame.loopTime / 1.15 * 2 * .pi))
+        let strength = frame.halo * glow * lead
+        if size >= 32, strength > 0.01 {
+            Circle()
+                .fill(RadialGradient(colors: [tint.opacity(0.55 * strength), tint.opacity(0)], center: .center, startRadius: size * 0.34, endRadius: size * 0.76))
+                .frame(width: size * 1.52, height: size * 1.52)
+                .scaleEffect(BotFace.orbPulse(frame.loopTime))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }

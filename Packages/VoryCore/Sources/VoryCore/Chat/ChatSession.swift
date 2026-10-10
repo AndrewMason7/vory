@@ -151,6 +151,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private var endPhase = "done"
     private var activityEndTask: Task<Void, Never>?
     private var approvalPollTask: Task<Void, Never>?
+    /// The raw name of the tool running now (nil between tools): the bot's lens rule reads
+    /// this, never the prettified status line (1.5, #304).
+    public var currentToolName: String?
     public var statusLine: String? {
         didSet { if isRunning, statusLine != oldValue, cards.isEmpty { activity.update(for: self, attention: false) } }
     }
@@ -1389,12 +1392,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             toolIndex[id] = itemID
             sealStreamingForTool()
             items.append(TranscriptItem(id: itemID, kind: .tool(act)))
+            currentToolName = act.name
             statusLine = "Running \(act.displayName)…"
             activity.update(for: self, attention: false, detail: "Running \(act.displayName)")
         case "tool.generating":
             statusLine = "Preparing \(p["name"]?.stringValue ?? "tool")…"
         case "tool.complete":
             let id = p["tool_id"]?.stringValue ?? ""
+            currentToolName = nil
             // Rows a turn's events are about sit at the end: looked for from there (from the
             // top, each of a long turn's hundreds of tool calls walked the whole thread).
             if let itemID = toolIndex[id], let idx = items.lastIndex(where: { $0.id == itemID }), case .tool(var act) = items[idx].kind {

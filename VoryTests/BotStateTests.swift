@@ -49,8 +49,20 @@ import Testing
         #expect(try running("Queued on the gateway").botState == .thinking)
         #expect(try running("Running Web Search…").botState == .usingTool)
         #expect(try running("Preparing tool…").botState == .usingTool)
-        #expect(try running("Writing…").botState == .working, "writing is not reported as streaming today")
+        #expect(try running("Writing…").botState == .streaming, "writing is the bubbles (1.5)")
         #expect(try running("Any other line").botState == .working)
+    }
+
+    @Test func aSearchToolIsTheLensAndAnyOtherTheToolbox() throws {
+        let c = try running("Running Web Search…")
+        c.currentToolName = "web_search"
+        #expect(c.botState == .searching)
+        c.currentToolName = "terminal"
+        #expect(c.botState == .usingTool)
+        c.currentToolName = nil
+        #expect(c.botState == .usingTool)
+        for n in ["search_files", "grep", "glob", "browser", "web", "find"] { #expect(ChatSession.isSearchTool(n), "\(n) should be a search") }
+        for n in ["terminal", "read_file", "write_file", "patch", "kanban"] { #expect(!ChatSession.isSearchTool(n), "\(n) is not a search") }
     }
 }
 

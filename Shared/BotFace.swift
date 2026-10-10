@@ -1391,6 +1391,8 @@ public struct BotFaceView: View {
                     }
                 }
             }
+            // The orb's halo behind the bot, outside the square (the engine).
+            .background { if let frame { BotHalo(spec: spec, size: size, frame: frame) } }
             // The routines: a turn about the vertical axis (3D, on the spot), a small roll, a
             // tiny nod or lean. Nothing scales and nothing leaves the bot's footprint.
             .rotation3DEffect(.radians(engine ? 0 : m.yaw), axis: (x: 0, y: 1, z: 0), perspective: 0)
