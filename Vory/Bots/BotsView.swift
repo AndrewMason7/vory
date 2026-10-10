@@ -149,8 +149,9 @@ struct BotCard: View {
     var body: some View {
         VStack(spacing: -overlap) {
             // The bot sits on the pill, its base a few points over the top edge.
-            // Plays while the page scrolls (random per bot), settles when it stops.
-            BotAvatar(profile: profile.name, size: 78, active: working || (ambient.scrolling && ambient.enabled),
+            // Only a working bot moves (the battery rule); while the page scrolls the eyes follow
+            // the scroll (BotAmbient's gaze), nothing else (decision C).
+            BotAvatar(profile: profile.name, size: 78, active: working,
                       mood: BotFaceView.Mood(profile: profile.name, followsTilt: true, groupIndex: slot, groupCount: slots))
                 .zIndex(1)
             VStack(spacing: 2) {
@@ -440,6 +441,7 @@ struct BotDetailView: View {
 }
 
 struct RoomView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
     var room: Room
     /// The first message, when the chat was started from the compose sheet.
@@ -517,7 +519,9 @@ struct RoomView: View {
                             let member = ev.payload["member_id"]?.stringValue ?? ev.actor.id
                             let profile = room.members.first { $0.memberId == member || $0.handle == member }?.profile ?? member
                             HStack(alignment: .bottom, spacing: 10) {
-                                BotAvatar(profile: profile, size: 28)
+                                // A still, like the one-to-one thread's rows: an earlier message's
+                                // face neither blinks nor spins (the battery rule).
+                                Image(uiImage: BotAvatarImage.cached(profile: profile, size: 28, scheme: colorScheme)).accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(room.members.first { $0.memberId == member || $0.handle == member }?.displayName ?? member).font(.caption2).foregroundStyle(.secondary)
                                     MarkdownView(text: body)

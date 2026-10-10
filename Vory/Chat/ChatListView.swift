@@ -928,6 +928,7 @@ struct ChatListView: View {
                     SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: rowsShowBot,
                                botProfile: s.profile ?? runtime.selectedProfile,
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,
+                               state: runtime.chatForStored(s.id)?.botState ?? .idle,
                                project: showProject && projectFilter.isEmpty ? runtime.projects.project(forSession: s.id) : nil,
                                step: runtime.needsAttention.contains(s.id) ? nil : runtime.chatForStored(s.id)?.statusLine,
                                summary: summarizer.shown(summarizer.summary(for: s), title: s.displayTitle, preview: s.preview ?? "", renamed: ChatSession.renamedByPerson(s.id)))
@@ -1096,6 +1097,8 @@ struct SessionRow: View {
     /// Whose face to draw when the session itself does not say (the selected bot's list).
     var botProfile: String? = nil
     var thinking = false
+    /// What the chat's bot is doing, as the header shows it (1.5): the row's face shows the same.
+    var state: BotFace.State = .idle
     var project: Project? = nil
     /// The step the bot is on while it works ("Running terminal…"), shown when no goal line is written.
     var step: String? = nil
@@ -1105,7 +1108,7 @@ struct SessionRow: View {
     var body: some View {
         HStack(spacing: 12) {
             // In the list: the eyes and the held pose (a squint, the pebble), no routines.
-            if showBot { BotAvatar(profile: session.profile ?? botProfile ?? "?", size: 34, active: live, mood: BotFaceView.Mood(state: live ? (thinking ? .thinking : .streaming) : .idle)) }
+            if showBot { BotAvatar(profile: session.profile ?? botProfile ?? "?", size: 34, active: live, mood: BotFaceView.Mood(session: session.id, state: live ? state : .idle)) }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if session.pinned == true { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }

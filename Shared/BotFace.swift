@@ -948,6 +948,8 @@ public final class BotAmbient {
     public var scrolling = false
     /// When each bot (by profile name) last finished a turn: it spins once at that moment.
     public var finished: [String: Date] = [:]
+    /// The same by chat (stored id): a face that stands for a chat spins for that chat only.
+    public var finishedSessions: [String: Date] = [:]
     private var decayTask: Task<Void, Never>?
     private var lastGazeAt: Date = .distantPast
 
@@ -974,7 +976,10 @@ public final class BotAmbient {
         }
     }
 
-    public func turnFinished(profile: String) { finished[profile] = Date() }
+    public func turnFinished(profile: String, session: String? = nil) {
+        finished[profile] = Date()
+        if let session { finishedSessions[session] = Date() }
+    }
     /// When each bot was last tapped: a small turn and a blink at that moment.
     public var tapped: [String: Date] = [:]
     public func tap(profile: String) { tapped[profile] = Date() }
@@ -1079,6 +1084,9 @@ public struct BotFaceView: View {
         public var thinking = false
         /// Which profile this is, so a finished turn (`BotAmbient.finished`) spins it once.
         public var profile: String? = nil
+        /// Which chat this face stands for, when it stands for one: a finished turn spins this
+        /// face, not every face of the bot (1.5, the battery rule).
+        public var session: String? = nil
         /// Bots page: past a few degrees of tilt the eyes stop wandering and follow the phone.
         public var followsTilt = false
         /// What the bot is doing. `.idle` with `active` on means the working routines.
@@ -1090,8 +1098,8 @@ public struct BotFaceView: View {
         public var still = false
         /// A squint on top of any state without the thinking hold (the guide while it waits).
         public var squint = false
-        public init(thinking: Bool = false, profile: String? = nil, followsTilt: Bool = false, state: BotFace.State = .idle, groupIndex: Int = 0, groupCount: Int = 1, still: Bool = false, squint: Bool = false) {
-            self.thinking = thinking; self.profile = profile; self.followsTilt = followsTilt
+        public init(thinking: Bool = false, profile: String? = nil, session: String? = nil, followsTilt: Bool = false, state: BotFace.State = .idle, groupIndex: Int = 0, groupCount: Int = 1, still: Bool = false, squint: Bool = false) {
+            self.thinking = thinking; self.profile = profile; self.session = session; self.followsTilt = followsTilt
             self.state = state; self.groupIndex = groupIndex; self.groupCount = groupCount; self.still = still; self.squint = squint
         }
     }
@@ -1118,7 +1126,9 @@ public struct BotFaceView: View {
 
     /// Seconds since the reference date when this bot's turn last finished, while the spin plays.
     private var finishedAt: Double? {
-        guard let p = mood.profile, let d = ambient.finished[p], Date().timeIntervalSince(d) < 1.8 else { return nil }
+        let d: Date?
+        if let s = mood.session { d = ambient.finishedSessions[s] } else if let p = mood.profile { d = ambient.finished[p] } else { d = nil }
+        guard let d, Date().timeIntervalSince(d) < 1.8 else { return nil }
         return d.timeIntervalSinceReferenceDate
     }
     private var tappedAt: Double? {

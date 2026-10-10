@@ -504,7 +504,7 @@ struct ChatHeader: View {
                     // the shape, not the frame), like a contact photo in Messages; it springs in from
                     // small on the first appearance.
                     BotAvatar(profile: chat.profileName, size: 52, active: chat.isRunning,
-                              mood: BotFaceView.Mood(state: chat.botState))
+                              mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
                         .opacity(popped ? 1 : 0)
                         .zIndex(1)
                         // The face's own tap gesture would swallow the tap before the button saw

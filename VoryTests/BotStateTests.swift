@@ -54,6 +54,20 @@ import Testing
     }
 }
 
+/// A finished turn is recorded for the chat it ended in as well as for the bot (1.5): the face
+/// that stands for that chat spins; the bot's other faces do not.
+@MainActor @Suite struct BotFinishKeyingTests {
+    @Test func aFinishIsKeyedByTheSessionAndTheBot() {
+        let a = BotAmbient()
+        a.turnFinished(profile: "work", session: "s-1")
+        #expect(a.finishedSessions["s-1"] != nil)
+        #expect(a.finished["work"] != nil)
+        #expect(a.finishedSessions["s-2"] == nil, "another chat of the same bot has no finish")
+        a.turnFinished(profile: "mascot")
+        #expect(a.finished["mascot"] != nil && a.finishedSessions.count == 1)
+    }
+}
+
 /// The pose a state asks for (`BotFace.motion`) and the widgets' still pose, as they are today.
 /// Serialized: one case sets the shared motion style and the others read it.
 @Suite(.serialized) struct BotMotionTodayTests {
