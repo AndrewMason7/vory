@@ -143,7 +143,8 @@ struct ConversationView: View {
                 ToolbarItem(placement: .principal) {
                     Button { showProfile = true } label: {
                         HStack(spacing: 7) {
-                            BotAvatar(profile: chat.profileName, size: 22)
+                            // The pose the header shows on the phone, in the pill (the Mac's toolbar hosts it).
+                            BotAvatar(profile: chat.profileName, size: 22, active: chat.isRunning, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
                             Text(botLabel(chat))
                                 .font(.headline).lineLimit(1)
                         }
