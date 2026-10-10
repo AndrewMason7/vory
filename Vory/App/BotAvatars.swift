@@ -122,6 +122,16 @@ enum BotAvatarStore {
         if let url = photoURL(for: profile) { try? FileManager.default.removeItem(at: url) }
         photoCache.removeObject(forKey: profile as NSString)
     }
+
+    /// A renamed bot's photo follows it (#315): the file moves, both caches are dropped.
+    static func movePhoto(from old: String, to new: String) {
+        guard let from = photoURL(for: old), let to = photoURL(for: new), from != to,
+              FileManager.default.fileExists(atPath: from.path) else { return }
+        try? FileManager.default.removeItem(at: to)
+        try? FileManager.default.moveItem(at: from, to: to)
+        photoCache.removeObject(forKey: old as NSString)
+        photoCache.removeObject(forKey: new as NSString)
+    }
 }
 
 /// The Creator Studio: pick the bot's body, its eyes and its colour, and watch it come alive.

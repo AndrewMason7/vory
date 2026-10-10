@@ -153,6 +153,20 @@ public actor HermesAPI {
         return (data, http)
     }
 
+    /// The methods a route answers, from the gateway's own `Allow` on an OPTIONS probe: a route
+    /// that exists but takes other methods answers 405 with them (the first route on that path,
+    /// as Starlette orders them), a missing route 404 with none. Used to offer a call only
+    /// where the gateway has it (the profile rename, #315). The relay carries no headers, so
+    /// through it the answer is empty.
+    public func allowedMethods(_ path: String, profile: String? = nil) async throws -> Set<String> {
+        var items: [URLQueryItem] = []
+        if let profile, !profile.isEmpty { items.append(URLQueryItem(name: "profile", value: profile)) }
+        let (_, http, _) = try await answered("OPTIONS", path, items: items, body: nil, authenticated: true)
+        if http.statusCode == 401 { throw HermesAPIError.unauthorized("") }
+        let allow = http.value(forHTTPHeaderField: "Allow") ?? ""
+        return Set(allow.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).uppercased() }.filter { !$0.isEmpty })
+    }
+
     /// A call made for another device (the watch, through its iPhone): the gateway's answer as
     /// it came, errors in the status, after this client's own sign-in renewal on a 401.
     public func forward(_ r: RelayedRequest) async throws -> RelayedResponse {

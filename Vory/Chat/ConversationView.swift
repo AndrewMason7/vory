@@ -40,6 +40,9 @@ struct ConversationView: View {
     @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
     private var confirmTitle: String { confirming?.choice == "deny" ? "Deny this action?" : "Approve this action?" }
+    /// Read where the bot's name shows, so a name saved on its card (#315) redraws the pill.
+    @AppStorage(BotNames.storageKey) private var namesRaw = ""
+    private func botLabel(_ chat: ChatSession) -> String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
     @Namespace private var glassNamespace
     @Environment(\.dismiss) private var dismiss
 
@@ -129,7 +132,7 @@ struct ConversationView: View {
                     Button { showProfile = true } label: {
                         HStack(spacing: 7) {
                             BotAvatar(profile: chat.profileName, size: 22)
-                            Text(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName)
+                            Text(botLabel(chat))
                                 .font(.headline).lineLimit(1)
                         }
                         .padding(.horizontal, 4)
@@ -463,7 +466,9 @@ struct ChatHeader: View {
     /// element would otherwise be the oldest message laid out.
     @AccessibilityFocusState private var backFocused: Bool
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
-    private var botLabel: String { chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
+    /// Read here so a name saved on the bot's card (#315) redraws the header.
+    @AppStorage(BotNames.storageKey) private var namesRaw = ""
+    private var botLabel: String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
     private var headline: String { headerShowsTitle ? chat.title : botLabel }
     private var idleLine: String { headerShowsTitle ? chat.subtitle : (chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title) }
 
