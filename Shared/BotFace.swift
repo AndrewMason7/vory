@@ -715,6 +715,9 @@ public enum BotFace {
     /// Set by the app: it can draw glass bots with real Liquid Glass (a backdrop exists). The
     /// extensions and offscreen renders keep the painted approximation.
     nonisolated(unsafe) public static var liveGlass = false
+    /// Set by the app (1.5, #304): painted bots run on the motion model (springs, symbols,
+    /// blinks on a schedule). Off in the extensions and on the Watch, which draw stills.
+    nonisolated(unsafe) public static var motionEngine = false
 
     /// The eyes' ink; on a glass bot they are dark glass, drawn a little lighter.
     static let ink = Color(red: 0.05, green: 0.05, blue: 0.07)
@@ -1037,6 +1040,12 @@ public struct BotFaceView: View {
     @State private var exitAt: Date = .distantPast
     /// The last pose rendered, kept in a box so recording it during a frame changes no state.
     @State private var shown = ShownPose()
+    /// The 1.5 motion model (springs per symbol, the blink schedule, the eye orbit); the
+    /// painted bot draws from its frames when `BotFace.motionEngine` is on.
+    @State private var model = BotMotionModel(seed: 0)
+    @State private var blinkTick = 0
+    /// Bumped once the model has settled so the timeline can pause (the model is no @State).
+    @State private var settledTick = 0
     private final class ShownPose { var pose: BotFace.Motion = .still }
     /// The blob's outline phase runs while it works and freezes where it stopped, so the outline
     /// never jumps when the routines start or end.
@@ -1253,6 +1262,8 @@ public struct BotFaceView: View {
         let finished = finishedAt
         let tapped = tappedAt
         let state = state
+        let engine = BotFace.motionEngine && !drawn && !(spec.isGlass && BotFace.liveGlass && scenePhase == .active)
+        let targets = BotMotionTargets.targets(for: state == .working && !active ? .idle : state)
         // The frame blends from the last pose for 0.4 s after a state change.
         let leaving = Date().timeIntervalSince(exitAt) < 0.5
         // Any state but idle keeps the clock running: the poses are functions of time.
@@ -1260,7 +1271,11 @@ public struct BotFaceView: View {
         let wobble = state == .working && (live || drawn)
         let ticks = live && (animating || eyesBusy || gaze != shownGaze)
         let _ = spinTick
-        TimelineView(.animation(minimumInterval: animating ? 1 / 30 : 1 / 24, paused: !ticks && !settling)) { timeline in
+        let _ = settledTick
+        let engineTicks = engine && live && (targets.loops || !model.isSettled || eyesBusy || gaze != shownGaze)
+        let interval = Self.tickInterval(engine: engine, size: size, animating: animating)
+        let paused = Self.pausedTimeline(engine: engine, engineTicks: engineTicks, ticks: ticks, settling: settling)
+        TimelineView(.animation(minimumInterval: interval, paused: paused)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let u = min(1, max(0, timeline.date.timeIntervalSince(gazeChangedAt) / 0.35))
             let ease = u * u * (3 - 2 * u)
@@ -1273,6 +1288,22 @@ public struct BotFaceView: View {
             Group {
                 if spec.isGlass && BotFace.liveGlass && !drawn && scenePhase == .active {
                     liveGlass(time: t, gaze: g, glanceFree: !held, motion: m, wobble: wobble, eyeLife: eyeLife)
+                } else if engine {
+                    // The motion model's frame: advanced here to the timeline's clock (held or
+                    // under Reduce Motion it is snapped to the state's still), then painted.
+                    Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
+                        let frame: BotMotionFrame
+                        if !live || reduceMotion {
+                            model.snap(to: targets, at: t); frame = model.advance(to: t, targets: targets)
+                        } else {
+                            frame = model.advance(to: t, targets: targets)
+                        }
+                        var f = frame
+                        // The eyes held (the Mac idle, a stacked face): open, no blink.
+                        if !eyeLife { f.eyeOpen = max(f.eyeOpen, 1) }
+                        f.eyeX += Double(g.x); f.eyeY += Double(g.y)
+                        BotFace.drawFrame(spec, in: &ctx, size: sz, frame: f, light: colorScheme == .light)
+                    }
                 } else {
                     // The painted twin: the view applies the transforms, so it gets them zeroed;
                     // the sheen, the hold and the dimming it paints itself.
@@ -1283,9 +1314,9 @@ public struct BotFaceView: View {
             }
             // The routines: a turn about the vertical axis (3D, on the spot), a small roll, a
             // tiny nod or lean. Nothing scales and nothing leaves the bot's footprint.
-            .rotation3DEffect(.radians(m.yaw), axis: (x: 0, y: 1, z: 0), perspective: 0)
-            .rotationEffect(.radians(m.roll))
-            .offset(x: m.dx * size, y: m.dy * size)
+            .rotation3DEffect(.radians(engine ? 0 : m.yaw), axis: (x: 0, y: 1, z: 0), perspective: 0)
+            .rotationEffect(.radians(engine ? 0 : m.roll))
+            .offset(x: engine ? 0 : m.dx * size, y: engine ? 0 : m.dy * size)
         }
         .animation(.interactiveSpring(response: 0.3), value: ambientGaze)
         // The bot leans with the phone: a few degrees, about the centre.
@@ -1293,6 +1324,29 @@ public struct BotFaceView: View {
         .rotation3DEffect(.degrees(Double(tilt.x) * 7), axis: (x: 0, y: 1, z: 0))
         .onChange(of: gaze) { old, new in
             gazeFrom = old; shownGaze = new; gazeChangedAt = Date()
+        }
+        .onChange(of: seed, initial: true) { _, s in if model.seed != s { model = BotMotionModel(seed: s) } }
+        // A finished turn: the eyes go once round the body (decision 9), on the engine.
+        .onChange(of: finished) { _, f in if engine, let f { model.spin(at: f) } }
+        // Once the springs have settled and nothing loops, one more pass lets the timeline
+        // pause; and between blinks an idle bot sleeps until the next one (one wakeup per blink).
+        .task(id: "\(engine)-\(live)-\(eyeLife)-\(targets.loops)-\(state)") {
+            guard engine, live else { return }
+            while !Task.isCancelled {
+                if !targets.loops, model.isSettled {
+                    let now = Date().timeIntervalSinceReferenceDate
+                    let next = BotMotionModel.nextBlink(after: now, seed: seed)
+                    eyesBusy = false
+                    settledTick += 1
+                    guard eyeLife else { return }
+                    try? await Task.sleep(for: .seconds(max(0.05, next - now)))
+                    eyesBusy = true
+                    try? await Task.sleep(for: .milliseconds(360))
+                    eyesBusy = false
+                } else {
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+            }
         }
         .onChange(of: state) { _, _ in
             let now = Date()
@@ -1349,6 +1403,17 @@ public struct BotFaceView: View {
             Task { try? await Task.sleep(for: .milliseconds(350)); eyesBusy = false }
         }
         .accessibilityHidden(true)
+    }
+
+    /// The frame cap: on the engine 60 fps from 64 pt up and 30 below (never uncapped on
+    /// ProMotion); the old routines 30 while animating and 24 for eyes alone.
+    private static func tickInterval(engine: Bool, size: CGFloat, animating: Bool) -> Double {
+        if engine { return size >= 64 ? 1.0 / 60.0 : 1.0 / 30.0 }
+        return animating ? 1.0 / 30.0 : 1.0 / 24.0
+    }
+    private static func pausedTimeline(engine: Bool, engineTicks: Bool, ticks: Bool, settling: Bool) -> Bool {
+        if engine { return !engineTicks && !settling }
+        return !ticks && !settling
     }
 
     /// Lets a paused bot draw a few more frames, so the frame it holds is current.

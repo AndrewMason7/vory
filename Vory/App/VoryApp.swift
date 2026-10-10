@@ -20,6 +20,8 @@ struct VoryApp: App {
         ImageTranscode.install()
         TypingHaptics.shared.start()
         BotFace.liveGlass = true
+        // The 1.5 motion: painted bots run on the model (#304).
+        BotFace.motionEngine = true
         _model = State(initialValue: AppModel.shared)
     }
     @Environment(\.scenePhase) private var scenePhase
