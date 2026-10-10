@@ -356,6 +356,10 @@ struct TranscriptView: View {
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [visibleItems.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear { openedAt = Date(); refreshMentionNames() }
+            // The thread's place after a layout switch rebuilt it: the distance from the end it
+            // had (`ChatViewMemory`), put back once the content is laid out; at the end, nothing.
+            .onDisappear { ChatViewMemory.setDistanceFromEnd(metrics.stickToBottom || metrics.distanceFromBottom < 24 ? nil : metrics.distanceFromBottom, for: chat) }
+            .task { await restoreDistanceFromEnd() }
             // The names "@" can mean: the gateway's bots (name and label) and the person's own.
             .onChange(of: chat.runtime.profiles.map(\.name)) { _, _ in refreshMentionNames() }
             // Once the history is in and laid out, make sure the end is really on screen.
@@ -483,6 +487,20 @@ extension TranscriptView {
             #endif
             withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
         }
+    }
+
+    /// Puts the thread back where it was before a layout switch (see `ChatViewMemory`).
+    private func restoreDistanceFromEnd() async {
+        guard let d = ChatViewMemory.distanceFromEnd[ChatViewMemory.key(for: chat)], d > 24 else { return }
+        ChatViewMemory.setDistanceFromEnd(nil, for: chat)
+        // The content is laid out and the default anchor has it at the end.
+        for _ in 0..<40 {
+            if metrics.contentHeight > metrics.containerHeight, metrics.offsetY > 0 { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        guard metrics.contentHeight > metrics.containerHeight else { return }
+        metrics.stickToBottom = false
+        scrollPosition.scrollTo(y: max(0, metrics.offsetY - d))
     }
 
     private func landAfterResume() async {

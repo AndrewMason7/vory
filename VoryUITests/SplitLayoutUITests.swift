@@ -95,6 +95,32 @@ final class SplitLayoutUITests: XCTestCase {
         return candidates.first(where: { $0.isHittable }) ?? candidates.min(by: { $0.frame.midY < $1.frame.midY })
     }
 
+    /// A regular-width window that is upright and under 700 pt wide (the open Duo in portrait,
+    /// 669 pt): one column, the chat pushed over the list, as on a phone (Matt, 2026-10-10),
+    /// never the system's dimmed list overlay. Runs where the window is that shape; skipped
+    /// elsewhere.
+    func testOneColumnOnANarrowUprightWindow() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        XCUIDevice.shared.orientation = .portrait
+        connectIfNeeded(url: url, token: token)
+        let frame = app.windows.firstMatch.frame
+        guard frame.width < 700, frame.height > frame.width, frame.width > 500 else { throw XCTSkip("not a narrow upright window (\(Int(frame.width))x\(Int(frame.height)))") }
+        XCTAssertFalse(app.staticTexts["No chat selected"].firstMatch.exists, "a placeholder column on a narrow upright window")
+        let text = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 40), "the chat list never showed the mock's chats")
+        shot("narrow-upright-1-list")
+        if let r = row("Disk cleanup") { r.tap() } else { text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        let back = app.buttons["chat.back"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 15), "the chat did not open")
+        sleep(2)
+        shot("narrow-upright-2-chat")
+        XCTAssertLessThan(back.frame.minX, 80, "the chat does not cover the window: Back sits at \(Int(back.frame.minX))")
+        XCTAssertFalse(row("Weekly dependency audit")?.isHittable == true, "the list is still beside (or over) the chat")
+        let composer = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        XCTAssertTrue(composer.isHittable, "the composer is hidden (under the bar?)")
+    }
+
     func testTheListStaysBesideTheOpenChatOnAWideWindow() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -131,7 +157,8 @@ final class SplitLayoutUITests: XCTestCase {
         XCTAssertTrue(back.waitForExistence(timeout: 10))
         sleep(1)
         shot("split-3-another-chat")
-        // Rotated to portrait the window is still regular width on an iPad: both columns stay.
+        // Rotated to portrait an iPad's window is still at least 700 pt wide: both columns stay
+        // (the open Duo upright, at 669 pt, gets one column: `testOneColumnOnANarrowUprightWindow`).
         XCUIDevice.shared.orientation = .portrait
         sleep(2)
         XCTAssertTrue(back.exists, "the open chat was lost on rotation")

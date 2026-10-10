@@ -12,6 +12,8 @@ import VoryCore
 struct ChatsSplitPage: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.wideLayout) private var wide
     @State private var columns = NavigationSplitViewVisibility.doubleColumn
 
     /// The list's column: 380 pt where the window is wide enough for both columns at that (the
@@ -36,6 +38,10 @@ struct ChatsSplitPage: View {
             ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
         }
         .navigationSplitViewStyle(.balanced)
+        // One column where the layout is not wide (the open Duo upright, a narrow window): the
+        // split view collapses as it does on a phone, the chat pushed over the list, rather
+        // than the dimmed list overlay the system gives a regular-width portrait window.
+        .environment(\.horizontalSizeClass, wide ? sizeClass : .compact)
     }
 }
 
