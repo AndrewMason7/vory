@@ -490,11 +490,9 @@ extension TranscriptView {
     }
 
     private func refreshMentionNames() {
-        var bots: [String] = []
-        for p in chat.runtime.profiles {
-            bots.append(p.name)
-            if p.label != p.name { bots.append(p.label) }
-        }
+        // Every name a bot answers to: its folder name, the gateway's display name and the one
+        // given in Vory (#315), without repeats.
+        let bots = Mentions.botNames(for: chat.runtime.profiles)
         let person = UserDefaults.standard.string(forKey: "user.name")
         Mentions.names = Mentions.Names(bots: bots, person: person)
     }
