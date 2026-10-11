@@ -1542,6 +1542,10 @@ public struct BotFaceView: View {
     /// The frame cap: on the engine 60 fps from 64 pt up and 30 below (never uncapped on
     /// ProMotion); the old routines 30 while animating and 24 for eyes alone.
     private static func tickInterval(engine: Bool, size: CGFloat, animating: Bool) -> Double {
+        #if os(macOS)
+        // 30 fps everywhere on the Mac (the brief's rule, until a measurement shows 60 is free).
+        if engine { return 1.0 / 30.0 }
+        #endif
         if engine { return size >= 64 ? 1.0 / 60.0 : 1.0 / 30.0 }
         return animating ? 1.0 / 30.0 : 1.0 / 24.0
     }
@@ -1555,8 +1559,11 @@ public struct BotFaceView: View {
         settleGeneration += 1
         let generation = settleGeneration
         settling = true
+        // Under Reduce Motion the held timeline is what draws the 0.2 s crossfade: it stays
+        // awake past the fade's end, not 160 ms into it.
+        let held = reduceMotion && BotFace.motionEngine && !drawn ? Int(Self.reducedFade * 1000) + 120 : 160
         Task {
-            try? await Task.sleep(for: .milliseconds(160))
+            try? await Task.sleep(for: .milliseconds(held))
             if settleGeneration == generation { settling = false }
         }
     }
