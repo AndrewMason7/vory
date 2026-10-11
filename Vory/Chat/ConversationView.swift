@@ -20,7 +20,7 @@ struct ConversationView: View {
     @State private var dockBottom: CGFloat = 0
     #if os(iOS)
     /// The tab bar's height under the chat, when it is there and runs along the bottom.
-    private var barReserve: CGFloat { model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) }
+    private var barReserve: CGFloat { model.tabBarReserved && !model.tabBarVertical ? VoryTabBar.reservedHeight(in: windowGeometry) : 0 }
     /// The fold of a partly open Duo across the window (Step D): a dock the keyboard has pushed
     /// onto it moves up above it, with Apple's margin, so the field is never under the fold.
     @Environment(\.reservedRegions) private var regions
@@ -80,6 +80,7 @@ struct ConversationView: View {
                         model.newChatRequest = UUID()
                     }
                     .onDisappear {
+                        Perf.stamp("pop: conversation disappeared")
                         if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
                         if model.visibleChat === chat { model.visibleChat = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
@@ -691,23 +692,42 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
     /// 1 for a completed one, to be animated over `duration`).
     nonisolated(unsafe) static var onProgress: ((_ fraction: CGFloat, _ ended: Bool, _ duration: Double) -> Void)?
     private var tracking = false
+    /// The stack's depth when the swipe began: a pop that has already finished by the time
+    /// the finger lifts (a quick flick) shows as one controller fewer.
+    private var depthAtBegin = 0
 
     @objc private func track(_ g: UIPanGestureRecognizer) {
         guard let nav, let view = g.view else { return }
         switch g.state {
         case .began, .changed:
             guard nav.transitionCoordinator?.isInteractive == true || g.state == .began else { return }
+            if !tracking { Perf.stamp("pop: swipe began"); depthAtBegin = nav.viewControllers.count }
             tracking = true
             let fraction = max(0, min(1, g.translation(in: view).x / max(1, view.bounds.width)))
             Self.onProgress?(fraction, false, 0)
         case .ended, .cancelled, .failed:
             guard tracking else { return }
             tracking = false
-            if let c = nav.transitionCoordinator, c.isInteractive {
+            Perf.stamp("pop: swipe released")
+            if let c = nav.transitionCoordinator {
                 let duration = c.transitionDuration
-                c.notifyWhenInteractionChanges { ctx in Self.onProgress?(ctx.isCancelled ? 0 : 1, true, max(0.15, duration * (1 - Double(ctx.percentComplete)))) }
+                let remaining = { (ctx: UIViewControllerTransitionCoordinatorContext) in max(0.15, duration * (1 - Double(ctx.percentComplete))) }
+                if c.isInteractive {
+                    c.notifyWhenInteractionChanges { ctx in
+                        Perf.stamp("pop: interaction ended cancelled=\(ctx.isCancelled) at \(ctx.percentComplete)")
+                        Self.onProgress?(ctx.isCancelled ? 0 : 1, true, remaining(ctx))
+                    }
+                } else {
+                    // The system's own handler ran first and has already decided the end.
+                    Perf.stamp("pop: swipe end decided cancelled=\(c.isCancelled) at \(c.percentComplete)")
+                    Self.onProgress?(c.isCancelled ? 0 : 1, true, remaining(c))
+                }
+                c.animate(alongsideTransition: nil) { ctx in Perf.stamp("pop: transition completed cancelled=\(ctx.isCancelled)") }
             } else {
-                Self.onProgress?(0, true, 0.2)
+                // No transition left: a flick that has already popped, or a pan that never did.
+                let popped = nav.viewControllers.count < depthAtBegin
+                Perf.stamp("pop: swipe ended with no transition, popped=\(popped)")
+                Self.onProgress?(popped ? 1 : 0, true, 0.2)
             }
         default: break
         }

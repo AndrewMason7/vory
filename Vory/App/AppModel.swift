@@ -232,6 +232,14 @@ final class AppModel {
     /// A keyboard is up somewhere: the bar hides rather than floating over it.
     var keyboardUp = false
     var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen && !wideLayout) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
+    /// Chats and rooms pushed on the Chats tab's one-column stack, counted while on screen.
+    /// A pop empties the path the moment the swipe is let go (or Back is tapped), half a
+    /// second before the chat has slid away; the bar's reserved size snapping back right then
+    /// re-laid out the chat under the finger (the thread bounced, Matt, 2026-10-11). The bar's
+    /// slide still starts with the path; the room it takes waits for the chat to be gone.
+    var chatsOnScreen = 0
+    /// Whether the pages make room for the bar along their edge right now.
+    var tabBarReserved: Bool { !tabBarHidden && !(selectedTab == .chats && !wideLayout && chatsOnScreen > 0) }
 
     init() {
         let store = ConnectionStore()

@@ -53,10 +53,11 @@ struct ChatsSplitPage: View {
                     // The bar starts coming back the instant a pop begins (the path empties at
                     // the start of the transition), reported for the list and the bar.
                     .onChange(of: model.chatPath.isEmpty, initial: true) { _, empty in
+                        Perf.stamp("pop: path empty=\(empty)")
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
                     }
-                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
-                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
+                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).countsChatOnScreen() }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen() }
             }
         }
     }

@@ -252,11 +252,16 @@ struct MainTabView: View {
                         y: !vertical ? 140 * hiddenFraction : 0)
                 .opacity(1 - hiddenFraction)
                 // The slide and fade animate; the reserved size below does not. Animating the
-                // safe-area inset while a chat opened made its thread bounce up and down.
+                // safe-area inset while a chat opened made its thread bounce up and down. The
+                // size comes back only after a popped chat has gone (`tabBarReserved`): with the
+                // path alone it snapped back half a second early and re-laid out the chat while
+                // it slid away.
                 .animation(.snappy(duration: 0.3), value: model.tabBarHidden)
-                .frame(width: vertical ? (model.tabBarHidden ? 0 : VoryTabBar.reservedWidth) : nil,
-                       height: vertical ? nil : (model.tabBarHidden ? 0 : barHeight),
-                       alignment: .top)
+                // Anchored to the window's edge: with no room reserved the bar stands over
+                // the page (as the system's does over a chat sliding away), not below the screen.
+                .frame(width: vertical ? (model.tabBarReserved ? VoryTabBar.reservedWidth : 0) : nil,
+                       height: vertical ? nil : (model.tabBarReserved ? barHeight : 0),
+                       alignment: vertical ? .top : .bottom)
                 // Not tappable while it slides away: a tap then switched tabs under an open chat.
                 .allowsHitTesting(!model.tabBarHidden)
                 .accessibilityHidden(model.tabBarHidden)
@@ -299,7 +304,7 @@ struct MainTabView: View {
         // inset on this iOS (their last rows ended under the bar), so their scroll content gets
         // the bar's height plus a breath of room. Inside a chat the bar is hidden and this is 0;
         // the thread measures its own margin against the composer.
-        .contentMargins(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : barHeight + 16, for: .scrollContent)
+        .contentMargins(.bottom, model.tabBarReserved && !model.tabBarVertical ? barHeight + 16 : 0, for: .scrollContent)
         // No blank band under the bar at the top of any page: the first card sits right there.
         .contentMargins(.top, 0, for: .scrollContent)
         // "Read replies aloud" listens for finished replies in the chat in front.
@@ -309,6 +314,7 @@ struct MainTabView: View {
         .onAppear {
             FullScreenPop.onProgress = { fraction, ended, duration in
                 if ended {
+                    Perf.stamp("pop: progress ended fraction=\(fraction) over \(duration)")
                     withAnimation(.easeOut(duration: duration)) { model.popProgress = fraction }
                     // After the transition the path has changed and the bar is shown by its own
                     // state again; the progress goes back to zero for the next chat, unanimated.
@@ -319,6 +325,7 @@ struct MainTabView: View {
                 }
             }
         }
+        .onChange(of: model.tabBarHidden) { _, h in Perf.stamp("pop: tabBarHidden=\(h)") }
         .onChange(of: tabs) { _, now in
             // The selected tab was removed from the layout: fall back to Chats instead of a blank pane.
             if !now.contains(model.selectedTab) { model.selectedTab = .chats }

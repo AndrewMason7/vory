@@ -158,8 +158,8 @@ struct ChatListView: View {
         } else {
             NavigationStack(path: path) {
                 content
-                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
-                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
+                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).countsChatOnScreen() }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen() }
             }
         }
     }
