@@ -1541,10 +1541,12 @@ public struct BotFaceView: View {
 
     /// The frame cap: on the engine 60 fps from 64 pt up and 30 below (never uncapped on
     /// ProMotion); the old routines 30 while animating and 24 for eyes alone.
-    private static func tickInterval(engine: Bool, size: CGFloat, animating: Bool) -> Double {
+    private static func tickInterval(engine: Bool, size: CGFloat, animating: Bool) -> Double? {
         #if os(macOS)
-        // 30 fps everywhere on the Mac (the brief's rule, until a measurement shows 60 is free).
-        if engine { return 1.0 / 30.0 }
+        // On the Mac the engine follows the display while it moves (60, or 120 on ProMotion;
+        // Matt, 2026-10-10: "absolutely smooth"); idle stays paused, so the rate costs nothing
+        // then.
+        if engine { return nil }
         #endif
         if engine { return size >= 64 ? 1.0 / 60.0 : 1.0 / 30.0 }
         return animating ? 1.0 / 30.0 : 1.0 / 24.0
