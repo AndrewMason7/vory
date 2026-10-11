@@ -938,7 +938,9 @@ public enum BotFace {
 @MainActor @Observable
 public final class BotAmbient {
     public static let shared = BotAmbient()
-    /// −1…1 on each axis; decays back to zero when the scrolling stops.
+    /// −1…1 on each axis. Nothing drives it any more: the bots used to look where a list was
+    /// scrolling, which redrew every visible face on every scroll frame (Matt, 2026-10-10:
+    /// "get rid of look where you scroll"); the tilt lean has its own value.
     public var gaze: CGPoint = .zero
     /// −1…1: roll (x) and pitch (y) away from the resting hold.
     public var tilt: CGPoint = .zero
@@ -960,38 +962,12 @@ public final class BotAmbient {
         true
         #endif
     }
-    /// True while a list is being scrolled (cleared shortly after the last movement); the Bots
-    /// page bots play while it is.
-    public var scrolling = false
     /// When each bot (by profile name) last finished a turn: it spins once at that moment.
     public var finished: [String: Date] = [:]
     /// The same by chat (stored id): a face that stands for a chat spins for that chat only.
     public var finishedSessions: [String: Date] = [:]
-    private var decayTask: Task<Void, Never>?
-    private var lastGazeAt: Date = .distantPast
 
     public init() {}
-
-    /// A scroll of `dy` points (positive = content moving up, the finger swiping up). Every bot
-    /// on screen observes `gaze`, so it moves at most ~16 times a second and only when the change
-    /// is worth a redraw; `scrolling` is set once, not on every tick.
-    public func scrolled(dy: CGFloat) {
-        guard abs(dy) > 0.5 else { return }
-        let now = Date()
-        if enabled, now.timeIntervalSince(lastGazeAt) > 0.06 {
-            let y = max(-1, min(1, gaze.y * 0.6 + CGFloat(-dy) / 40))
-            if abs(y - gaze.y) > 0.03 { gaze = CGPoint(x: gaze.x, y: y) }
-            lastGazeAt = now
-        }
-        if !scrolling { scrolling = true }
-        decayTask?.cancel()
-        decayTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(450))
-            guard !Task.isCancelled, let self else { return }
-            self.gaze = .zero
-            self.scrolling = false
-        }
-    }
 
     public func turnFinished(profile: String, session: String? = nil) {
         finished[profile] = Date()
@@ -1539,16 +1515,12 @@ public struct BotFaceView: View {
         .accessibilityHidden(true)
     }
 
-    /// The frame cap: on the engine 60 fps from 64 pt up and 30 below (never uncapped on
-    /// ProMotion); the old routines 30 while animating and 24 for eyes alone.
+    /// The engine follows the display while it moves (60, or 120 on ProMotion; Matt,
+    /// 2026-10-10: "absolutely smooth", "60-120fps"); idle stays paused, so the rate costs
+    /// nothing then. The old routines (extensions and the Watch, where the engine is off) keep
+    /// 30 while animating and 24 for eyes alone.
     private static func tickInterval(engine: Bool, size: CGFloat, animating: Bool) -> Double? {
-        #if os(macOS)
-        // On the Mac the engine follows the display while it moves (60, or 120 on ProMotion;
-        // Matt, 2026-10-10: "absolutely smooth"); idle stays paused, so the rate costs nothing
-        // then.
         if engine { return nil }
-        #endif
-        if engine { return size >= 64 ? 1.0 / 60.0 : 1.0 / 30.0 }
         return animating ? 1.0 / 30.0 : 1.0 / 24.0
     }
     private static func pausedTimeline(engine: Bool, engineTicks: Bool, ticks: Bool, settling: Bool) -> Bool {

@@ -40,7 +40,9 @@ struct TypingDots: View {
     }
 
     private var moving: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+        // At the display's rate (no minimum interval): the hop is motion, and Matt wants every
+        // movement at 60 to 120 fps.
+        TimelineView(.animation) { timeline in
             dots(at: timeline.date.timeIntervalSinceReferenceDate)
         }
     }

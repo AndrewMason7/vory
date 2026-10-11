@@ -87,6 +87,8 @@ struct ConversationView: View {
                         model.runtime?.returnToDefaultProfile()
                     }
                     .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
+                    .onChange(of: showProfile) { _, _ in Smooth.animate("botCard") }
+                    .onChange(of: chat.isRunning, initial: true) { _, running in if running { Smooth.begin("turn") } else { Smooth.end("turn") } }
                     .sheet(isPresented: $renaming) { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
                     // A tapped "@bot" opens that bot's card; every other link goes its usual way.
                     .environment(\.openURL, OpenURLAction { url in
@@ -180,17 +182,14 @@ struct ConversationView: View {
         thread(chat)
             // Like Messages: header and dock float over the thread and the text scrolls under their glass.
             // On a wide layout the dock keeps to the reading column, as on the Mac.
-            // The thread blurs and fades under the header and under the dock across the whole
-            // column: bands of material that thin out toward the thread, the card's treatment
-            // (a phone got something like it at the top from the status bar's edge effect; a
-            // wide column has no status bar, and the text read crisp through the header and
-            // past the composer).
-            .overlay(alignment: .bottom) { dockBand }
+            // No band under the header or under the dock (Matt, on the phone, 2026-10-10: "I
+            // dont like the fade at the top or the bottom, you should see the messages from all
+            // the way behind the message bar and behind the name"): the thread runs under both
+            // and shows through their glass; only its rest margins keep the ends clear.
             // Above the tab bar when the bar stands under the chat (a wide layout with the bar
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
             .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift) }
-            .overlay(alignment: .top) { headerBand }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             // The keyboard as the window has it (in window space, re-placed on every resize or
             // fold); the thread moves by the same value, so the two arrive together.
@@ -288,57 +287,6 @@ struct ConversationView: View {
                 }
             }
     }
-    #if os(iOS)
-    /// The page's own background, solid over the header's full height (plus the top inset) and
-    /// fading to clear over the 28 pt below the pill: the thread fades out under the header the
-    /// way it would under a bar's soft edge, never a grey slab (Matt, in dark mode the band read
-    /// as a panel; black must stay black).
-    private var headerBand: some View {
-        // Measured from the header itself: the band is solid down to the header's bottom edge
-        // (`headerBottom`, in window space, like the band's own frame), then fades. The sum
-        // of the header's height and the top inset was the same thing until measured.
-        GeometryReader { g in
-            let top = g.frame(in: .global).minY
-            let solid = headerBottom > 0 ? max(0, headerBottom - top) : headerHeight + windowGeometry.safeArea.top
-            let height = solid + ChatStyle.bandFade
-            Rectangle().fill(Color(.systemBackground))
-                .frame(height: height)
-                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid / height), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-                .frame(maxHeight: .infinity, alignment: .top)
-        }
-        .ignoresSafeArea(.container, edges: .top)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-    /// Below the bar only (Matt, 2026-10-10: the fade above the bar was "too high", he wants
-    /// the thread's text seen through the field's Liquid Glass as in 1.4): the page's own
-    /// background from a few points inside the field's bottom edge down to the window's bottom
-    /// (the keyboard's share included), so nothing of the thread shows between the field and
-    /// the keyboard or under the home indicator. The short soft edge sits inside the glass.
-    /// Measured from the dock's bottom edge (`dockBottom`, window space, above the keyboard
-    /// padding): summing heights counted the home indicator twice with the keyboard up.
-    private var dockBand: some View {
-        GeometryReader { g in
-            // Down to the window's own bottom edge: with the keyboard up the reader stops at the
-            // container inset, 34 pt short, and the thread showed through the keyboard's
-            // translucent bottom row; the band is pushed the rest of the way.
-            let readerBottom = g.frame(in: .global).maxY
-            let bottom = max(readerBottom, windowGeometry.bounds.maxY)
-            // The field's bottom edge is 8 pt inside the dock (`BottomDock`); the band starts 6 pt inside the field.
-            let solid = dockBottom > 0 ? max(0, bottom - (dockBottom - 14)) : windowGeometry.safeArea.bottom + keyboardInset
-            let soft: CGFloat = 8
-            let height = solid + soft
-            Rectangle().fill(Color(.systemBackground))
-                .frame(height: height)
-                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: soft / height), .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom))
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .offset(y: bottom - readerBottom)
-        }
-        .ignoresSafeArea(.container, edges: .bottom)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-    #endif
 
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)

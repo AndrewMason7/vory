@@ -2445,14 +2445,25 @@ async def main() -> None:
     ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
+    ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
     args = ap.parse_args()
+    titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
+    def extra_session(i: int, profile: str) -> dict:
+        return {"id": f"2026100{i % 9}_1200{i % 100:02d}_{profile[:6]}{i:04x}", "title": titles[i % len(titles)],
+                "preview": "Done; nothing else needs a hand right now.", "source": "tui", "model": MODEL,
+                "started_at": time.time() - 200000 - i * 3600, "last_active": time.time() - 190000 - i * 3600,
+                "message_count": 4, "is_active": False, "archived": False, "pinned": False, "profile": profile, "cwd": "/srv/app"}
     for i in range(args.extra_sessions):
-        titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
-        row = {"id": f"2026100{i % 9}_1200{i:02d}_x{i:04x}", "title": titles[i % len(titles)],
-               "preview": "Done; nothing else needs a hand right now.", "source": "tui", "model": MODEL,
-               "started_at": time.time() - 200000 - i * 3600, "last_active": time.time() - 190000 - i * 3600,
-               "message_count": 4, "is_active": False, "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"}
+        row = extra_session(i, "default")
         STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
+    bot_names = ["ops", "research", "writer", "builder", "support", "data", "design", "finance", "legal", "qa", "infra", "growth"]
+    for b in range(args.extra_bots):
+        name = bot_names[b % len(bot_names)] + ("" if b < len(bot_names) else str(b // len(bot_names) + 1))
+        PROFILES.append(name)
+        PROFILE_ROWS.append({"name": name, "path": f"/home/hermes/.hermes-{name}", "is_default": False, "description": f"{name.capitalize()} profile", "skill_count": 5 + b % 9})
+        for k in range(4):
+            row = extra_session(1000 + b * 4 + k, name)
+            STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
     global TOKEN
     TOKEN = args.token
     if args.password_auth:

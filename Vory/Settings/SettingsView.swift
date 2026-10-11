@@ -224,7 +224,8 @@ struct GatewaysView: View {
                 }
             }
             Section {
-                Button { showAdd = true } label: { Label("Add Gateway", systemImage: "plus") }
+                Button { Smooth.animate("gatewaySheet"); showAdd = true } label: { Label("Add Gateway", systemImage: "plus") }
+                    .accessibilityIdentifier("settings.addGateway")
                 if let rt = model.runtime {
                     Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
                     if case .authRejected(let why) = rt.socketState {
@@ -490,7 +491,7 @@ struct BotsSettingsView: View {
                 .disabled(!motion)
                 .onChange(of: tilt) { _, _ in BotMotionSource.shared.apply() }
             } footer: {
-                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. Bots look where you scroll. With tilt on, they also lean with \(DeviceWords.the) and, on the Bots page, follow its angle with their eyes.")
+                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. With tilt on, they also lean with \(DeviceWords.the) and, on the Bots page, follow its angle with their eyes.")
             }
             #else
             // The same switch and styles on the Mac (decision E); the gyroscope lean is the phone's.
@@ -1047,7 +1048,7 @@ struct RainOverlay: View {
         return Drop(x: 0.18 + col * 0.64 + jitter, speed: speed, phase: phase, len: len)
     }
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 40)) { tl in
+        TimelineView(.animation) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
             Canvas { ctx, size in
                 for d in Self.drops {

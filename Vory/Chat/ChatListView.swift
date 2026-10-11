@@ -219,6 +219,7 @@ struct ChatListView: View {
                         // (the closed Duo), or beside a narrow column on the open one: sort and
                         // filters share one View menu there, so the strip and the title keep room.
                         Menu { sortMenu; filterMenu } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                            .simultaneousGesture(TapGesture().onEnded { Smooth.animate("viewMenu") })
                             .accessibilityLabel("View")
                             .accessibilityIdentifier("chats.view")
                     } else {
@@ -447,6 +448,7 @@ struct ChatListView: View {
             Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                 .accessibilityLabel(filtering ? "Filters (on)" : "Filters")
         }
+        .simultaneousGesture(TapGesture().onEnded { Smooth.animate("viewMenu") })
         .accessibilityIdentifier("chats.filters")
     }
 
@@ -598,10 +600,6 @@ struct ChatListView: View {
         .onChange(of: model.focusSearchRequest) { _, r in if r != nil { searchFocused = true } }
         // ⌥⌘↓ / ⌥⌘↑ from the Chat menu: the row after or before the open one.
         .onChange(of: model.chatStepRequest?.id) { _, _ in if let r = model.chatStepRequest { step(r.direction, runtime: runtime) } }
-        #else
-        // The system drawer: out of sight until the list is pulled down, like Mail.
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
-        .textInputAutocapitalization(.never).autocorrectionDisabled()
         #endif
         // Wider rows: the card hugs the screen edges and the rows their card.
         .contentMargins(.horizontal, ChatRowStyle.cardInset, for: .scrollContent)
@@ -610,8 +608,6 @@ struct ChatListView: View {
         // down its length; the bar is brought back inside the column.
         .contentMargins(.trailing, 8, for: .scrollIndicators)
         #endif
-        // The bots in the rows look where the list is going.
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
         // At the foot of the list, like Mail's status line: at the top it lay over the first
         // chat's title. The list is anchored at its top, so the rows do not move when it
@@ -627,13 +623,12 @@ struct ChatListView: View {
             SummaryProgressStrip().padding(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 6)
         }
         #endif
-        #if os(macOS)
         // A bar, not a plain inset: the rows fade out under it the way they do under the
-        // toolbar, instead of showing through behind the search field.
+        // toolbar, instead of showing through behind the search field. On the phone too (Matt):
+        // the system's search drawer sat exactly where the pull-to-refresh spinner draws, so
+        // the spinner turned inside the field; our field is pinned above the list and the
+        // spinner turns below it.
         .safeAreaBar(edge: .top, spacing: 0) { topBars(runtime) }
-        #else
-        .safeAreaInset(edge: .top, spacing: 0) { topBars(runtime) }
-        #endif
         .animation(.snappy, value: runtime.restartRequired == nil)
         .animation(.snappy, value: model.needsSignIn == nil)
         .onChange(of: scrollToTop) { _, _ in
@@ -646,9 +641,7 @@ struct ChatListView: View {
     /// What sits over the list: the search field on the Mac, then whatever needs saying.
     private func topBars(_ runtime: GatewayRuntime) -> some View {
         VStack(spacing: 0) {
-            #if os(macOS)
             searchField
-            #endif
             if let waiting = model.needsSignIn {
                 GatewaySignInBanner(connection: waiting)
                     .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)

@@ -259,9 +259,8 @@ struct TranscriptView: View {
                                         frame: { scrollTop = $0.minY; scrollBottom = $0.maxY },
                                         shapeChanged: { autoInsetFixed = nil },
                                         keyboard: { keyboardMoved(to: $0) }))
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, new in
                 metrics.offsetY = new
-                if metrics.userScrolling { BotAmbient.shared.scrolled(dy: new - old) }
             }
             // A tool card or reasoning block that opened low on the screen grew under the
             // composer; once its height has settled, the thread scrolls just enough to show

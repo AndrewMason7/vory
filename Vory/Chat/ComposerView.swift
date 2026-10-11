@@ -502,6 +502,7 @@ struct ComposerView: View {
         }
         .menuOrder(.fixed)
         .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture().onEnded { Smooth.animate("modelChip") })
         .accessibilityIdentifier("composer.modelChip")
         .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "medium"))")
     }
@@ -560,6 +561,7 @@ struct ComposerView: View {
             // first build with Voice mode in it).
             // The slash list closes with it: on the Duo the two stood open together, the panel pushed up onto the fold.
             if !showAttach { focused = false; attachTappedAt = Date(); menuDismissed = true }
+            Smooth.animate("plusPanel")
             withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding

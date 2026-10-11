@@ -62,6 +62,7 @@ struct RootView: View {
         }
         .animation(.default, value: model.lock.isLocked)
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        .background { TouchSignpostProbe().frame(width: 0, height: 0) }
         // The fold and the camera, for every floating piece below (Step D).
         .modifier(ReservedRegionsEnvironment())
         #if DEBUG

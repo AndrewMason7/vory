@@ -36,7 +36,6 @@ struct BotsView: View {
                     .readingColumn(720)
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
             .navigationTitle("Bots")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search bots")
             .tabRoot(.bots)

@@ -31,7 +31,9 @@ struct TabBarMinimizeObserver: UIViewRepresentable {
             stop()
             guard window != nil else { return }
             let l = CADisplayLink(target: self, selector: #selector(tick))
-            l.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 60, preferred: 30)
+            // Every frame of the display, so the floating button moves on the same frame the
+            // bar does (at 30 it lagged the bar by up to three frames on ProMotion).
+            l.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
             l.add(to: .main, forMode: .common)
             link = l
         }

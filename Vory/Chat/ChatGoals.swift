@@ -257,7 +257,9 @@ struct ChatGoalLine: View {
             }
             .font(font)
             .foregroundStyle(.tint)
-            .contentTransition(.opacity)
+            // The words swap at once and only the width animates: a crossfade drew both
+            // strings on top of each other while fast tool steps changed the line.
+            .contentTransition(.identity)
             .animation(.snappy, value: text)
             .accessibilityLabel(goal.map { "Working on: \($0)" } ?? text)
         }

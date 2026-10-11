@@ -69,6 +69,10 @@
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
 	<true/>
+	<!-- Timelines and display links may run above 60 Hz on ProMotion phones; without this
+	     iOS holds the app's own animation to 60 whatever the range asks for. -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<!-- One window on the iPad. Every window shares the one app model, so a
