@@ -1359,7 +1359,7 @@ public struct BotFaceView: View {
         let paused = Self.pausedTimeline(engine: engine, engineTicks: engineTicks, ticks: ticks, settling: settling)
         TimelineView(.animation(minimumInterval: interval, paused: paused)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
-            let _ = BotFace.tickHook?(paused ? "face-paused-eval" : "face-tick")
+            let _ = BotAmbient.tickHook?(paused ? "face-paused-eval" : "face-tick")
             let u = min(1, max(0, timeline.date.timeIntervalSince(gazeChangedAt) / 0.35))
             let ease = u * u * (3 - 2 * u)
             let g0 = CGPoint(x: gazeFrom.x + (gaze.x - gazeFrom.x) * ease, y: gazeFrom.y + (gaze.y - gazeFrom.y) * ease)

@@ -24,7 +24,7 @@ struct VoryApp: App {
         // `-vory-motion-engine NO` leaves the 1.4 drawing on, for the CPU comparison (section 6).
         BotFace.motionEngine = UserDefaults.standard.object(forKey: "vory-motion-engine") == nil || UserDefaults.standard.bool(forKey: "vory-motion-engine")
         #if DEBUG
-        BotFace.tickHook = { Perf.tick($0) }
+        BotAmbient.tickHook = { Perf.tick($0) }
         #endif
         _model = State(initialValue: AppModel.shared)
     }
