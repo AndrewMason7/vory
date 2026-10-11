@@ -32,6 +32,9 @@ struct ChatListView: View {
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
     /// and a click replaces the one showing. On the phone the list owns its own stack and pushes.
     var detailPath: Binding<NavigationPath>? = nil
+    /// A stack around the list that someone else owns (ChatsSplitPage's one-column root): the
+    /// list pushes onto it instead of its own; the destinations are the owner's.
+    var stackPath: Binding<NavigationPath>? = nil
     @State private var sessions: [StoredSession] = []
     /// Bumped by a tap on the selected Chats tab: the list scrolls to its first row.
     @State private var scrollToTop = 0
@@ -45,7 +48,7 @@ struct ChatListView: View {
     @State private var loading = false
     @State private var errorText: String?
     @State private var ownPath = NavigationPath()
-    private var path: Binding<NavigationPath> { detailPath ?? $ownPath }
+    private var path: Binding<NavigationPath> { detailPath ?? stackPath ?? $ownPath }
     /// The row a force click is peeking (Mac).
     @State private var peeking: StoredSession?
     /// The chat showing in the detail column (Mac), for the row's highlight.
@@ -152,8 +155,9 @@ struct ChatListView: View {
     }
 
     var body: some View {
-        if detailPath != nil {
-            // A column of the split view; the detail column's stack (`detailPath`) shows the chats.
+        if detailPath != nil || stackPath != nil {
+            // A column of the split view (the detail column's stack shows the chats), or inside
+            // a stack the page owns (`stackPath`).
             content
         } else {
             NavigationStack(path: path) {
@@ -784,6 +788,10 @@ struct ChatListView: View {
                     }
                     for try await part in group { all += part }
                 }
+                // One row per chat: a gateway whose bots share a store (and the mock) lists the
+                // same chat under every bot, and All bots showed each one twice.
+                var seen = Set<String>()
+                all = all.filter { seen.insert($0.id).inserted }
             } else {
                 // Each row carries the bot it was listed for: opening it later must not depend
                 // on which bot is selected by then.

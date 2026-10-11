@@ -2444,7 +2444,15 @@ async def main() -> None:
     ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
     ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
+    ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     args = ap.parse_args()
+    for i in range(args.extra_sessions):
+        titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
+        row = {"id": f"2026100{i % 9}_1200{i:02d}_x{i:04x}", "title": titles[i % len(titles)],
+               "preview": "Done; nothing else needs a hand right now.", "source": "tui", "model": MODEL,
+               "started_at": time.time() - 200000 - i * 3600, "last_active": time.time() - 190000 - i * 3600,
+               "message_count": 4, "is_active": False, "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"}
+        STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
     global TOKEN
     TOKEN = args.token
     if args.password_auth:
