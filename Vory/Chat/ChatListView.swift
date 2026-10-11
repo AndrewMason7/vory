@@ -609,6 +609,8 @@ struct ChatListView: View {
         .contentMargins(.trailing, 8, for: .scrollIndicators)
         #endif
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
+        // Idle faces hold their blinks while the list moves (one write per phase change).
+        .onScrollPhaseChange { _, phase in BotAmbient.shared.scrolling = phase != .idle }
         // At the foot of the list, like Mail's status line: at the top it lay over the first
         // chat's title. The list is anchored at its top, so the rows do not move when it
         // comes and goes.

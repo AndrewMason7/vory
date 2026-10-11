@@ -945,6 +945,10 @@ public final class BotAmbient {
     /// −1…1: roll (x) and pitch (y) away from the resting hold.
     public var tilt: CGPoint = .zero
     public var enabled = true
+    /// A list of faces is scrolling (set from the scroll phase, once per change): idle faces hold
+    /// their blinks until it settles, since a blink mid-fling cannot be seen and each one wakes a
+    /// row's timeline. The working face keeps animating.
+    public var scrolling = false
     /// The display is asleep or the screen is locked (Mac): every face holds still. Drawing
     /// into a window nobody can see made each frame wait on the render server.
     public var displayAsleep = false
@@ -1448,6 +1452,8 @@ public struct BotFaceView: View {
                     settledTick += 1
                     guard eyeLife else { return }
                     try? await Task.sleep(for: .seconds(max(0.05, next - now)))
+                    // No blink while the list is flinging: the eyes wait for the next slot.
+                    if BotAmbient.shared.scrolling { continue }
                     eyesBusy = true
                     try? await Task.sleep(for: .milliseconds(360))
                     eyesBusy = false

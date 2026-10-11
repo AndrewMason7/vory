@@ -177,6 +177,10 @@ public final class BotMotionModel {
     /// Advances to `t` (seconds) toward `targets` and returns the frame to draw.
     @discardableResult
     public func advance(to t: Double, targets asked: BotMotionTargets) -> BotMotionFrame {
+        // A face's first frame is its settled pose: nothing springs in from a neutral face when a
+        // row scrolls into view, so an idle face draws once and its timeline pauses at once
+        // (the list fling's main-thread cost on the phone was rows' faces settling, 2026-10-11).
+        if lastTime == nil { snap(to: asked, at: t) }
         let dt = lastTime.map { max(0, t - $0) } ?? 0
         lastTime = t
         let targets = held(asked, at: t)
