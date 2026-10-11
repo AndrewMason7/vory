@@ -957,6 +957,9 @@ public final class BotAmbient {
     public var anyWorking = false
     /// Settings › Appearance › Animate bots (Mac): off, every bot holds still.
     public static let animateKey = "bots.animate"
+    /// DEBUG counting of timeline evaluations (the app sets it to Perf.tick): how often faces
+    /// wake while the screen is at rest.
+    nonisolated(unsafe) public static var tickHook: ((String) -> Void)?
     /// For a decorative bot that plays the working routines (the sidebar's, Home's): on the
     /// Mac only while something is working, so an idle app holds still (#248); always elsewhere.
     public var decorativeActive: Bool {
@@ -1356,6 +1359,7 @@ public struct BotFaceView: View {
         let paused = Self.pausedTimeline(engine: engine, engineTicks: engineTicks, ticks: ticks, settling: settling)
         TimelineView(.animation(minimumInterval: interval, paused: paused)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
+            let _ = BotFace.tickHook?(paused ? "face-paused-eval" : "face-tick")
             let u = min(1, max(0, timeline.date.timeIntervalSince(gazeChangedAt) / 0.35))
             let ease = u * u * (3 - 2 * u)
             let g0 = CGPoint(x: gazeFrom.x + (gaze.x - gazeFrom.x) * ease, y: gazeFrom.y + (gaze.y - gazeFrom.y) * ease)

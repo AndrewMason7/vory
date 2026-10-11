@@ -248,7 +248,6 @@
 			membershipExceptions = (
 				App/BotMotionSource.swift,
 				App/RootView.swift,
-				App/TabBarMinimizeObserver.swift,
 				App/VoryApp.swift,
 				App/VoryTabBar.swift,
 				Info.plist,
