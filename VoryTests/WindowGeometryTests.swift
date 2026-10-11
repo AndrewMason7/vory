@@ -57,4 +57,12 @@ import Testing
         #expect(EvenColumns.count(width: 951, minimum: 150, spacing: 18) == 4)   // five fit
         #expect(EvenColumns.count(width: 0, minimum: 150, spacing: 18) == 2)
     }
+
+    /// A keyboard frame is forgotten when the window changes size (a turn), kept while it stays:
+    /// the open Duo's bar stayed hidden behind a keyboard the turn had taken away.
+    @Test func aKeyboardFrameDoesNotOutliveTheWindowsSize() {
+        #expect(WindowGeometry.keyboardCarriesOver(from: .zero, to: CGSize(width: 669, height: 951)))
+        #expect(WindowGeometry.keyboardCarriesOver(from: CGSize(width: 669, height: 951), to: CGSize(width: 669, height: 951)))
+        #expect(!WindowGeometry.keyboardCarriesOver(from: CGSize(width: 669, height: 951), to: CGSize(width: 951, height: 669)))
+    }
 }

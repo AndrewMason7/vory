@@ -57,7 +57,9 @@ struct MacVoiceHUD: View {
                     ZStack {
                         // The ring pulses only while it should and the window can be seen: a
                         // repeating animation kept running after its value went false (#248).
-                        if p.pulses && botsLive && !reduceMotion {
+                        // With the motion engine the bot's own listening arcs take the ring's place
+                        // (decision 3: speaking shows the plain bot, listening the arcs).
+                        if p.pulses && botsLive && !reduceMotion && !BotFace.motionEngine {
                             PulseRing(tint: tint)
                         } else {
                             Circle().stroke(tint.opacity(0.6), lineWidth: 2.5).frame(width: 78, height: 78)
@@ -139,8 +141,11 @@ struct MacVoiceHUD: View {
     private func mood(_ m: VoiceHUDPresentation.Mood, _ chat: ChatSession) -> BotFaceView.Mood {
         switch m {
         case .idle: return BotFaceView.Mood(profile: chat.profileName, state: .idle)
+        case .listening: return BotFaceView.Mood(profile: chat.profileName, state: .listening)
         case .thinking: return BotFaceView.Mood(thinking: true, profile: chat.profileName, state: .thinking)
-        case .speaking: return BotFaceView.Mood(profile: chat.profileName, state: .streaming)
+        // Speaking is the plain bot on the engine (the words are heard, not shown); the 1.4
+        // drawing keeps its streaming pose.
+        case .speaking: return BotFaceView.Mood(profile: chat.profileName, state: BotFace.motionEngine ? .working : .streaming)
         case .approval: return BotFaceView.Mood(profile: chat.profileName, state: .awaitingApproval)
         case .still: return BotFaceView.Mood(profile: chat.profileName, state: .idle, still: true)
         }
@@ -159,7 +164,7 @@ struct MacVoiceHUD: View {
 
 /// What the window shows for a loop state: worked out apart from the view so it can be tested.
 struct VoiceHUDPresentation: Equatable {
-    enum Mood: Equatable { case idle, thinking, speaking, approval, still }
+    enum Mood: Equatable { case idle, listening, thinking, speaking, approval, still }
     var title: String
     /// The line under the title: the bot's goal while it thinks, a note, the approval hint,
     /// the paused hint; nil when there is nothing to say.
@@ -207,7 +212,8 @@ struct VoiceHUDPresentation: Equatable {
         p.pulses = state.hearing || state.phase == .speaking
         p.faceActive = state.phase == .thinking || state.phase == .speaking
         switch state.phase {
-        case .listening, .transcribing: p.mood = .idle
+        // The arcs while the person is heard, on the engine; the 1.4 drawing has no such pose.
+        case .listening, .transcribing: p.mood = BotFace.motionEngine ? .listening : .idle
         case .thinking: p.mood = .thinking
         case .speaking: p.mood = .speaking
         case .needsApproval: p.mood = .approval
