@@ -96,8 +96,10 @@ struct RootView: View {
             if model.selectedTab == TabLayout.parse(rootLayoutRaw).visible(hiding: hidden).first || model.selectedTab == .chats { model.selectedTab = tab }
         }
         // The bar steps aside for the keyboard (a name field in Settings had it floating on top).
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in model.keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in model.keyboardUp = false }
+        // A keyboard is up when its frame overlaps the window now (`WindowGeometry`), not when a
+        // will-show was seen: a turn of the open Duo took the keyboard away without a will-hide
+        // and the bar stayed hidden behind it; the iPad's hardware-keyboard bar counts the same way.
+        .onChange(of: windowGeometry.keyboardOverlap > 0, initial: true) { _, up in model.keyboardUp = up }
         .onAppear {
             // Once per phone: the bar becomes Home, Chats, Bots, Settings. It can be changed after.
             if !UserDefaults.standard.bool(forKey: TabLayout.homeFirstAppliedKey) {
