@@ -128,8 +128,19 @@ struct ComposerView: View {
     /// The command list scrolls inside a cap: about 30 % of the window, so with the keyboard up
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat {
-        let cap = max(120, min(280, windowGeometry.bounds.height * 0.30))
+        let cap = max(120, min(280, visibleHeight * 0.30))
         return roomUnderFold.map { min(cap, $0) } ?? cap
+    }
+
+    /// The window's height less the keyboard: what the caps are a share of. The Mac's views get
+    /// the empty window geometry (its layout is the window's own), so there the window itself
+    /// answers; without it the card stopped at four lines and the "/" list at 120 pt.
+    private var visibleHeight: CGFloat {
+        #if os(macOS)
+        return NSApp.keyWindow?.contentLayoutRect.height ?? NSApp.windows.first { $0.isVisible }?.contentLayoutRect.height ?? 800
+        #else
+        return windowGeometry.bounds.height - windowGeometry.keyboardOverlap
+        #endif
     }
 
     /// A row tapped or taken with Return, or completed with Tab (see SlashMenu.outcome): a
@@ -277,10 +288,10 @@ struct ComposerView: View {
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
         #if os(macOS)
-        // Files dropped on the card from the Finder, and pictures, PDFs, movies or sounds dragged
-        // out of another app as data: staged like picked ones, the card outlined while the drag
-        // is over it (`dropTargeted`).
-        .onDrop(of: [.fileURL, .image, .pdf, .movie, .audio], isTargeted: $dropTargeted) { dropped($0) }
+        // Files dropped on the card from the Finder, cards dragged out of a chat, and pictures,
+        // PDFs, movies or sounds dragged out of another app as data: staged like picked ones, the
+        // card outlined while the drag is over it (`dropTargeted`).
+        .onDrop(of: [.fileURL, .content], delegate: ComposerDropDelegate(targeted: $dropTargeted, perform: dropped))
         #else
         // Files dropped on the composer (another app on an iPad) are staged like picked ones.
         .dropDestination(for: URL.self) { urls, _ in
@@ -425,7 +436,9 @@ struct ComposerView: View {
         .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
         // Plain glass, not interactive: an interactive shape answers touches itself, and on the
         // phone that swallowed the taps meant for the text field's Paste menu.
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        // While a drag is over the card (the Mac) the glass itself takes the tint: an overlay
+        // alone came through the glass as a faint rim.
+        .glassEffect(.regular.tint(dropTargeted ? Color.vory.opacity(0.35) : nil), in: .rect(cornerRadius: 22))
         .glassEffectID("dock", in: namespace)
         // The Mac's drop outline: drawn on the card's own shape while a drag is over it.
         .overlay {
@@ -543,8 +556,7 @@ struct ComposerView: View {
     /// Lines the words may grow to before they scroll inside the card: about 40% of what is
     /// visible above the keyboard, never under four.
     private var visibleLines: Int {
-        let visible = windowGeometry.bounds.height - windowGeometry.keyboardOverlap
-        return max(4, Int(visible * 0.4 / 22))
+        max(4, Int(visibleHeight * 0.4 / 22))
     }
 
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
@@ -706,15 +718,25 @@ struct ComposerView: View {
                     guard let url else { return }
                     Task { @MainActor in importFile(url) }
                 }
-            } else if let family = [UTType.image, .pdf, .movie, .audio].first(where: { p.hasItemConformingToTypeIdentifier($0.identifier) }) {
+            } else if let type = p.registeredTypeIdentifiers.compactMap({ UTType($0) }).first(where: { $0.conforms(to: .content) }) {
+                // A card dragged out of a chat (any file: a PDF, a CSV, a log), or a picture, PDF
+                // or clip out of another app. The file representation keeps the file's own name:
+                // the pasteboard drops `suggestedName` on the way over, so "report.pdf" arrived as
+                // "Dropped.pdf". The file is gone when the handler returns, so it is read there.
+                // Plain text with no file behind it is not taken: the field handles text drags.
+                let family = [UTType.image, .pdf, .movie, .audio].first { type.conforms(to: $0) }
+                guard family != nil || p.hasRepresentationConforming(toTypeIdentifier: type.identifier, fileOptions: []) else { continue }
                 took = true
-                // The provider's own concrete type (PNG, JPEG, MP4…) names the file; the family is the fallback.
-                let concrete = p.registeredTypeIdentifiers.compactMap { UTType($0) }.first { $0.conforms(to: family) } ?? family
-                _ = p.loadDataRepresentation(forTypeIdentifier: concrete.identifier) { data, _ in
-                    guard let data else { return }
-                    let ext = concrete.preferredFilenameExtension ?? family.preferredFilenameExtension ?? "bin"
-                    let base = p.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped"
-                    Task { @MainActor in stagePasted(data, name: base + "." + ext, type: concrete) }
+                let fallback = (p.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped") + "." + (type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? "bin")
+                _ = p.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
+                    guard let url, let data = try? Data(contentsOf: url) else { return }
+                    // The representation's file is named after the item and typed again by the
+                    // provider ("report.pdf.pdf"): one extension, the type's.
+                    let ext = type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? url.pathExtension
+                    var base = url.deletingPathExtension().lastPathComponent
+                    if !ext.isEmpty, base.lowercased().hasSuffix("." + ext.lowercased()) { base = String(base.dropLast(ext.count + 1)) }
+                    let name = url.pathExtension.isEmpty ? fallback : (ext.isEmpty ? base : base + "." + ext)
+                    Task { @MainActor in stagePasted(data, name: name, type: type) }
                 }
             }
         }
@@ -729,6 +751,26 @@ struct ComposerView: View {
         withAnimation(.snappy) { chat.stageAttachment(data: data, name: name, kind: kind) }
     }
 }
+
+#if os(macOS)
+/// The card's drop target. A delegate rather than `onDrop(isTargeted:)`: on the Mac that
+/// binding never went true for a drag over the card (the drops landed, the outline never
+/// showed), while `dropEntered` and `dropExited` are called for every validated drag.
+struct ComposerDropDelegate: DropDelegate {
+    @Binding var targeted: Bool
+    var perform: ([NSItemProvider]) -> Bool
+    static let types: [UTType] = [.fileURL, .content]
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: Self.types) }
+    func dropEntered(info: DropInfo) { targeted = true }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        return perform(info.itemProviders(for: Self.types))
+    }
+}
+#endif
 
 struct HistorySheet: View {
     var history: [String]
