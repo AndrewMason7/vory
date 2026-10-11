@@ -336,6 +336,8 @@ struct SlashMenuList: View {
     var pick: (SlashMenu.Item) -> Void
 
     static let rowHeight: CGFloat = 38
+    /// The row under the pointer (the Mac): lit, but the mark stays where the keys put it.
+    @State private var hovered: String?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -351,8 +353,11 @@ struct SlashMenuList: View {
                         .padding(.horizontal, 8)
                     }
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                        Button { pick(item) } label: { row(item, selected: i == selection) }
+                        Button { pick(item) } label: { row(item, selected: i == selection, hovered: hovered == item.id) }
                             .buttonStyle(.plain)
+                            #if os(macOS)
+                            .onHover { over in if over { hovered = item.id } else if hovered == item.id { hovered = nil } }
+                            #endif
                             .id(item.id)
                             .accessibilityIdentifier(item.kind == .model ? "composer.model.\(item.name)" : "composer.command.\(item.name)")
                             .accessibilityValue(item.current ? "Current model" : "")
@@ -386,7 +391,7 @@ struct SlashMenuList: View {
         else if let first = ids.first { proxy.scrollTo(first, anchor: .top) }
     }
 
-    private func row(_ item: SlashMenu.Item, selected: Bool) -> some View {
+    private func row(_ item: SlashMenu.Item, selected: Bool, hovered: Bool = false) -> some View {
         HStack(spacing: 10) {
             if item.kind == .model {
                 Text(item.name).font(.subheadline.weight(.medium)).lineLimit(1).truncationMode(.middle).layoutPriority(1)
@@ -401,7 +406,7 @@ struct SlashMenuList: View {
         }
         .padding(.horizontal, 8)
         .frame(height: Self.rowHeight)
-        .background(selected ? Color.vory.opacity(0.14) : .clear, in: .rect(cornerRadius: 10))
+        .background(selected ? Color.vory.opacity(0.14) : hovered ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 10))
         .contentShape(Rectangle())
     }
 
