@@ -550,6 +550,10 @@ struct ChatListView: View {
 
     @ViewBuilder private func list(_ runtime: GatewayRuntime) -> some View {
         let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
+        #if DEBUG
+        let _ = Perf.tick("chatlist-body")
+        let _ = Self._printChanges()
+        #endif
         ScrollViewReader { proxy in
         List {
             // Not signed in on this device: the banner above says so and has the button; the
@@ -621,9 +625,7 @@ struct ChatListView: View {
         // safe area (RootView gives them a content margin instead), so a bottom inset still
         // lands behind the bar. The pill floats just above the bar, and at the bottom edge
         // when the bar is away (search with the keyboard up).
-        .overlay(alignment: .bottom) {
-            SummaryProgressStrip().padding(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 6)
-        }
+        .overlay(alignment: .bottom) { SummaryStripAboveBar() }
         #endif
         // A bar, not a plain inset: the rows fade out under it the way they do under the
         // toolbar, instead of showing through behind the search field. On the phone too (Matt):
@@ -1298,5 +1300,17 @@ private struct LeadingTitle: ViewModifier {
         #else
         content
         #endif
+    }
+}
+
+
+/// The summary strip, lifted above the tab bar: its own view, so the bar's hide and show (every
+/// chat open and every Back) does not re-run the list's body and rebuild a hundred rows inside
+/// the navigation transition (the 75 ms stalls on Back, 2026-10-11).
+private struct SummaryStripAboveBar: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
+    var body: some View {
+        SummaryProgressStrip().padding(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 6)
     }
 }

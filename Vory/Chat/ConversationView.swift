@@ -47,7 +47,6 @@ struct ConversationView: View {
     /// transcript does for itself: SwiftUI's own avoidance hands the inset to any scroll view in
     /// the dock (the command list) instead of lifting the dock, which left the composer under
     /// the keyboard.
-    @State private var keyboardInset: CGFloat = 0
     @State private var sentInitial = false
     @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
@@ -179,23 +178,27 @@ struct ConversationView: View {
         // The thread runs under the status bar (it ignores the top safe area) while the
         // header sits inside it, so the thread's top margin is the header plus that inset;
         // without it the first message starts under the pill.
-        thread(chat)
-            // Like Messages: header and dock float over the thread and the text scrolls under their glass.
-            // On a wide layout the dock keeps to the reading column, as on the Mac.
-            // No band under the header or under the dock (Matt, on the phone, 2026-10-10: "I
-            // dont like the fade at the top or the bottom, you should see the messages from all
-            // the way behind the message bar and behind the name"): the thread runs under both
-            // and shows through their glass; only its rest margins keep the ends clear.
+        // Like Messages: header and dock float over the thread and the text scrolls under their glass.
+        // No band under the header or under the dock (Matt, on the phone, 2026-10-10: "I
+        // dont like the fade at the top or the bottom, you should see the messages from all
+        // the way behind the message bar and behind the name"): the thread runs under both
+        // and shows through their glass; only its rest margins keep the ends clear.
+        ZStack(alignment: .bottom) {
+            // The thread keeps the window's full height whatever the keyboard does; its bottom
+            // margin is measured from the dock (`dockTop`), with the keyboard's final height
+            // as the fallback (`keyboardOverlap`, the window's number, unanimated).
+            thread(chat)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+            // The dock is a sibling, not an overlay of the thread: it sits in the keyboard's own
+            // safe area and rides the keyboard's animation (Matt, 2026-10-11: the bar "lags
+            // behind the keyboard opening and closing", "the keyboard collapses completely
+            // before the chat moves"): a hand-made spring took half a second against the
+            // keyboard's quarter. On a wide layout it keeps to the reading column, as on the Mac.
             // Above the tab bar when the bar stands under the chat (a wide layout with the bar
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
-            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift) }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-            // The keyboard as the window has it (in window space, re-placed on every resize or
-            // fold); the thread moves by the same value, so the two arrive together.
-            .onChange(of: windowGeometry.keyboardOverlap, initial: true) { _, inset in
-                withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) { keyboardInset = inset }
-            }
+            dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
+        }
             .overlay(alignment: .top) { header(chat) }
             // Voice mode runs out of sight under its pill, and in front on its own screen.
             .overlay(alignment: .top) {
@@ -267,7 +270,7 @@ struct ConversationView: View {
         let (dockTopArg, fallback, top, fade): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
         #else
         // Until the header has been measured, its default height plus the status bar's usual share.
-        let (dockTopArg, fallback, top, fade) = (dockTop, dockHeight + keyboardInset, headerHeight + windowGeometry.safeArea.top, ChatStyle.bandFade)
+        let (dockTopArg, fallback, top, fade) = (dockTop, dockHeight + windowGeometry.keyboardOverlap, headerHeight + windowGeometry.safeArea.top, ChatStyle.bandFade)
         #endif
         return TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
                        dockTop: dockTopArg, fallbackInset: fallback, topInset: top, headerBottom: headerBottom, bandFade: fade)
@@ -283,7 +286,7 @@ struct ConversationView: View {
                 if let e = chat.resumeError, chat.items.isEmpty {
                     ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(e))
                         // Centred in what is left above the composer and the keyboard.
-                        .padding(.bottom, dockHeight + keyboardInset)
+                        .padding(.bottom, dockHeight + windowGeometry.keyboardOverlap)
                 }
             }
     }
@@ -295,7 +298,6 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
             // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
-            .padding(.bottom, keyboardInset)
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
