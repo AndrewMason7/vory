@@ -271,7 +271,11 @@ struct MainTabView: View {
                                 .frame(width: VoryTabBar.stripItemWidth)
                                 .padding(edge == .leading ? .leading : .trailing, outer)
                                 .padding(.top, model.wideLayout ? VoryTabBar.stripStatusAllowance : 0)
-                                .padding(.bottom, model.wideLayout ? 0 : max(8, windowGeometry.safeArea.bottom))
+                                // The overlay already ends above the home-indicator area; the stack
+                                // keeps one group gap over it, no more. Padding it by the inset again
+                                // pushed the stack up until its first tab touched the page's own
+                                // strip items (the list's filter met Home, Matt).
+                                .padding(.bottom, model.wideLayout ? 0 : VoryTabBar.stripGroupGap)
                                 .ignoresSafeArea(.container, edges: edge == .leading ? .leading : .trailing)
                         }
                     } else {
