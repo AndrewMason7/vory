@@ -110,6 +110,7 @@ struct BotAvatar: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.botsLive) private var pageLive
     /// The live face is mounted around a blink (and for a finish spin or a tap); between those
     /// an idle small face is the cached still, see `restsAsImage`.
     @State private var liveForBlink = false
@@ -159,7 +160,7 @@ struct BotAvatar: View {
                 let next = BotMotionModel.nextBlink(after: now + 0.1, seed: blinkSeed)
                 try? await Task.sleep(for: .seconds(max(0.05, next - now - 0.08)))
                 if Task.isCancelled { return }
-                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled { continue }
+                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || !pageLive { continue }
                 liveForBlink = true
                 try? await Task.sleep(for: .milliseconds(560))
                 liveForBlink = false

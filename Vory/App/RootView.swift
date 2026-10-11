@@ -232,6 +232,9 @@ struct MainTabView: View {
                         .opacity(model.selectedTab == tab ? 1 : 0)
                         .allowsHitTesting(model.selectedTab == tab)
                         .accessibilityHidden(model.selectedTab != tab)
+                        // A hidden page's faces hold still: at opacity 0 they kept their
+                        // timelines running (the Bots grid's fourteen behind the Chats list).
+                        .environment(\.botsLive, model.selectedTab == tab)
                 }
             }
             // Reserves the bar's height (or width) so lists end before it; the bar itself is
