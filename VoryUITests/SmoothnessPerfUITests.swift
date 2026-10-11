@@ -17,7 +17,9 @@ final class SmoothnessPerfUITests: XCTestCase {
     }
 
     private func launch(url: String, token: String, tab: String = "chats") {
+        // HERMES_E2E_ARGS: extra launch arguments, space-separated (the measurement switches).
         let args = ["-companionPromptShown", "YES", "-launchTab", tab, "-colorSchemePreference", "light", "-chat.showBots", "YES", "-chats.allBots", "YES"]
+            + (ProcessInfo.processInfo.environment["HERMES_E2E_ARGS"] ?? "").split(separator: " ").map(String.init)
         if let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
             app = XCUIApplication(bundleIdentifier: bundle)
             app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop"] + args
@@ -71,6 +73,38 @@ final class SmoothnessPerfUITests: XCTestCase {
             back(); pause(1)
             stopMeasuring()
         }
+    }
+
+    /// Diagnostic, not a measurement: one back swipe and one button Back, for the order of
+    /// the app's "pop:" notes in the log (when the path empties against the transition's end).
+    func testSwipeBackOrder() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        openFirstChat(); pause(1.5)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).firstMatch.waitForExistence(timeout: 10), "the swipe did not go back")
+        pause(1.5)
+        openFirstChat(); pause(1.5)
+        back(); pause(1.5)
+    }
+
+    /// The "/" list out of the field and back (type "/", then delete it).
+    func testSlashMenu() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        openFirstChat(); pause(1.5)
+        let field = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer field")
+        field.tap(); pause(1.5)
+        measure(metrics: [smooth("slashMenu")], options: options) {
+            field.typeText("/"); pause(1.2)
+            field.typeText(XCUIKeyboardKey.delete.rawValue); pause(1.2)
+            stopMeasuring()
+        }
+        // The + panel with the keyboard up (it stays up), once, for the recording.
+        let plus = app.buttons["composer.attach"].firstMatch
+        if plus.waitForExistence(timeout: 5) { plus.tap(); pause(1.5); plus.tap(); pause(1.5) }
     }
 
     /// The + panel out of the + button and back.

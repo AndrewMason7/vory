@@ -14,10 +14,38 @@ struct AttachItem: Identifiable {
 /// the button and folded back into it. A chat's composer and the New Message sheet share it.
 struct AttachPanel: View {
     var items: [AttachItem]
+    /// Whether the panel draws its own glass. The chat's composer draws it instead, as the
+    /// shape that grows out of the + button; the New Message sheet takes the default.
+    var surface = true
+    /// The most height the panel may take; taller than that, its rows scroll. The composer sets
+    /// it to the room between the header and the card, so with the keyboard up (which stays up)
+    /// the panel never runs into the bot's pill.
+    var cap: CGFloat? = nil
     /// Folds the panel away; called before a row's action.
     var close: () -> Void
 
+    /// A row is a 40 pt icon with 8 pt above and below; the stack adds 10 pt at each end.
+    private var naturalHeight: CGFloat { CGFloat(items.count) * 56 + 20 }
+
     var body: some View {
+        if let cap, naturalHeight > cap {
+            ScrollView { rows }
+                .scrollIndicators(.hidden)
+                .frame(width: 272, height: cap)
+                .modifier(PanelSurface(on: surface))
+        } else {
+            rows
+                .frame(width: 272)
+                // The panel is an overlay on a 36 pt button, so it is offered 36 pt of height; without
+                // its own size the glass was drawn for less than the rows and the last one poked out.
+                .fixedSize()
+                // `-vory-plain-panel` (measurement only): a plain material instead of glass, to tell
+                // whether the glass morph is what holds the panel's animation at 60 Hz on ProMotion.
+                .modifier(PanelSurface(on: surface))
+        }
+    }
+
+    private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(items) { item in
                 Button {
@@ -40,29 +68,29 @@ struct AttachPanel: View {
             }
         }
         .padding(.vertical, 10)
-        .frame(width: 272)
-        // The panel is an overlay on a 36 pt button, so it is offered 36 pt of height; without
-        // its own size the glass was drawn for less than the rows and the last one poked out.
-        .fixedSize()
-        // `-vory-plain-panel` (measurement only): a plain material instead of glass, to tell
-        // whether the glass morph is what holds the panel's animation at 60 Hz on ProMotion.
-        .modifier(PanelSurface())
     }
 }
 
 
 /// The panel's surface: glass, or a plain material under `-vory-plain-panel` (a frame-rate experiment).
 struct PanelSurface: ViewModifier {
+    var on = true
+    /// The glass shape: the panel's own corners, or the growing shape the composer animates.
+    var shape: RoundedRectangle = .rect(cornerRadius: 30)
     static let plain = ProcessInfo.processInfo.arguments.contains("-vory-plain-panel")
     /// `-vory-solid-panel`: a flat colour, no material at all (the same spring drives it).
     static let solid = ProcessInfo.processInfo.arguments.contains("-vory-solid-panel")
     func body(content: Content) -> some View {
+        // One modifier whatever `on` says (`.identity` glass when off): switching between a
+        // glass branch and a plain one changed the subtree's identity inside the glass
+        // container, and the replaced subtree stayed on screen at full size (the "/" rows
+        // left over on the card after a close, Matt, 2026-10-11).
         if Self.solid {
-            content.background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 30))
+            content.background(on ? Color(.secondarySystemBackground) : .clear, in: shape)
         } else if Self.plain {
-            content.background(.regularMaterial, in: .rect(cornerRadius: 30))
+            content.background(on ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear), in: shape)
         } else {
-            content.glassEffect(.regular, in: .rect(cornerRadius: 30))
+            content.glassEffect(on ? .regular : .identity, in: shape)
         }
     }
 }
