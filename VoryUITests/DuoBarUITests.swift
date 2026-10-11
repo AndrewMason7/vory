@@ -66,6 +66,18 @@ final class DuoBarUITests: XCTestCase {
                     XCTAssertEqual(e.frame.midX, axis, accuracy: 1, "\(name) is off the strip's centre line: \(e.frame.midX) vs \(axis)")
                 }
             }
+            // Three groups down the strip, never touching: the page's own items (the list's "+"
+            // and View menu), then our tabs, then the circles. The first tab starts at least a
+            // group gap (10 pt, the system's own) below the last of the page's items (Matt: the
+            // filter and Home touched).
+            let view = app.buttons["chats.view"].firstMatch
+            let firstTab = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'tab.'")).allElementsBoundByIndex
+                .filter { $0.exists }.min { $0.frame.minY < $1.frame.minY }
+            if view.exists, let firstTab {
+                let gap = firstTab.frame.minY - view.frame.maxY
+                print("STRIP-GAP view \(view.frame) first tab \(firstTab.frame) gap \(gap)")
+                XCTAssertGreaterThanOrEqual(gap, 10 - 0.5, "the first tab sits too close to the list's View menu: gap \(gap)")
+            }
             // On the strip's edge, within its own width of it, and the tabs stacked in order.
             let nearEdge = chats.frame.maxX > window.maxX - 80 || chats.frame.minX < 80
             XCTAssertTrue(nearEdge, "the vertical bar is not on an edge: \(chats.frame)")

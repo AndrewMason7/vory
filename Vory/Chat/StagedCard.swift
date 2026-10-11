@@ -11,6 +11,8 @@ struct StagedCard: View {
     var onOpen: () -> Void
     var onRemove: () -> Void
     @State private var thumbnail: UIImage?
+    /// The pointer is over the card (the Mac): the × shows then, as in Mail and Messages.
+    @State private var hovering = false
     @Environment(\.displayScale) private var displayScale
 
     static let side: CGFloat = 92
@@ -81,9 +83,16 @@ struct StagedCard: View {
             }
             .buttonStyle(.plain)
             .offset(x: 6, y: -6)
+            #if os(macOS)
+            .opacity(hovering ? 1 : 0)
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            #endif
             .accessibilityLabel("Remove \(attachment.name)")
         }
         .padding(.top, 6).padding(.trailing, 6).padding(.bottom, 8)
+        #if os(macOS)
+        .onHover { hovering = $0 }
+        #endif
         .task(id: attachment.id) { await loadThumbnail() }
     }
 

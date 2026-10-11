@@ -18,6 +18,11 @@ struct ComposerView: View {
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
     /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
+    /// A drag is over the card (the Mac): the outline says it will take the drop.
+    @State private var dropTargeted = false
+    /// The pointer is over the model chip or a mention row (the Mac).
+    @State private var chipHovered = false
+    @State private var mentionHovered: String?
     private var holdStartsVoiceMode: Bool {
         #if os(iOS)
         return VoiceSettings.HoldMicAction(rawValue: holdMicRaw) == .voiceMode
@@ -123,8 +128,19 @@ struct ComposerView: View {
     /// The command list scrolls inside a cap: about 30 % of the window, so with the keyboard up
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat {
-        let cap = max(120, min(280, windowGeometry.bounds.height * 0.30))
+        let cap = max(120, min(280, visibleHeight * 0.30))
         return roomUnderFold.map { min(cap, $0) } ?? cap
+    }
+
+    /// The window's height less the keyboard: what the caps are a share of. The Mac's views get
+    /// the empty window geometry (its layout is the window's own), so there the window itself
+    /// answers; without it the card stopped at four lines and the "/" list at 120 pt.
+    private var visibleHeight: CGFloat {
+        #if os(macOS)
+        return NSApp.keyWindow?.contentLayoutRect.height ?? NSApp.windows.first { $0.isVisible }?.contentLayoutRect.height ?? 800
+        #else
+        return windowGeometry.bounds.height - windowGeometry.keyboardOverlap
+        #endif
     }
 
     /// A row tapped or taken with Return, or completed with Tab (see SlashMenu.outcome): a
@@ -271,11 +287,18 @@ struct ComposerView: View {
         .animation(.snappy(duration: 0.25), value: menuItems.map(\.id))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
-        // Files dropped on the composer (the Finder on a Mac, another app on an iPad) are staged like picked ones.
+        #if os(macOS)
+        // Files dropped on the card from the Finder, cards dragged out of a chat, and pictures,
+        // PDFs, movies or sounds dragged out of another app as data: staged like picked ones, the
+        // card outlined while the drag is over it (`dropTargeted`).
+        .onDrop(of: [.fileURL, .content], delegate: ComposerDropDelegate(targeted: $dropTargeted, perform: dropped))
+        #else
+        // Files dropped on the composer (another app on an iPad) are staged like picked ones.
         .dropDestination(for: URL.self) { urls, _ in
             for u in urls { importFile(u) }
             return !urls.isEmpty
         }
+        #endif
         #if os(macOS)
         // File › Import from iPhone or iPad (Continuity Camera): a photo or a scan taken on the
         // phone is staged here, the Mac's stand-in for the camera row.
@@ -413,8 +436,18 @@ struct ComposerView: View {
         .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
         // Plain glass, not interactive: an interactive shape answers touches itself, and on the
         // phone that swallowed the taps meant for the text field's Paste menu.
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        // While a drag is over the card (the Mac) the glass itself takes the tint: an overlay
+        // alone came through the glass as a faint rim.
+        .glassEffect(.regular.tint(dropTargeted ? Color.vory.opacity(0.35) : nil), in: .rect(cornerRadius: 22))
         .glassEffectID("dock", in: namespace)
+        // The Mac's drop outline: drawn on the card's own shape while a drag is over it.
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.vory, lineWidth: 2)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.15), value: dropTargeted)
     }
 
     /// The staged files, along the top of the card: a real preview of each, × on the corner.
@@ -464,9 +497,14 @@ struct ComposerView: View {
                         }
                         .frame(height: 34)
                         .padding(.vertical, 3)
+                        .padding(.horizontal, 6)
+                        .background(mentionHovered == p.id ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 10))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    #if os(macOS)
+                    .onHover { over in if over { mentionHovered = p.id } else if mentionHovered == p.id { mentionHovered = nil } }
+                    #endif
                     if p.id != mentionSuggestions.last?.id { Divider() }
                 }
             }
@@ -497,12 +535,16 @@ struct ComposerView: View {
             }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(.quaternary.opacity(0.85), in: .capsule)
+            // Under the pointer the capsule firms up (the Mac); a touch has no hover.
+            .background(.quaternary.opacity(chipHovered ? 1 : 0.85), in: .capsule)
             .contentShape(.capsule)
         }
         .menuOrder(.fixed)
         .buttonStyle(.plain)
         .simultaneousGesture(TapGesture().onEnded { Smooth.animate("modelChip") })
+        #if os(macOS)
+        .onHover { chipHovered = $0 }
+        #endif
         .accessibilityIdentifier("composer.modelChip")
         .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "medium"))")
     }
@@ -515,8 +557,7 @@ struct ComposerView: View {
     /// Lines the words may grow to before they scroll inside the card: about 40% of what is
     /// visible above the keyboard, never under four.
     private var visibleLines: Int {
-        let visible = windowGeometry.bounds.height - windowGeometry.keyboardOverlap
-        return max(4, Int(visible * 0.4 / 22))
+        max(4, Int(visibleHeight * 0.4 / 22))
     }
 
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
@@ -665,6 +706,46 @@ struct ComposerView: View {
         }
     }
 
+    #if os(macOS)
+    /// A drop on the card: file URLs (the Finder) go through `importFile`; a picture, PDF, movie
+    /// or sound carried as data (dragged out of Safari, Photos, Preview) is staged under its
+    /// own type. True when anything was taken, so the drag's cursor says so.
+    private func dropped(_ providers: [NSItemProvider]) -> Bool {
+        var took = false
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                took = true
+                p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                    let url = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                    guard let url else { return }
+                    Task { @MainActor in importFile(url) }
+                }
+            } else if let type = p.registeredTypeIdentifiers.compactMap({ UTType($0) }).first(where: { $0.conforms(to: .content) }) {
+                // A card dragged out of a chat (any file: a PDF, a CSV, a log), or a picture, PDF
+                // or clip out of another app. The file representation keeps the file's own name:
+                // the pasteboard drops `suggestedName` on the way over, so "report.pdf" arrived as
+                // "Dropped.pdf". The file is gone when the handler returns, so it is read there.
+                // Plain text with no file behind it is not taken: the field handles text drags.
+                let family = [UTType.image, .pdf, .movie, .audio].first { type.conforms(to: $0) }
+                guard family != nil || p.hasRepresentationConforming(toTypeIdentifier: type.identifier, fileOptions: []) else { continue }
+                took = true
+                let fallback = (p.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped") + "." + (type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? "bin")
+                _ = p.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
+                    guard let url, let data = try? Data(contentsOf: url) else { return }
+                    // The representation's file is named after the item and typed again by the
+                    // provider ("report.pdf.pdf"): one extension, the type's.
+                    let ext = type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? url.pathExtension
+                    var base = url.deletingPathExtension().lastPathComponent
+                    if !ext.isEmpty, base.lowercased().hasSuffix("." + ext.lowercased()) { base = String(base.dropLast(ext.count + 1)) }
+                    let name = url.pathExtension.isEmpty ? fallback : (ext.isEmpty ? base : base + "." + ext)
+                    Task { @MainActor in stagePasted(data, name: name, type: type) }
+                }
+            }
+        }
+        return took
+    }
+    #endif
+
     /// Something other than text pasted into the field (the edit menu, or the keyboard's
     /// "Paste from Screenshots"): staged like a picked file.
     private func stagePasted(_ data: Data, name: String, type: UTType) {
@@ -672,6 +753,26 @@ struct ComposerView: View {
         withAnimation(.snappy) { chat.stageAttachment(data: data, name: name, kind: kind) }
     }
 }
+
+#if os(macOS)
+/// The card's drop target. A delegate rather than `onDrop(isTargeted:)`: on the Mac that
+/// binding never went true for a drag over the card (the drops landed, the outline never
+/// showed), while `dropEntered` and `dropExited` are called for every validated drag.
+struct ComposerDropDelegate: DropDelegate {
+    @Binding var targeted: Bool
+    var perform: ([NSItemProvider]) -> Bool
+    static let types: [UTType] = [.fileURL, .content]
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: Self.types) }
+    func dropEntered(info: DropInfo) { targeted = true }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        return perform(info.itemProviders(for: Self.types))
+    }
+}
+#endif
 
 struct HistorySheet: View {
     var history: [String]

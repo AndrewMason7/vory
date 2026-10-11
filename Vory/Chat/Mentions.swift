@@ -160,11 +160,8 @@ extension Mentions {
 
     /// The bot's face at text size, where the app draws faces (the Mac adds its own).
     @MainActor static func face(for bot: String) -> Image? {
-        #if canImport(UIKit)
+        // The same memoised face on both: the Mac draws it through its UIImage shims (NSImage).
         Image(uiImage: BotAvatarImage.cached(profile: bot, size: 17)).renderingMode(.original)
-        #else
-        nil
-        #endif
     }
 }
 
