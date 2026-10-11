@@ -686,11 +686,38 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
     private static var key = 0
     private weak var nav: UINavigationController?
     private weak var pan: UIPanGestureRecognizer?
+    /// The back swipe's progress for whoever draws along with it (RootView's tab bar): the
+    /// fraction, and whether this is the end (then the fraction is 0 for a cancelled swipe or
+    /// 1 for a completed one, to be animated over `duration`).
+    nonisolated(unsafe) static var onProgress: ((_ fraction: CGFloat, _ ended: Bool, _ duration: Double) -> Void)?
+    private var tracking = false
+
+    @objc private func track(_ g: UIPanGestureRecognizer) {
+        guard let nav, let view = g.view else { return }
+        switch g.state {
+        case .began, .changed:
+            guard nav.transitionCoordinator?.isInteractive == true || g.state == .began else { return }
+            tracking = true
+            let fraction = max(0, min(1, g.translation(in: view).x / max(1, view.bounds.width)))
+            Self.onProgress?(fraction, false, 0)
+        case .ended, .cancelled, .failed:
+            guard tracking else { return }
+            tracking = false
+            if let c = nav.transitionCoordinator, c.isInteractive {
+                let duration = c.transitionDuration
+                c.notifyWhenInteractionChanges { ctx in Self.onProgress?(ctx.isCancelled ? 0 : 1, true, max(0.15, duration * (1 - Double(ctx.percentComplete)))) }
+            } else {
+                Self.onProgress?(0, true, 0.2)
+            }
+        default: break
+        }
+    }
 
     static func install(on nav: UINavigationController) {
         guard let edge = nav.interactivePopGestureRecognizer else { return }
         edge.isEnabled = true
         if let existing = objc_getAssociatedObject(nav, &key) as? FullScreenPop {
+            edge.removeTarget(existing, action: #selector(track(_:))); edge.addTarget(existing, action: #selector(track(_:)))
             edge.delegate = existing
             if existing.pan == nil || existing.pan?.view == nil { existing.addPan(edge: edge) }
             return
@@ -699,6 +726,7 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
         d.nav = nav
         objc_setAssociatedObject(nav, &key, d, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         edge.delegate = d
+        edge.addTarget(d, action: #selector(track(_:)))
         d.addPan(edge: edge)
     }
 
@@ -709,6 +737,7 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
         let pan = UIPanGestureRecognizer()
         pan.name = "vory.fullScreenPop"
         pan.setValue(targets, forKey: "targets")
+        pan.addTarget(self, action: #selector(track(_:)))
         pan.delegate = self
         pan.maximumNumberOfTouches = 1
         nav.view.addGestureRecognizer(pan)
@@ -764,7 +793,11 @@ enum ComposerDrafts {
     }
 
     static func save(_ text: String, for chat: ChatSession) {
-        if text.isEmpty { UserDefaults.standard.removeObject(forKey: key(for: chat)) }
-        else { UserDefaults.standard.set(text, forKey: key(for: chat)) }
+        // Only a write that changes something: every defaults write re-runs the views that read
+        // defaults (the chat list's filters), and an empty draft was written on every Back.
+        let k = key(for: chat)
+        let stored = UserDefaults.standard.string(forKey: k)
+        if text.isEmpty { if stored != nil { UserDefaults.standard.removeObject(forKey: k) } }
+        else if stored != text { UserDefaults.standard.set(text, forKey: k) }
     }
 }

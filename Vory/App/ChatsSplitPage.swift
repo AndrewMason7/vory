@@ -33,6 +33,9 @@ struct ChatsSplitPage: View {
         if wide {
             NavigationSplitView(columnVisibility: $columns) {
                 ChatListView(detailPath: chatPath)
+                    .onChange(of: model.chatPath.isEmpty, initial: true) { _, empty in
+                        model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
+                    }
                     .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
             } detail: {
                 ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
@@ -46,7 +49,12 @@ struct ChatsSplitPage: View {
             // `ComposerDrafts` and the cursor and scroll place `ChatViewMemory`, so the switch
             // between the two roots loses nothing the person had.
             NavigationStack(path: chatPath) {
-                ChatListView(stackPath: chatPath)
+                ChatListView(inModelStack: true)
+                    // The bar starts coming back the instant a pop begins (the path empties at
+                    // the start of the transition), reported for the list and the bar.
+                    .onChange(of: model.chatPath.isEmpty, initial: true) { _, empty in
+                        model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
+                    }
                     .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
                     .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
             }

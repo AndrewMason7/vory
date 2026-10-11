@@ -219,6 +219,7 @@ struct MainTabView: View {
     var body: some View {
         let tabs = TabLayout.parse(layoutRaw).visible(hiding: model.hiddenTabs)
         let barHeight = VoryTabBar.reservedHeight(in: windowGeometry)
+        let hiddenFraction: CGFloat = model.tabBarHidden ? max(0, 1 - model.popProgress) : 0
         // Where the system would put a vertical bar (the closed Duo's strip, the open Duo in
         // landscape), Vory's own bar goes there too, stacked on that edge (decision 1): the
         // pages are inset by its width instead of its height. Nil: along the bottom, as ever.
@@ -244,9 +245,12 @@ struct MainTabView: View {
             // tappable, over the composer). It slides and fades instead, and its reserved
             // size collapses to nothing.
             let bar = VoryTabBar(tabs: tabs, axis: vertical ? .vertical : .horizontal, compose: { compose() }, composeFull: { composeFull() }, voice: { voiceChat($0) })
-                .offset(x: model.tabBarHidden && vertical ? (edge == .leading ? -140 : 140) : 0,
-                        y: model.tabBarHidden && !vertical ? 140 : 0)
-                .opacity(model.tabBarHidden ? 0 : 1)
+                // Hidden for an open chat, the bar comes back by the back swipe's progress (the
+                // finger scrubs it, a cancelled swipe sends it out again); the button Back and
+                // the push keep the snappy slide below.
+                .offset(x: vertical ? (edge == .leading ? -140 : 140) * hiddenFraction : 0,
+                        y: !vertical ? 140 * hiddenFraction : 0)
+                .opacity(1 - hiddenFraction)
                 // The slide and fade animate; the reserved size below does not. Animating the
                 // safe-area inset while a chat opened made its thread bounce up and down.
                 .animation(.snappy(duration: 0.3), value: model.tabBarHidden)
@@ -300,6 +304,21 @@ struct MainTabView: View {
         .contentMargins(.top, 0, for: .scrollContent)
         // "Read replies aloud" listens for finished replies in the chat in front.
         .task { VoiceCoordinator.shared.observeReplies() }
+        // The back swipe's progress reaches the bar through FullScreenPop; the finish animates
+        // over what is left of the transition, the scrub itself does not animate.
+        .onAppear {
+            FullScreenPop.onProgress = { fraction, ended, duration in
+                if ended {
+                    withAnimation(.easeOut(duration: duration)) { model.popProgress = fraction }
+                    // After the transition the path has changed and the bar is shown by its own
+                    // state again; the progress goes back to zero for the next chat, unanimated.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { model.popProgress = 0 } }
+                } else {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { model.popProgress = fraction }
+                }
+            }
+        }
         .onChange(of: tabs) { _, now in
             // The selected tab was removed from the layout: fall back to Chats instead of a blank pane.
             if !now.contains(model.selectedTab) { model.selectedTab = .chats }

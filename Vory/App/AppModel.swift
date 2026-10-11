@@ -215,6 +215,10 @@ final class AppModel {
     var composeProfile: String?
     /// The custom tab bar hides while a chat is open on the Chats tab (path-driven, instant)…
     var chatsPathOpen = false
+    /// How far an interactive back swipe has pulled the chat away (0 to 1): while the bar is
+    /// hidden for that chat, it slides in by this much, so it tracks the finger like the
+    /// system's bars and goes back out when the swipe is cancelled (Matt, 2026-10-11).
+    var popProgress: CGFloat = 0
     /// …and while any view marked `hidesTabBar()` is on screen on that tab. Counted per tab: a
     /// tap on the bar as it slides away switches tabs, and the new tab must show it again while
     /// the old one keeps its chat open.
