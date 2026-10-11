@@ -44,6 +44,25 @@ struct AttachPanel: View {
         // The panel is an overlay on a 36 pt button, so it is offered 36 pt of height; without
         // its own size the glass was drawn for less than the rows and the last one poked out.
         .fixedSize()
-        .glassEffect(.regular, in: .rect(cornerRadius: 30))
+        // `-vory-plain-panel` (measurement only): a plain material instead of glass, to tell
+        // whether the glass morph is what holds the panel's animation at 60 Hz on ProMotion.
+        .modifier(PanelSurface())
+    }
+}
+
+
+/// The panel's surface: glass, or a plain material under `-vory-plain-panel` (a frame-rate experiment).
+struct PanelSurface: ViewModifier {
+    static let plain = ProcessInfo.processInfo.arguments.contains("-vory-plain-panel")
+    /// `-vory-solid-panel`: a flat colour, no material at all (the same spring drives it).
+    static let solid = ProcessInfo.processInfo.arguments.contains("-vory-solid-panel")
+    func body(content: Content) -> some View {
+        if Self.solid {
+            content.background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 30))
+        } else if Self.plain {
+            content.background(.regularMaterial, in: .rect(cornerRadius: 30))
+        } else {
+            content.glassEffect(.regular, in: .rect(cornerRadius: 30))
+        }
     }
 }
