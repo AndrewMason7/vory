@@ -33,6 +33,9 @@ final class WindowGeometry {
     /// window's bottom edge (or is entirely below it, which is "hidden") and is less than two
     /// thirds of the window tall. Anything else (a floating keyboard, a hardware keyboard's bar
     /// somewhere else, a whole-window rect from another scene) is `.null`.
+    /// Whether a keyboard frame known for a window of `old` size still means anything for one
+    /// of `new` size: only while the size is the same (or nothing was known yet).
+    nonisolated static func keyboardCarriesOver(from old: CGSize, to new: CGSize) -> Bool { old == .zero || old == new }
     nonisolated static func keyboardRect(window: CGRect, end: CGRect) -> CGRect {
         guard !end.isNull, window.height > 0, end.height < window.height * 0.66 else { return .null }
         if end.minY >= window.maxY - 0.5 { return .null }
@@ -97,10 +100,17 @@ struct WindowGeometryReader: UIViewRepresentable {
         override func layoutSubviews() { super.layoutSubviews(); publish() }
         override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); publish() }
 
+        private var lastSize = CGSize.zero
         private func publish() {
             guard let geometry, let window else { return }
             let bounds = window.bounds
             let insets = window.safeAreaInsets
+            // A window of a new size (a turn, a fold, a resize): the keyboard's last frame is
+            // forgotten. A keyboard that stays announces itself again (keyboardWillChangeFrame);
+            // one the turn took away never posts a will-hide, and the open Duo's bar stayed
+            // hidden behind a keyboard that was no longer there.
+            if !WindowGeometry.keyboardCarriesOver(from: lastSize, to: bounds.size) { keyboardEndOnScreen = .null }
+            lastSize = bounds.size
             // The notification's frame is in screen space; the window places it in its own.
             let end: CGRect = keyboardEndOnScreen.isNull ? .null : window.convert(keyboardEndOnScreen, from: window.screen.coordinateSpace)
             let keyboard = WindowGeometry.keyboardRect(window: bounds, end: end)

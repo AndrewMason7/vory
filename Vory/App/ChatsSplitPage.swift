@@ -12,7 +12,6 @@ import VoryCore
 struct ChatsSplitPage: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.wideLayout) private var wide
     @State private var columns = NavigationSplitViewVisibility.doubleColumn
 
@@ -31,31 +30,27 @@ struct ChatsSplitPage: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columns) {
-            ChatListView(detailPath: chatPath)
-                .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
-        } detail: {
-            ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
+        if wide {
+            NavigationSplitView(columnVisibility: $columns) {
+                ChatListView(detailPath: chatPath)
+                    .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
+            } detail: {
+                ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else {
+            // One column (a phone, the closed Duo, the open Duo upright, a narrow window): the
+            // list's own stack on the same path. The split view collapsed to one column left
+            // its empty detail column (the placeholder, with a back button) in front after a
+            // chat's Back, instead of the list. The open chat is `AppModel.chatPath`, the draft
+            // `ComposerDrafts` and the cursor and scroll place `ChatViewMemory`, so the switch
+            // between the two roots loses nothing the person had.
+            NavigationStack(path: chatPath) {
+                ChatListView(stackPath: chatPath)
+                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
+            }
         }
-        .navigationSplitViewStyle(.balanced)
-        // One column where the layout is not wide (the open Duo upright, a narrow window): the
-        // split view collapses as it does on a phone, the chat pushed over the list, rather
-        // than the dimmed list overlay the system gives a regular-width portrait window.
-        .modifier(CollapseWhenNarrow(wide: wide, sizeClass: sizeClass))
-    }
-}
-
-/// Collapses the split view where the layout is not wide (iOS: the size class written as
-/// compact). The Mac's split never collapses and its key path is read-only.
-private struct CollapseWhenNarrow: ViewModifier {
-    let wide: Bool
-    let sizeClass: UserInterfaceSizeClass?
-    func body(content: Content) -> some View {
-        #if os(iOS)
-        content.environment(\.horizontalSizeClass, wide ? sizeClass : .compact)
-        #else
-        content
-        #endif
     }
 }
 

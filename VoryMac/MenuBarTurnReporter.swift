@@ -18,6 +18,8 @@ final class TurnBoard {
         var attention: Bool
         let startedAt: Date
         weak var chat: ChatSession?
+        /// What the bot is doing, for its pose in the row (thinking, a tool, a search, writing).
+        var state: BotFace.State = .working
     }
 
     private(set) var turns: [Turn] = []
@@ -84,7 +86,8 @@ final class MenuBarTurnReporter: TurnActivityReporting {
 
     private func turn(_ chat: ChatSession, detail: String, attention: Bool) -> TurnBoard.Turn {
         let bot = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
-        return TurnBoard.Turn(id: chat.storedID, title: chat.title, bot: bot, profile: chat.profileName, detail: detail, attention: attention, startedAt: startedAt, chat: chat)
+        return TurnBoard.Turn(id: chat.storedID, title: chat.title, bot: bot, profile: chat.profileName, detail: detail, attention: attention, startedAt: startedAt, chat: chat,
+                              state: chat.botState)
     }
 }
 
@@ -132,7 +135,8 @@ struct TurnMenu: View {
 
     private func row(_ t: TurnBoard.Turn) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            BotAvatar(profile: t.profile, size: 30, active: !t.attention, mood: BotFaceView.Mood(state: t.attention ? .awaitingApproval : .working))
+            BotAvatar(profile: t.profile, size: 30, active: !t.attention,
+                      mood: BotFaceView.Mood(session: t.id, state: t.attention ? .awaitingApproval : t.state))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(t.bot).font(.subheadline.weight(.semibold)).lineLimit(1)

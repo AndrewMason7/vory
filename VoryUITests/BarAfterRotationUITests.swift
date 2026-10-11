@@ -82,6 +82,22 @@ final class BarAfterRotationUITests: XCTestCase {
             settle(2.5)
             shot("bar-5-landscape-after-chat")
             checkBar("landscape after the chat")
+            // With the keyboard up before the turn (the Duo's case: the keyboard went away with
+            // the turn and the bar stayed hidden behind it).
+            let composer = app.textViews["composer.text"].firstMatch
+            if let row2 = rows.allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }), row2.tap() == (), composer.waitForExistence(timeout: 10), composer.isHittable {
+                composer.tap(); settle(1)
+                if app.buttons["profile.close"].firstMatch.exists { app.buttons["profile.close"].firstMatch.tap(); settle(1) }
+                XCUIDevice.shared.orientation = .portrait
+                settle(2.5)
+                if back.exists, back.isHittable, !compose.isHittable { back.tap(); settle(1.5) }
+                shot("bar-6-portrait-after-keyboard")
+                checkBar("portrait after a turn with the keyboard up")
+                XCUIDevice.shared.orientation = .landscapeLeft
+                settle(2.5)
+                shot("bar-7-landscape-after-keyboard")
+                checkBar("landscape after a turn with the keyboard up")
+            }
         }
     }
 }
