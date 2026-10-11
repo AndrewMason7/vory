@@ -20,6 +20,9 @@ struct VoryApp: App {
         ImageTranscode.install()
         TypingHaptics.shared.start()
         BotFace.liveGlass = true
+        // The 1.5 motion: painted bots run on the model (#304).
+        // `-vory-motion-engine NO` leaves the 1.4 drawing on, for the CPU comparison (section 6).
+        BotFace.motionEngine = UserDefaults.standard.object(forKey: "vory-motion-engine") == nil || UserDefaults.standard.bool(forKey: "vory-motion-engine")
         _model = State(initialValue: AppModel.shared)
     }
     @Environment(\.scenePhase) private var scenePhase

@@ -483,7 +483,7 @@ final class LiveActivityController: TurnActivityReporting {
     }
 
     func end(for chat: ChatSession, phase: String) {
-        BotAmbient.shared.turnFinished(profile: chat.profileName)
+        BotAmbient.shared.turnFinished(profile: chat.profileName, session: chat.storedID)
         // Voice mode keeps the card up between turns: it shows the conversation's state instead.
         if voiceLine != nil, handle != nil {
             update(for: chat, attention: false)

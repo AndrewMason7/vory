@@ -1666,6 +1666,29 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
 
+    async def _morph_turn(self, s: Session, prompt: str) -> None:
+        """A staged interrupted change for the bot's motion (1.5 #304): a tool starts and, 0.15 s
+        later while the toolbox is still forming, an approval is asked; the tool completes once
+        the approval is answered, then a short reply. For the planner's clip."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, "Checking the disk first. ", delay=0.01)
+        tool_id = f"t-{uuid.uuid4().hex[:8]}"
+        await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": "df -h /", "args": {"command": "df -h /"}})
+        await asyncio.sleep(0.15)
+        answer = await self.ask("approval", s.sid, {
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "command": "rm -rf /var/log/old",
+            "description": "Delete the old log folder (1.1 GB)",
+            "tool_name": "terminal",
+            "choices": ["once", "session", "always", "deny"],
+            "allow_session": True, "allow_permanent": True})
+        await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.2, "summary": "41% used", "result_text": "/dev/sda1  470G  190G  257G  41% /"})
+        text = "Done." if (answer or {}).get("choice", "deny") != "deny" else "Left it alone."
+        await self.stream_words(s, text)
+        self.store_turn(s, prompt, ["Checking the disk first. ", 1, text])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": "Checking the disk first. " + text, "status": "complete", "usage": usage(s.output_tokens, 2)})
+
     async def _marathon_turn(self, s: Session, prompt: str) -> None:
         """A long run of the kind a person starts and leaves going with the phone in a pocket:
         a step at a time (a sentence, then a tool call with a screenful of output), then a long
@@ -1845,6 +1868,9 @@ class Gateway:
             await asyncio.sleep(20)
         if prompt.strip().lower().startswith("delegate"):
             await self._delegate_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("morph"):
+            await self._morph_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
             await self._card_turn(s, prompt)

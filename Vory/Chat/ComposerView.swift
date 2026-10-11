@@ -508,16 +508,22 @@ struct ComposerView: View {
             Section("Model") { ModelMenuContent(chat: chat) }
             ReasoningEffortMenu(chat: chat)
         } label: {
-            HStack(spacing: 4) {
-                Text(chat.modelName.isEmpty ? "Model" : Self.shortModel(chat.modelName)).lineLimit(1).truncationMode(.middle)
-                Text("·").foregroundStyle(.tertiary)
-                Text(dynamicTypeSize.isAccessibilitySize ? ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "") : ReasoningEffort.title(current: chat.info?.reasoningEffort)).lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+            // Matt's wording (2026-10-10, via the planner): the model's name in the text's own
+            // tone, the level after it in a lighter one, no "Reasoning:"; at the accessibility
+            // sizes the level stands alone.
+            HStack(spacing: 6) {
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Text(chat.modelName.isEmpty ? "Model" : Self.shortModel(chat.modelName)).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(.primary.opacity(0.85))
+                }
+                Text(ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "medium")).lineLimit(1)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
             }
-            .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            .font(.caption.weight(.medium))
             .padding(.horizontal, 10).padding(.vertical, 6)
             // Under the pointer the capsule firms up (the Mac); a touch has no hover.
-            .background(.quaternary.opacity(chipHovered ? 1 : 0.6), in: .capsule)
+            .background(.quaternary.opacity(chipHovered ? 1 : 0.85), in: .capsule)
             .contentShape(.capsule)
         }
         .menuOrder(.fixed)
@@ -526,7 +532,7 @@ struct ComposerView: View {
         .onHover { chipHovered = $0 }
         #endif
         .accessibilityIdentifier("composer.modelChip")
-        .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.title(current: chat.info?.reasoningEffort))")
+        .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "medium"))")
     }
 
     static func shortModel(_ m: String) -> String {

@@ -312,7 +312,8 @@ struct TranscriptView: View {
             .overlay(alignment: .bottomLeading) {
                 ZStack {
                     if showBots, chat.isRunning {
-                        BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(state: chat.botState))
+                        // Plain while the reply writes (the thread's own typing bubble says so, decision A).
+                        BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState == .streaming ? .working : chat.botState))
                             .padding(.leading, 16).padding(.bottom, dockReach + 12)
                             .transition(.scale(scale: 0.6).combined(with: .opacity))
                             .allowsHitTesting(false)

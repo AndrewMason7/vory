@@ -330,7 +330,7 @@ struct DashboardView: View {
                         let (working, waiting) = botStatus(rt, p)
                         Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
                             HStack(spacing: 12) {
-                                BotAvatar(profile: p.name, size: 36, active: working != nil)
+                                BotAvatar(profile: p.name, size: 36, active: working != nil, mood: BotFaceView.Mood(session: working?.storedID, state: waiting ? .awaitingApproval : (working?.botState ?? .idle)))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(p.label).font(.body.weight(.medium))
                                     Text(waiting ? "Needs you" : (working.map { ChatGoals.shared.goal(for: $0.storedID) ?? $0.statusLine ?? "Working…" } ?? "Idle"))
@@ -351,7 +351,7 @@ struct DashboardView: View {
                                 Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
                                     VStack(spacing: 4) {
                                         ZStack(alignment: .topTrailing) {
-                                            BotAvatar(profile: p.name, size: 44, active: working != nil)
+                                            BotAvatar(profile: p.name, size: 44, active: working != nil, mood: BotFaceView.Mood(session: working?.storedID, state: waiting ? .awaitingApproval : (working?.botState ?? .idle)))
                                             if waiting || working != nil {
                                                 Circle().fill(waiting ? Color.red : Color.blue).frame(width: 10, height: 10).offset(x: 2, y: -2)
                                             }

@@ -247,7 +247,7 @@ struct IslandBot: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
-                BotFace.draw(spec, in: &ctx, size: sz, time: 0, active: false, breathe: false, idleEyes: false, move: false, motion: BotFace.widgetPose(phase: state.phase, attention: state.needsAttention))
+                BotFace.drawFrame(spec, in: &ctx, size: sz, frame: BotFace.stillFrame(phase: state.phase, detail: state.detail, attention: state.needsAttention))
             }
             .frame(width: size, height: size)
             .overlay(Circle().strokeBorder(.yellow, lineWidth: state.needsAttention ? 1.5 : 0).padding(-1.5))
@@ -298,7 +298,7 @@ struct BotMark: View {
             // frame on every state change.
             Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
                 // One held pose per phase: the squint, the asking lean, the lowered eyes.
-                BotFace.draw(spec, in: &ctx, size: sz, time: 0, active: false, breathe: false, idleEyes: false, move: false, motion: BotFace.widgetPose(phase: state.phase, attention: state.needsAttention))
+                BotFace.drawFrame(spec, in: &ctx, size: sz, frame: BotFace.stillFrame(phase: state.phase, detail: state.detail, attention: state.needsAttention))
             }
             .frame(width: size, height: size)
             if size >= 28 {
