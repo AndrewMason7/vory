@@ -32,12 +32,16 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTOSSignpostMetric(subsystem: "Vory", category: "Smooth", name: name)
     }
 
-    private var options: XCTMeasureOptions {
+    /// Ten rounds for the quick flows (a single hitch in five rounds is noise; the planner wants
+    /// a mean and a worst that mean something), five for the long ones (a fling is 2.4 s each).
+    private func rounds(_ n: Int) -> XCTMeasureOptions {
         let o = XCTMeasureOptions()
-        o.iterationCount = 5
+        o.iterationCount = n
         o.invocationOptions = [.manuallyStop]
         return o
     }
+    private var options: XCTMeasureOptions { rounds(10) }
+    private var longOptions: XCTMeasureOptions { rounds(5) }
 
     private func any(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
     private func pause(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
@@ -168,7 +172,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Everything else looked healthy'")).firstMatch.waitForExistence(timeout: 90), "the turn did not finish")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         pause(1.5)
-        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric], options: options) {
+        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric], options: longOptions) {
             for _ in 0..<3 { app.swipeDown(velocity: .fast); pause(0.9) }
             for _ in 0..<3 { app.swipeUp(velocity: .fast); pause(0.9) }
             stopMeasuring()
@@ -204,7 +208,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token)
         waitForList()
-        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric], options: options) {
+        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric], options: longOptions) {
             for _ in 0..<4 { app.swipeUp(velocity: .fast); pause(0.9) }
             for _ in 0..<4 { app.swipeDown(velocity: .fast); pause(0.9) }
             stopMeasuring()
@@ -229,8 +233,11 @@ final class SmoothnessPerfUITests: XCTestCase {
                 .filter { $0.frame.minY > window.minY + 120 && $0.frame.maxY < window.maxY - 160 }
                 .min { abs($0.frame.midY - mid) < abs($1.frame.midY - mid) }
             XCTAssertNotNil(row, "no row in the middle of the screen")
-            row?.tap()
-            XCTAssertTrue(any("chat.dock").waitForExistence(timeout: 20), "the chat did not open")
+            guard let row else { stopMeasuring(); return }
+            print("DEEP-ROW \(row.label.prefix(60)) \(row.frame)")
+            // By coordinate: the row's own tap landed beside it on a device once.
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.midX, dy: row.frame.midY)).tap()
+            XCTAssertTrue(any("chat.dock").waitForExistence(timeout: 20), "the chat did not open: \(row.label.prefix(60))")
             pause(1)
             let b = any("chat.back")
             XCTAssertTrue(b.waitForExistence(timeout: 10)); b.tap()

@@ -10,15 +10,31 @@ import VoryCore
 /// `botColors`; profiles without a saved colour get a stable pick from the palette so two bots
 /// never look alike by accident. Used by the chat title pill, the Bots list, notifications' tint
 /// and the Live Activity.
+/// The bot look maps (colours, avatar choices) as stored: one JSON string each, decoded once per
+/// distinct string and kept. Every face on screen read its map by decoding the string again on
+/// each body evaluation, which a list of a hundred rows did on every frame of a fling.
+enum BotLookMaps {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: [String: String]] = [:]
+
+    static func map(_ raw: String?) -> [String: String] {
+        guard let raw, !raw.isEmpty else { return [:] }
+        lock.lock(); defer { lock.unlock() }
+        if let m = cache[raw] { return m }
+        let m = (raw.data(using: .utf8)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        if cache.count > 16 { cache.removeAll() }
+        cache[raw] = m
+        return m
+    }
+}
+
 enum BotColors {
     static let storageKey = "botColors"
     /// The watch and the Mac pick from the same list (VoryCore's), so a bot is one colour everywhere.
     static let palette: [String] = BotPalette.hexes
 
     static func stored() -> [String: String] {
-        guard let raw = UserDefaults.standard.string(forKey: storageKey), let data = raw.data(using: .utf8),
-              let map = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
-        return map
+        BotLookMaps.map(UserDefaults.standard.string(forKey: storageKey))
     }
 
     @MainActor static func save(_ map: [String: String]) {
@@ -83,18 +99,13 @@ struct BotAvatar: View {
     @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
 
-    private var overrides: [String: String] {
-        guard let d = raw.data(using: .utf8), let m = try? JSONDecoder().decode([String: String].self, from: d) else { return [:] }
-        return m
-    }
+    private var overrides: [String: String] { BotLookMaps.map(raw) }
     private var effectiveMood: BotFaceView.Mood {
         var m = mood; if m.profile == nil { m.profile = profile }; return m
     }
     private var choice: BotAvatarChoice {
         if let override { return override }
-        guard let d = avatarsRaw.data(using: .utf8), let m = try? JSONDecoder().decode([String: String].self, from: d) else {
-            return BotAvatarChoice(raw: BotAvatarStore.effective("", glassAll: glassAll))
-        }
+        let m = BotLookMaps.map(avatarsRaw)
         return BotAvatarChoice(raw: BotAvatarStore.effective(m[profile] ?? "", glassAll: glassAll))
     }
 

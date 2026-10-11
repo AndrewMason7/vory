@@ -47,9 +47,7 @@ enum BotAvatarStore {
     private static var photoCache: NSCache<NSString, UIImage> { cache.store }
 
     static func stored() -> [String: String] {
-        guard let raw = UserDefaults.standard.string(forKey: storageKey), let data = raw.data(using: .utf8),
-              let map = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
-        return map
+        BotLookMaps.map(UserDefaults.standard.string(forKey: storageKey))
     }
 
     @MainActor static func save(_ map: [String: String]) {
