@@ -1300,9 +1300,10 @@ private struct LeadingTitle: ViewModifier {
 }
 
 
+#if os(iOS)
 /// The summary strip, lifted above the tab bar: its own view, so the bar's hide and show (every
 /// chat open and every Back) does not re-run the list's body and rebuild a hundred rows inside
-/// the navigation transition (the 75 ms stalls on Back, 2026-10-11).
+/// the navigation transition (the 75 ms stalls on Back, 2026-10-11). iOS only: the bar is.
 private struct SummaryStripAboveBar: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
@@ -1310,6 +1311,7 @@ private struct SummaryStripAboveBar: View {
         SummaryProgressStrip().padding(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 6)
     }
 }
+#endif
 
 
 /// The list's own stack (a tab without the split page): its path drives `chatsPathOpen` here.

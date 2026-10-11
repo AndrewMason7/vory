@@ -326,19 +326,6 @@ struct HidesTabBar: ViewModifier {
     }
 }
 
-/// Counts a chat or room pushed on the Chats tab's own stack while it is on screen
-/// (`AppModel.chatsOnScreen`): the bar's reserved size comes back only once it has gone.
-struct CountsChatOnScreen: ViewModifier {
-    @Environment(AppModel.self) private var model
-    @State private var counted = false
-
-    func body(content: Content) -> some View {
-        content
-            .onAppear { guard !counted else { return }; counted = true; model.chatsOnScreen += 1 }
-            .onDisappear { guard counted else { return }; counted = false; model.chatsOnScreen = max(0, model.chatsOnScreen - 1) }
-    }
-}
-
 /// Marks a tab's root page: on screen means the tab is at its root. Chats reports through its
 /// navigation path instead (a pushed chat keeps the list alive underneath). A tap on the tab
 /// while deeper pops the stack the way a swipe back would, animated.
@@ -386,6 +373,5 @@ private extension UIView {
 
 extension View {
     func hidesTabBar() -> some View { modifier(HidesTabBar()) }
-    func countsChatOnScreen() -> some View { modifier(CountsChatOnScreen()) }
     func tabRoot(_ tab: AppModel.AppTab) -> some View { modifier(TabRoot(tab: tab)) }
 }
