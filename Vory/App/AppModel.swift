@@ -255,6 +255,8 @@ final class AppModel {
     /// tab while deeper in it bumps `popToRoot`, which re-creates that tab at its root.
     var tabAtRoot: [AppTab: Bool] = [:]
     var popToRoot: [AppTab: Int] = [:]
+    /// Bumped by the bar's Back on a pushed page: the tab's stack pops one page.
+    var popOne: [AppTab: Int] = [:]
     /// Bumped on every tap of the already-selected tab (root or not): lists scroll to the top.
     var tabReselected: [AppTab: Int] = [:]
     /// A keyboard is up somewhere: the bar hides rather than floating over it.

@@ -37,19 +37,33 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
 @MainActor @Observable final class MorphState {
     static let shared = MorphState()
     var chat: ChatSession?
-    /// 0 = the chat's controls, 1 = the list's.
+    /// A page pushed on a tab other than Chats: the title capsule becomes its Back (Matt,
+    /// 2026-10-12: "it should morph into the back arrow on all pages and then morph back").
+    var pushedTab: AppModel.AppTab?
+    /// Away from a root page: a chat or a pushed page is up (or on its way).
+    var away: Bool { chat != nil || pushedTab != nil }
+    /// 0 = the chat's (or the pushed page's) controls, 1 = the root page's.
     var t: CGFloat = 1
     /// The finger has the pop: `t` follows it and nothing is tappable.
     var scrubbing = false
 
     func push(_ c: ChatSession) {
-        chat = c
+        chat = c; pushedTab = nil
+        toAway()
+    }
+    func pushPage(_ tab: AppModel.AppTab) {
+        guard chat == nil else { return }
+        pushedTab = tab
+        toAway()
+    }
+    private func toAway() {
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = 0 } }
         // Quick, as the system's own glass morphs are (Matt, 2026-10-12: "too slow").
         else { withAnimation(.spring(duration: 0.32, bounce: 0)) { t = 0 } }
     }
+    private func settleOnRoot() { chat = nil; pushedTab = nil }
     func scrub(_ fraction: CGFloat) {
-        guard chat != nil else { return }
+        guard away else { return }
         scrubbing = true
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = fraction >= 0.5 ? 1 : 0 } }
         else { var tr = Transaction(); tr.disablesAnimations = true; withTransaction(tr) { t = fraction } }
@@ -57,7 +71,7 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// The swipe let go: finish to the list (fraction 1) or back to the chat (0) over what is
     /// left of the transition.
     func release(_ fraction: CGFloat, over duration: Double) {
-        guard chat != nil else { return }
+        guard away else { return }
         scrubbing = false
         // With the page: the bar finishing ahead of the slide made the list's controls land
         // before the list (Matt, 2026-10-12: "the nav bar reappears weirdly").
@@ -70,17 +84,17 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
         // cancelled swipe did nothing on the phone).
         DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) {
             self.scrubbing = false
-            if end >= 1 { if self.t >= 1 { self.chat = nil } } else { self.t = 0 }
+            if end >= 1 { if self.t >= 1 { self.settleOnRoot() } } else { self.t = 0 }
         }
     }
     /// What the bar is doing, for a diagnostic.
-    var debugLine: String { "chat=\(chat?.storedID ?? "nil") t=\(t) scrubbing=\(scrubbing)" }
+    var debugLine: String { "chat=\(chat?.storedID ?? "nil") pushed=\(pushedTab?.rawValue ?? "nil") t=\(t) scrubbing=\(scrubbing)" }
     /// A pop that was not a swipe (the Back button): the timed morph.
     func pop() {
-        guard chat != nil, !scrubbing else { return }
+        guard away, !scrubbing else { return }
         let d = 0.32
         withAnimation(.spring(duration: d, bounce: 0)) { t = 1 }
-        DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) { if self.t >= 1 { self.chat = nil } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) { if self.t >= 1 { self.settleOnRoot() } }
     }
 }
 
@@ -111,7 +125,7 @@ struct MorphTopBar: View {
     /// Where a slot last was, so a page without it can fade its capsule out in place.
     @State private var lastListFrames: [MorphSlot: CGRect] = [:]
 
-    private var t: CGFloat { state.chat == nil ? 1 : state.t }
+    private var t: CGFloat { state.away ? state.t : 1 }
     private var settled: Bool { t <= 0 || t >= 1 }
     /// Reduce Motion: the two sets cross-fade at the halfway point instead of interpolating.
     private var shown: CGFloat { reduceMotion ? (t < 0.5 ? 0 : 1) : t }
@@ -122,6 +136,7 @@ struct MorphTopBar: View {
                 // The end states, for their frames only.
                 listLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
                 if let chat = state.chat { chatLayout(chat).opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
+                else if state.pushedTab != nil { pushedLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
                 // The capsules that are seen, one per slot, at the frame between the two.
                 ForEach(MorphSlot.allCases, id: \.self) { slot in capsule(slot) }
             }
@@ -166,19 +181,17 @@ struct MorphTopBar: View {
         // the measured frames (a slot that went away left a faint empty capsule on Settings).
         let chrome = tabChrome(model.selectedTab)
         let pageHas = slot == .mid || (slot == .lead ? chrome.lead != nil : chrome.trail != nil)
-        // Over a page pushed on another tab, or a group chat on Chats, the bar steps aside:
-        // those pages keep the system's own bar (their title and Back).
-        let pushedAway = model.selectedTab == .chats ? (model.chatsPathOpen && state.chat == nil) : (model.tabAtRoot[model.selectedTab] == false)
-        let present = !pushedAway && (state.chat != nil ? (shown < 0.5 || pageHas) : pageHas)
-        // Pushed away (another tab's page, a group chat): no capsule at all. Inside the glass
-        // container neither a capsule's opacity nor a transition is honoured, so a "fade"
-        // left the controls standing over every pushed page (1.5 (14), Matt: "swiping back
-        // on other pages is broken"). The capsules return once the page is back at its root,
-        // which the root probe says only when a pop has finished.
+        // Over a group chat on Chats the bar steps aside: that page keeps its own header.
+        // Inside the glass container neither a capsule's opacity nor a transition is
+        // honoured, so there is no capsule at all there. A page pushed on another tab is an
+        // "away" state like a chat: the title capsule becomes its Back and the others go.
+        let pushedAway = model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil
+        let awayHas = state.chat != nil ? true : (state.pushedTab != nil ? slot == .mid : pageHas)
+        let present = !pushedAway && (shown < 0.5 ? awayHas : pageHas)
         if pushedAway {
             EmptyView()
         } else if let b = listFrames[slot] ?? lastListFrames[slot] ?? chatFrames[slot] {
-            let f = chatFrames[slot].map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
+            let f = (awayHas ? chatFrames[slot] : nil).map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
             ZStack {
                 // Only the state that is showing takes taps: the other sits in the stack at
                 // opacity 0 and would otherwise cover it (the Back tap went nowhere).
@@ -189,7 +202,10 @@ struct MorphTopBar: View {
                 // Settled, only the shown set is mounted: a menu's label in the glass kept a
                 // ghost of the other set at opacity 0 (the list's bot chip behind Back, the
                 // list's icons behind …; Matt, 2026-10-12).
-                if shown < 0.98, let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
+                if shown < 0.98 {
+                    if let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
+                    else if let tab = state.pushedTab, slot == .mid { pageBack(tab).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
+                }
                 // Keyed by tab, so a tab switch cross-fades one page's control into the next's.
                 if shown > 0.02 { listContent(slot).id(model.selectedTab).transition(.opacity).opacity(Double(max(0, (shown - 0.5) * 2.4))).allowsHitTesting(shown >= 0.5 && pageHas) }
             }
@@ -417,6 +433,27 @@ struct MorphTopBar: View {
             case nil: EmptyView()
             }
         }
+    }
+
+    /// A pushed page's one control: a Back circle where the chat's Back sits, on the root
+    /// row (no face to clear).
+    private var pushedLayout: some View {
+        HStack(spacing: 12) {
+            Color.clear.frame(width: 44, height: 44).measured(.mid, into: $chatFrames)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The pushed page's Back, live: pops its stack one page (the probe under the root does it).
+    private func pageBack(_ tab: AppModel.AppTab) -> some View {
+        Button { model.popOne[tab, default: 0] += 1 } label: {
+            Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Back").accessibilityIdentifier("page.back").accessibilityAddTraits(.isButton)
+        .accessibilityAction { model.popOne[tab, default: 0] += 1 }
+        .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
     }
 
     private func chatLayout(_ chat: ChatSession) -> some View {

@@ -318,9 +318,9 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
         let title = app.staticTexts["Settings"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "no Settings title capsule at the root")
-        func openRow() { for _ in 0..<3 { row.tap(); if app.buttons["BackButton"].firstMatch.waitForExistence(timeout: 3) { break } }; pause(1.5) }
+        func openRow() { for _ in 0..<3 { row.tap(); if any("page.back").firstMatch.waitForExistence(timeout: 3) { break } }; pause(1.5) }
         openRow(); shot("settings-pushed")
-        XCTAssertTrue(app.buttons["BackButton"].firstMatch.exists, "the pushed page has no Back")
+        XCTAssertTrue(any("page.back").firstMatch.exists, "the pushed page has no Back capsule")
         XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule stands over the pushed page")
         // A slow edge swipe, let go past the middle.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
@@ -330,9 +330,9 @@ final class SmoothnessPerfUITests: XCTestCase {
         openRow()
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
         pause(1.5); shot("settings-cancelled")
-        XCTAssertTrue(app.buttons["BackButton"].firstMatch.exists, "the cancelled swipe lost the pushed page")
+        XCTAssertTrue(any("page.back").firstMatch.exists, "the cancelled swipe lost the pushed page")
         XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the pushed page after a cancelled swipe")
-        app.buttons["BackButton"].firstMatch.tap(); pause(1.5)
+        any("page.back").firstMatch.tap(); pause(1.5)
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after Back")
     }
 
@@ -647,9 +647,11 @@ final class SmoothnessPerfUITests: XCTestCase {
         let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
         row.tap(); pause(1.5); shot("settings-pushed")
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 5), "the pushed page has no Back")
-        back.tap(); pause(1.5); shot("settings-root-again")
+        let back = any("page.back")
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "the pushed page has no Back capsule")
+        XCTAssertFalse(app.navigationBars.buttons.matching(identifier: "BackButton").firstMatch.exists, "the system's back button still shows on the pushed page")
+        back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5); shot("settings-root-again")
+        XCTAssertTrue(app.staticTexts["Settings"].firstMatch.waitForExistence(timeout: 5), "the Settings title capsule is not back")
     }
 
     /// The "/" list out of the field and back (type "/", then delete it).
