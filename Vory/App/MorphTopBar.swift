@@ -135,6 +135,9 @@ struct MorphTopBar: View {
         // read 370 pt wide after a cancelled swipe, and a tap at its centre hit the pill).
         .allowsHitTesting(settled && !state.scrubbing)
         .accessibilityElement(children: .contain)
+        // With a chat shown it is the chat's header for the UI tests (ThreadLayoutUITests
+        // measures the thread's first row against the header's bottom).
+        .accessibilityIdentifier(state.chat != nil ? "chat.header" : "morph.bar")
         .onChange(of: model.chatsPathOpen) { _, open in
             if open, let c = model.visibleChat { state.push(c) }
             else if !open, state.chat != nil, !state.scrubbing, state.t < 1 { state.pop() }
@@ -405,7 +408,10 @@ struct MorphTopBar: View {
             Text(status.count > 42 ? String(status.prefix(41)) + "…" : status).font(.caption2).lineLimit(1).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 6)
-        .fixedSize()
+        // Its height is its own; its width gives way, so a long title truncates between the
+        // circles instead of pushing the row past the edges (Back sat at x 8 at an
+        // accessibility size, HeaderTextSizeUITests).
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var actions: some View {

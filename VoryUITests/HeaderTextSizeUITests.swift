@@ -151,6 +151,10 @@ final class HeaderTextSizeUITests: XCTestCase {
         let more = try XCTUnwrap(element("chat.more"), "the chat has no … circle")
         checkRow(back: chatBack, plate: pill, trailing: more, "single chat")
         chatBack.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertNotNil(hittable(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", chatTitle)), timeout: 10), "Back did not leave the chat")
+        // After the pop has settled: asked mid-pop, the row's hittability threw ("activation
+        // point invalid") instead of reading false. The list's row (a button), not a static
+        // text: the thread's first message carries the same words.
+        sleep(2)
+        XCTAssertNotNil(hittable(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", chatTitle)), timeout: 10), "Back did not leave the chat")
     }
 }
