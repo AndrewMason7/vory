@@ -294,7 +294,10 @@ struct ConversationView: View {
             // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
             // The dock's top edge on screen, keyboard included: the thread measures its
-            // own bottom edge the same way and keeps its last line above this.
+            // own bottom edge the same way and keeps its last line above this. It follows
+            // every frame of an interactive keyboard dismiss too: the thread's rows no longer
+            // rebuild for it (TranscriptRow takes its open states as values), so the thread
+            // rides with the keyboard instead of holding and jumping (Matt, 2026-10-11).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
             // The dock's frame for the UI tests (its own container: an identifier on a plain
             // view goes to every child, and the composer lost its name).

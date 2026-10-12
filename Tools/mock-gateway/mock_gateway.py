@@ -310,8 +310,15 @@ def reasoning_echo(content: str) -> str:
     return _REASONING_TAG_RE.sub("", content.strip()).strip()[:500]
 
 
+# `--context-percent N`: every session reports its context this full (the ring in the message bar
+# at a high fill, for pictures); None keeps the figure that follows from the output.
+CONTEXT_PERCENT_OVERRIDE = None
+
+
 def usage(output: int, calls: int = 1) -> dict:
     used = 18_400 + output * 4
+    if CONTEXT_PERCENT_OVERRIDE is not None:
+        used = int(CONTEXT_MAX * CONTEXT_PERCENT_OVERRIDE / 100)
     return {
         "model": MODEL, "input": 17_900, "output": output, "reasoning": 0,
         "total": 17_900 + output, "calls": calls, "compressions": 0,
@@ -2446,6 +2453,7 @@ async def main() -> None:
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
+    ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
     args = ap.parse_args()
     titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
     def extra_session(i: int, profile: str) -> dict:
@@ -2457,6 +2465,8 @@ async def main() -> None:
         row = extra_session(i, "default")
         STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
     bot_names = ["ops", "research", "writer", "builder", "support", "data", "design", "finance", "legal", "qa", "infra", "growth"]
+    global CONTEXT_PERCENT_OVERRIDE
+    CONTEXT_PERCENT_OVERRIDE = args.context_percent
     for b in range(args.extra_bots):
         name = bot_names[b % len(bot_names)] + ("" if b < len(bot_names) else str(b // len(bot_names) + 1))
         PROFILES.append(name)

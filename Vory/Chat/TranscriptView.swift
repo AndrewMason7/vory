@@ -303,6 +303,8 @@ struct TranscriptView: View {
                 let touching = phase == .tracking || phase == .interacting || phase == .decelerating
                 if touching, !metrics.userScrolling { metrics.touchStartDistance = metrics.distanceFromBottom }
                 metrics.userScrolling = touching
+                // Shared with the lists: idle faces hold their blink while the thread moves.
+                BotAmbient.shared.scrolling = touching
                 if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
@@ -715,9 +717,9 @@ struct RowContext: Equatable {
                       showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
                       onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
                       interruptCause: id == lastID ? interruptCause : nil, onKeepRunning: actions.onKeepRunning,
-                      reasoningOpen: Binding(get: { [open = openReasoning.contains(id)] in open }, set: { actions.setReasoningOpen(id, $0) }),
+                      reasoningOpen: openReasoning.contains(id), setReasoningOpen: { actions.setReasoningOpen(id, $0) },
                       onSelectText: actions.onSelectText,
-                      toolOpen: Binding(get: { [open = openTools.contains(id)] in open }, set: { actions.setToolOpen(id, $0) }),
+                      toolOpen: openTools.contains(id), setToolOpen: { actions.setToolOpen(id, $0) },
                       showToolOutput: showToolOutput, compactTools: compactTools, wide: wide, maxBubble: maxBubble)
             // Equatable on what it draws (the closures and the binding are
             // compared by value): a row whose message did not change is not
@@ -934,6 +936,8 @@ enum ChatStyle {
     static let returnSends = "chat.returnSends"
     static let showReasoning = "chat.showReasoning"
     static let showTurnStats = "chat.showTurnStats"
+    /// The message bar's context figure as tokens ("18/200K") instead of a percentage.
+    static let contextAsTokens = "chat.contextAsTokens"
     static let showSystemNotes = "chat.showSystemNotes"
     /// The bot beside each reply bubble.
     static let showBots = "chat.showBots"
@@ -1066,8 +1070,7 @@ struct TranscriptRow: View, Equatable {
     static func == (a: TranscriptRow, b: TranscriptRow) -> Bool {
         a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botShown == b.botShown && a.typingTool == b.typingTool
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
-            && a.reasoningOpen.wrappedValue == b.reasoningOpen.wrappedValue
-            && a.toolOpen.wrappedValue == b.toolOpen.wrappedValue
+            && a.reasoningOpen == b.reasoningOpen && a.toolOpen == b.toolOpen
             && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
             && a.maxBubble == b.maxBubble && a.interruptCause == b.interruptCause
     }
@@ -1097,9 +1100,14 @@ struct TranscriptRow: View, Equatable {
         if botTint, let profile { return BotColors.color(for: profile).opacity(scheme == .dark ? 0.22 : 0.16) }
         return Color(.systemGray5)
     }
-    var reasoningOpen: Binding<Bool> = .constant(false)
+    /// Open states as values with a setter, not Bindings: a Binding made in the parent's body is
+    /// a new value every evaluation, and SwiftUI re-ran every visible row for it on each frame
+    /// of a keyboard drag ("reasoningOpen, toolOpen changed", 854 times in one run).
+    var reasoningOpen = false
+    var setReasoningOpen: (Bool) -> Void = { _ in }
     var onSelectText: (String) -> Void = { _ in }
-    var toolOpen: Binding<Bool> = .constant(false)
+    var toolOpen = false
+    var setToolOpen: (Bool) -> Void = { _ in }
     var showToolOutput = true
     var compactTools = false
     /// Reply bubbles run to the right edge.
@@ -1194,7 +1202,7 @@ struct TranscriptRow: View, Equatable {
                     // runs), the reasoning above it when there is some, the live count below.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id)
+                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id)
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1208,7 +1216,7 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
@@ -1276,7 +1284,7 @@ struct TranscriptRow: View, Equatable {
                 }
             }
         case .tool(let act):
-            ToolCardView(activity: act, itemID: item.id, open: toolOpen, showOutput: showToolOutput, compact: compactTools)
+            ToolCardView(activity: act, itemID: item.id, open: Binding(get: { toolOpen }, set: setToolOpen), showOutput: showToolOutput, compact: compactTools)
         case .system(let text, let symbol) where symbol == "terminal":
             // A slash command's reply: reading size, selectable, with Copy; the terminal mark
             // and a quiet background keep it apart from the bot's words (a tester could neither

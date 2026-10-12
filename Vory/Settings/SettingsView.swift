@@ -640,6 +640,7 @@ struct AppearanceView: View {
     @AppStorage(ChatStyle.showTurnStats) private var showTurnStats = true
     @AppStorage(ChatStyle.showSystemNotes) private var showSystemNotes = true
     @AppStorage(ChatStyle.showBots) private var showBots = false
+    @AppStorage(ChatStyle.contextAsTokens) private var contextAsTokens = false
     @AppStorage(ChatStyle.timeReveal) private var timeReveal = true
     @AppStorage(ChatStyle.collapseAfterTurn) private var collapseAfterTurn = false
     @AppStorage(ChatStyle.showToolOutput) private var showToolOutput = true
@@ -819,6 +820,7 @@ struct AppearanceView: View {
                 Toggle("Show tokens per second", isOn: $showTurnStats)
                 Toggle("Show system notes", isOn: $showSystemNotes)
                 Toggle("Bot beside replies", isOn: $showBots)
+                Toggle("Context as tokens in the message bar", isOn: $contextAsTokens)
                 #if os(iOS)
                 Toggle("Pull left for times", isOn: $timeReveal)
                 #endif

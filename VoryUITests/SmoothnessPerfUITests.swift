@@ -247,6 +247,24 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// The keyboard dragged down over the thread (interactive dismiss), the drag slow enough for
+    /// the keyboard to track the finger (handoff item 2: 60 to 79 ms frames inside the tracking).
+    func testKeyboardDrag() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        openFirstChat(); pause(1.5)
+        let field = app.textViews.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        measure(metrics: [smooth("touch")], options: options) {
+            field.tap(); pause(1.5)
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97))
+            from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.1)
+            pause(1.5)
+            stopMeasuring()
+        }
+    }
+
     // MARK: The heavy list (Matt: with lots of chats and bots "that is where it gets sluggish").
     // These want the mock with --extra-sessions 60 --extra-bots 12 (14 bots, 112 chats).
 
