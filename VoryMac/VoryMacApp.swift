@@ -36,26 +36,31 @@ struct VoryMacApp: App {
     @State private var voiceSession = HandsFreeSession.shared
     @Environment(\.openWindow) private var openWindow
 
+    /// The chat in front: the open chat while the Chats page shows. The Chats page stays
+    /// mounted behind the other pages (MacRootView), so `visibleChat` keeps its chat there;
+    /// the Chat menu acts only on the one on screen, as it did when the page was torn down.
+    private var frontChat: ChatSession? { model.selectedTab == .chats ? model.visibleChat : nil }
+
     /// Voice mode on the open chat; with none open, a new chat with the default bot, and the
     /// loop starts on it as soon as it is in front. The main window may be closed (the app
     /// lives on in the menu bar): it comes back first, or the new chat would have no list to open in.
     private func toggleVoiceMode() {
         if voiceSession.isActive { voiceSession.end(); return }
-        if let chat = model.visibleChat { voiceSession.start(chat: chat); return }
+        if let chat = frontChat { voiceSession.start(chat: chat); return }
         openWindow(id: MacWindow.main)
         NSApp.activate()
         model.requestVoiceMode()
     }
     /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
-    private var lastReply: String? { model.visibleChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }
+    private var lastReply: String? { frontChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }
     /// The Board page is the one showing: its menu's keys apply, the Chat menu's ⌘N and ⌘R do not.
     private var boardInFront: Bool { model.selectedTab == .kanban }
 
     /// The approval the open chat waits on, if any.
-    private var pendingApproval: PendingCard? { model.visibleChat?.cards.first { $0.method == "approval" } }
+    private var pendingApproval: PendingCard? { frontChat?.cards.first { $0.method == "approval" } }
 
     private func answerApproval(_ choice: String) {
-        guard let chat = model.visibleChat, let card = pendingApproval else { return }
+        guard let chat = frontChat, let card = pendingApproval else { return }
         Task { await chat.respond(card: card, result: ["choice": .string(choice)]) }
     }
 
@@ -135,9 +140,9 @@ struct VoryMacApp: App {
                     .disabled(model.runtime == nil)
                 Divider()
                 // The open chat's turn: stop it, or answer the approval it waits on.
-                Button("Stop") { if let c = model.visibleChat { Task { await c.stop() } } }
+                Button("Stop") { if let c = frontChat { Task { await c.stop() } } }
                     .keyboardShortcut(".", modifiers: .command)
-                    .disabled(model.visibleChat?.isRunning != true)
+                    .disabled(frontChat?.isRunning != true)
                 Button("Approve Once") { answerApproval("once") }
                     .keyboardShortcut("y", modifiers: [.command, .shift])
                     .disabled(pendingApproval == nil)

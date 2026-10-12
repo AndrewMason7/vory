@@ -223,8 +223,12 @@ struct ChatListView: View {
             .onChange(of: model.tabReselected[.chats]) { _, _ in scrollToTop += 1 }
             .toolbar {
                 if selecting {
+                    // Select mode outlives a page switch now that the Mac keeps this page mounted;
+                    // its Done and actions stand in the bar only while the page is on show.
+                    if pageShown {
                     ToolbarItem(placement: .topBarLeading) { Button("Done") { endSelecting() }.accessibilityIdentifier("chats.select.done") }
                     ToolbarItemGroup(placement: .topBarTrailing) { selectionActions }
+                    }
                 } else {
                 #if os(macOS)
                 // Only while the Chats page is the one on show: the Mac keeps this page mounted
