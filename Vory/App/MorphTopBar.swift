@@ -53,7 +53,15 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
 
     func push(_ c: ChatSession) {
         chat = c; pushedTab = nil
-        toAway()
+        // The chat's end state is laid out and measured in this update; the morph starts on the
+        // next turn, toward frames that are there. Started together, the capsules had nothing to
+        // go to (the first chat after launch) or the last chat's pill, and jumped at the end
+        // (Matt on 1.5 (17): "the animation doesn't do anything when going into the chat but it
+        // goes well when leaving").
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.chat === c, !self.scrubbing, self.t > 0 else { return }
+            self.toAway()
+        }
     }
     func pushPage(_ tab: AppModel.AppTab) {
         guard chat == nil else { return }
@@ -137,11 +145,15 @@ struct MorphTopBar: View {
     @ScaledMetric(relativeTo: .headline) private var titleHeight: CGFloat = 38
     /// The two end states' capsule frames, measured from invisible copies laid out underneath.
     @State private var chatFrames: [MorphSlot: CGRect] = [:]
+    /// A pushed page's end state (its Back circle), kept apart from a chat's.
+    @State private var pageFrames: [MorphSlot: CGRect] = [:]
     @State private var listFrames: [MorphSlot: CGRect] = [:]
     /// Where a slot last was, so a page without it can fade its capsule out in place.
     @State private var lastListFrames: [MorphSlot: CGRect] = [:]
 
     private var t: CGFloat { state.away ? state.t : 1 }
+    /// The away state's frames: the chat's, or a pushed page's.
+    private var awayFrames: [MorphSlot: CGRect] { state.chat != nil ? chatFrames : pageFrames }
     private var settled: Bool { t <= 0 || t >= 1 }
     /// Reduce Motion: the two sets cross-fade at the halfway point instead of interpolating.
     private var shown: CGFloat { reduceMotion ? (t < 0.5 ? 0 : 1) : t }
@@ -152,7 +164,9 @@ struct MorphTopBar: View {
                 // The end states, for their frames only.
                 listLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
                 if let chat = state.chat { chatLayout(chat).opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
-                else if state.pushedTab != nil { pushedLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
+                // A pushed page's end state is the same on every page: laid out always, so the
+                // first push already knows where its Back goes.
+                pushedLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
                 // The capsules that are seen, one per slot, at the frame between the two.
                 ForEach(MorphSlot.allCases, id: \.self) { slot in capsule(slot) }
             }
@@ -214,8 +228,8 @@ struct MorphTopBar: View {
         let goesAtOnce = !present && state.away
         if pushedAway {
             EmptyView()
-        } else if let b = listFrames[slot] ?? lastListFrames[slot] ?? chatFrames[slot] {
-            let f = (awayHas ? chatFrames[slot] : nil).map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
+        } else if let b = listFrames[slot] ?? lastListFrames[slot] ?? awayFrames[slot] {
+            let f = (awayHas ? awayFrames[slot] : nil).map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
             ZStack {
                 // Only the state that is showing takes taps: the other sits in the stack at
                 // opacity 0 and would otherwise cover it (the Back tap went nowhere).
@@ -469,7 +483,7 @@ struct MorphTopBar: View {
     /// row (no face to clear).
     private var pushedLayout: some View {
         HStack(spacing: 12) {
-            Color.clear.frame(width: 44, height: 44).measured(.mid, into: $chatFrames)
+            Color.clear.frame(width: 44, height: 44).measured(.mid, into: $pageFrames)
             Spacer(minLength: 0)
         }
     }
