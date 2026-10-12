@@ -35,7 +35,15 @@ final class ChatSummarizer {
     static var titlesOn: Bool { UserDefaults.standard.object(forKey: titlesKey) as? Bool ?? UserDefaults.standard.bool(forKey: enabledKey) }
     static var previewsOn: Bool { UserDefaults.standard.object(forKey: previewsKey) as? Bool ?? UserDefaults.standard.bool(forKey: enabledKey) }
 
-    struct Summary: Codable, Equatable { var title: String; var summary: String; var stamp: Double }
+    /// `count` is the chat's message count when the summary was made: the gateway moves
+    /// `lastActive` on an attach as well, and a summary stamped by time alone fell back to the
+    /// raw preview every time a chat was opened, then swapped back (Matt, 2026-10-12: "chats are
+    /// populating weird when I slide out").
+    struct Summary: Codable, Equatable { var title: String; var summary: String; var stamp: Double; var count: Int? = nil }
+    /// Current for the chat as listed now: same activity stamp, or the same number of messages.
+    static func current(_ s: Summary, for session: StoredSession) -> Bool {
+        s.stamp == (session.lastActive ?? 0) || (s.count != nil && s.count == session.messageCount)
+    }
 
     @Generable
     struct Draft {
@@ -123,14 +131,14 @@ final class ChatSummarizer {
 
     /// The summary for a chat if it is current (same last-activity stamp); nil otherwise.
     func summary(for session: StoredSession) -> Summary? {
-        guard enabled, let s = summaries[session.id], s.stamp == (session.lastActive ?? 0) else { return nil }
+        guard enabled, let s = summaries[session.id], Self.current(s, for: session) else { return nil }
         return s
     }
 
     /// Makes (or refreshes) the summary for a chat from its recent messages, in the background.
     func refresh(_ session: StoredSession, runtime: GatewayRuntime, profile: String?) {
         guard enabled, Self.isAvailable, !inFlight.contains(session.id) else { return }
-        if let s = summaries[session.id], s.stamp == (session.lastActive ?? 0) { return }
+        if let s = summaries[session.id], Self.current(s, for: session) { return }
         inFlight.insert(session.id)
         pending.append(.session(session, runtime, profile))
         progress.queued()
@@ -208,7 +216,7 @@ final class ChatSummarizer {
             try? await Task.sleep(for: .seconds(2))
             // The chat's own words, so a simulator's list reads like a real one.
             let own = (session.preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            summaries[session.id] = Summary(title: Self.storedTitle(previous: summaries[session.id], draft: "", fallback: session.displayTitle), summary: own.isEmpty ? "Nothing said yet." : own, stamp: session.lastActive ?? 0)
+            summaries[session.id] = Summary(title: Self.storedTitle(previous: summaries[session.id], draft: "", fallback: session.displayTitle), summary: own.isEmpty ? "Nothing said yet." : own, stamp: session.lastActive ?? 0, count: session.messageCount)
             save()
             return
         }
@@ -221,7 +229,7 @@ final class ChatSummarizer {
             let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ".\"'"))
             let text = draft.summary.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty || !text.isEmpty else { return }
-            summaries[session.id] = Summary(title: Self.storedTitle(previous: summaries[session.id], draft: title, fallback: session.displayTitle), summary: text, stamp: session.lastActive ?? 0)
+            summaries[session.id] = Summary(title: Self.storedTitle(previous: summaries[session.id], draft: title, fallback: session.displayTitle), summary: text, stamp: session.lastActive ?? 0, count: session.messageCount)
             save()
         } catch {
             // The model can refuse or time out; the row keeps the gateway's own text.

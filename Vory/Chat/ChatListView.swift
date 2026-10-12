@@ -189,7 +189,10 @@ struct ChatListView: View {
             // bar centred its title, which landed beside the trailing buttons; the title goes
             // into the leading group after the bot circle, as on a phone.
             #if os(iOS)
-            .pageHeading(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !model.wideLayout && !MorphTopBar.on)
+            // In two columns as well: the list column is narrow, and the system's centred
+            // inline title had 30 pt between the bot circle and the trailing group ("Ch…" on
+            // the open Duo, 2026-10-12). The morph bar draws the title itself on one column.
+            .pageHeading(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !MorphTopBar.active(model))
             #endif
             #if os(iOS)
             // The morph prototype draws the list's controls over the page (MorphTopBar): the bar
@@ -197,6 +200,9 @@ struct ChatListView: View {
             // bar's room and the search drawer. Hiding the bar here made the pushed chat's own
             // hidden bar come back (the system title and back button drew over the prototype).
             .toolbar(removing: MorphTopBar.active(model) ? .title : nil)
+            // Out of the accessibility tree while another tab is up (#326; TabRoot does the
+            // same for the other roots, inside their stacks where the flag is honoured).
+            .accessibilityHidden(model.selectedTab != .chats)
             // An empty bar collapses (the Duo's search drawer rode up under the capsules): an
             // invisible item keeps it at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
@@ -389,7 +395,7 @@ struct ChatListView: View {
             // A rendered, untinted image: live glass went murky on the toolbar's glass and a
             // painted view picked up the toolbar's tint in light mode.
             // Memoised: drawn afresh on every pass it flashed while the bar re-laid out (a pull).
-            Image(uiImage: BotAvatarImage.cached(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
+            Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
                 .accessibilityLabel("Profile: \(runtime?.selectedProfile ?? "none")")
         }
         .id("\(prefs.botColorsRaw)|\(prefs.botAvatarsRaw)|\(prefs.glassAll)|\(colorScheme == .light)")
@@ -771,15 +777,21 @@ struct ChatListView: View {
             var all: [StoredSession] = []
             if prefs.allBots {
                 let profiles = runtime.profiles.map(\.name)
-                try await withThrowingTaskGroup(of: [StoredSession].self) { group in
+                // Each bot's rows in the bots' own order, whichever answered first: a chat the
+                // gateway lists under several bots kept whichever listing arrived first, so its
+                // bot and avatar flipped between loads (Matt, 2026-10-12: "the bots and chats
+                // glitch out").
+                var byProfile: [String: [StoredSession]] = [:]
+                try await withThrowingTaskGroup(of: (String, [StoredSession]).self) { group in
                     for p in profiles {
                         group.addTask {
                             let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "50")], profile: p)
-                            return r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s }
+                            return (p, r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
                         }
                     }
-                    for try await part in group { all += part }
+                    for try await (p, part) in group { byProfile[p] = part }
                 }
+                for p in profiles { all += byProfile[p] ?? [] }
                 // One row per chat: a gateway whose bots share a store (and the mock) lists the
                 // same chat under every bot, and All bots showed each one twice.
                 var seen = Set<String>()
@@ -811,7 +823,20 @@ struct ChatListView: View {
                                          startedAt: chat.items.first?.timestamp.timeIntervalSince1970 ?? now, lastActive: max(last, now - 1),
                                          messageCount: chat.items.count, isActive: chat.isRunning, archived: false, pinned: false, profile: chat.profileName))
             }
-            sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            // A chat keeps its place until it has new messages: the gateway counts an attach as
+            // activity, so the chat just read floated to the top on the way back and every row
+            // shifted (Matt, 2026-10-12: "the chats list jumps ... we want it to remain the same
+            // when going into a chat and out of"). Its old time stays until something was said.
+            let before = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            all = all.map { s in
+                guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
+                var kept = s; kept.lastActive = was; return kept
+            }
+            // Placed without animation: rows whose words changed cross-faded over themselves.
+            var tx = Transaction(); tx.disablesAnimations = true
+            withTransaction(tx) {
+                sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            }
             // What Siri can name without the app on screen: the bots and the recent chats' titles (#310).
             SiriCatalog.rememberBots(runtime.profiles)
             SiriCatalog.rememberChats(sessions)

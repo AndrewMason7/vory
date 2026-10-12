@@ -771,6 +771,10 @@ public enum BotFace {
     /// Set by the app (1.5, #304): painted bots run on the motion model (springs, symbols,
     /// blinks on a schedule). Off in the extensions and on the Watch, which draw stills.
     nonisolated(unsafe) public static var motionEngine = false
+    /// A still drawn mid-blink: set around an offscreen render of the eyes-shut picture that a
+    /// list row swaps in for a blink, so a small idle face never mounts its live view (the
+    /// live face drew a shade brighter than the still around every blink, Matt 2026-10-12).
+    nonisolated(unsafe) public static var stillBlink: Double = 0
 
     /// The eyes' ink; on a glass bot they are dark glass, drawn a little lighter.
     static let ink = Color(red: 0.05, green: 0.05, blue: 0.07)
@@ -788,7 +792,8 @@ public enum BotFace {
         let s = min(size.width, size.height)
         let seed = spec.shape.utf8.reduce(0) { $0 + Int($1) } + spec.eyes.utf8.reduce(0) { $0 + Int($1) }
         // Idle bots still blink and glance (`idleEyes`); only a working one moves its body.
-        let live = liveliness(time: (active || idleEyes) ? t : 0, seed: seed)
+        var live = liveliness(time: (active || idleEyes) ? t : 0, seed: seed)
+        if stillBlink > 0 { live.blink = stillBlink; live.glance = 0 }
         let tint = Color(botHex: spec.hex) ?? Color(red: 0.49, green: 0.36, blue: 1)
 
         _ = move; _ = finishedAt   // yaw and offsets are applied by BotFaceView (a 3D turn needs a view)
@@ -921,7 +926,8 @@ public enum BotFace {
         let seed = spec.shape.utf8.reduce(0) { $0 + Int($1) } + spec.eyes.utf8.reduce(0) { $0 + Int($1) }
         // Tiny eyes blink faster (they are already small) and skip the double blink when small.
         let tiny = spec.eyes == "tiny"
-        let live = liveliness(time: active ? t : 0, seed: seed, blinkPeriod: motion.blinkPeriod, blinkLength: tiny ? 0.09 : motion.blinkLength, doubleBlinks: !(tiny && s < 32), rare: motion.blinkPeriod == 4.3)
+        var live = liveliness(time: active ? t : 0, seed: seed, blinkPeriod: motion.blinkPeriod, blinkLength: tiny ? 0.09 : motion.blinkLength, doubleBlinks: !(tiny && s < 32), rare: motion.blinkPeriod == 4.3)
+        if stillBlink > 0 { live.blink = stillBlink; live.glance = 0 }
         let anchor: (x: CGFloat, y: CGFloat, spread: CGFloat) = anchor ?? { let e = eyeAnchor(spec.shape); return (0.5, e.y, e.spread) }()
         let dx = s * anchor.spread
         let wander = glanceFree && !motion.freezeGlance

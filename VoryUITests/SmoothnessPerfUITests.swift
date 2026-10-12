@@ -187,6 +187,203 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// The list keeps its place through a chat and back (Matt, 2026-10-12: "the chats list
+    /// jumps, so it'll almost reload everything when going back"): scrolled a screen down, a
+    /// row's frame before the chat opens equals its frame after the swipe back.
+    func testListKeepsPlaceAfterBack() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        app.swipeUp(velocity: .slow); pause(1.5)
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Standup notes' OR label CONTAINS[c] 'Backup verification'"))
+        guard let row = rows.allElementsBoundByIndex.first(where: { $0.isHittable }) else { shot("list-no-row"); return XCTFail("no row to track after the scroll") }
+        let before = row.frame; shot("list-before")
+        print("LIST-PLACE before \(before)")
+        row.tap(); pause(2.5)
+        XCTAssertTrue(any("chat.dock").waitForExistence(timeout: 10), "the chat did not open")
+        shot("chat-open")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(0.2); shot("list-back-early"); pause(1.5); shot("list-back")
+        let after = rows.allElementsBoundByIndex.first(where: { $0.label == row.label })?.frame ?? .zero
+        print("LIST-PLACE after \(after)")
+        XCTAssertEqual(before.minY, after.minY, accuracy: 2, "the list moved after the swipe back: \(before) → \(after)")
+    }
+
+    /// Step D before-pictures: the states that meet the Duo's fold, each held HERMES_E2E_STEP
+    /// seconds (default 7) while the displays are recorded from outside: the composer with the
+    /// keyboard, the + panel, the "/" list, then the Bots grid. Prints "STEPD <state> <time>".
+    func testStepDStates() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        let hold = Double(ProcessInfo.processInfo.environment["HERMES_E2E_STEP"] ?? "7") ?? 7
+        func mark(_ s: String) { print("STEPD \(s) \(Date().timeIntervalSince1970)") }
+        launch(url: url, token: token)
+        waitForList()
+        openFirstChat(); pause(2)
+        let field = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer field")
+        field.tap(); pause(0.5); field.typeText("Draft kept across the fold"); pause(1)
+        mark("composer-keyboard"); pause(hold)
+        if let plus = app.buttons.matching(NSPredicate(format: "label == 'Attach'")).allElementsBoundByIndex.first(where: { $0.isHittable }) {
+            plus.tap(); pause(1.5); mark("plus-panel"); pause(hold)
+            if let close = app.buttons.matching(NSPredicate(format: "label == 'Close attach panel'")).allElementsBoundByIndex.first(where: { $0.isHittable }) { close.tap() } else { plus.tap() }
+            pause(1)
+        } else { mark("plus-panel-missing") }
+        // The "/" list opens on a "/" at the start of the text: the draft goes first.
+        field.tap(); pause(0.5)
+        for _ in 0..<26 { field.typeText(XCUIKeyboardKey.delete.rawValue) }
+        pause(0.5); field.typeText("/"); pause(1.5); mark("slash-list"); pause(hold)
+        field.typeText(XCUIKeyboardKey.delete.rawValue); pause(1)
+        // The tab bar is away inside a chat: Back to the list first.
+        back(); pause(2)
+        let bots = app.descendants(matching: .any).matching(identifier: "tab.bots").firstMatch
+        if bots.waitForExistence(timeout: 3) { bots.tap(); pause(2); mark("bots-grid"); pause(hold) } else { mark("bots-grid-missing") }
+        mark("done")
+    }
+
+    /// A chat opened in landscape, then turned upright: where the bar's Back and pill are for
+    /// accessibility, and whether Back's tap leaves the chat (BarAfterRotationUITests fails
+    /// there; the probe shows the bar active with the chat adopted).
+    func testBackFrameAfterTurn() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        XCUIDevice.shared.orientation = .landscapeLeft; pause(2.5)
+        openFirstChat(); pause(1.5)
+        let back = app.buttons["chat.back"].firstMatch, pill = app.buttons["chat.titlePill"].firstMatch, more = app.buttons["chat.more"].firstMatch
+        print("BACK-FRAME landscape back \(back.frame) pill \(pill.frame) more \(more.frame) window \(app.windows.firstMatch.frame)")
+        XCUIDevice.shared.orientation = .portrait; pause(2.5)
+        print("BACK-FRAME portrait back \(back.frame) hittable \(back.isHittable) pill \(pill.frame) more \(more.frame) window \(app.windows.firstMatch.frame)")
+        back.tap(); pause(1.5)
+        print("BACK-FRAME after-tap dock \(any("chat.dock").exists) profile.close \(app.buttons["profile.close"].firstMatch.exists) rows \(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).count)")
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    /// Severity of the keyboard-up turn (BarAfterRotation's failing part): a chat opened in
+    /// landscape with the composer focused, turned upright; does Back exist and is it hittable,
+    /// and does the edge swipe still leave the chat?
+    func testKeyboardTurnSwipeBack() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        XCUIDevice.shared.orientation = .landscapeLeft; pause(2.5)
+        openFirstChat(); pause(1.5)
+        let field = app.textViews["composer.text"].firstMatch
+        if field.waitForExistence(timeout: 5) { field.tap(); pause(1) }
+        XCUIDevice.shared.orientation = .portrait; pause(2.5)
+        let back = app.buttons["chat.back"].firstMatch
+        print("KB-TURN back exists \(back.exists) hittable \(back.exists ? back.isHittable : false) frame \(back.exists ? back.frame : .zero) keyboard \(app.keyboards.count)")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        shot("kb-turn-portrait")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(2)
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'"))
+        let out = rows.allElementsBoundByIndex.contains { $0.isHittable }
+        print("KB-TURN swipe-back left the chat: \(out) dock \(any("chat.dock").exists)")
+        shot("kb-turn-after-swipe")
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    /// Away to the Home screen and back, three times: how long until the list answers, and a
+    /// recording for the frames of the return (Matt, 2026-10-12: "opening task switcher and
+    /// then back to Vory app still has that weird lag time").
+    func testAppSwitchReturn() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'"))
+        for i in 1...3 {
+            XCUIDevice.shared.press(.home); pause(1.5)
+            let t0 = Date()
+            app.activate()
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline, !(rows.firstMatch.exists && rows.firstMatch.isHittable) { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            print("APP-SWITCH return \(i): list answered after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            pause(2)
+        }
+    }
+
+    /// A page pushed on a tab other than Chats (a Settings row), then the edge swipe back: the
+    /// bar's capsules must not stand over the pushed page, nor come back before the page has
+    /// gone (Matt, 2026-10-12: "swiping back on other pages is broken"), and the title capsule
+    /// must be back and live once the page is at its root.
+    func testPushedPageSwipeBack() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        pause(4)
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        // A Settings row pushes its page; the bar's title capsule is the "Settings" static text
+        // (the pushed page's own Back button carries the same word, as a button).
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        let title = app.staticTexts["Settings"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "no Settings title capsule at the root")
+        func openRow() { for _ in 0..<3 { row.tap(); if any("page.back").firstMatch.waitForExistence(timeout: 3) { break } }; pause(1.5) }
+        openRow(); shot("settings-pushed")
+        XCTAssertTrue(any("page.back").firstMatch.exists, "the pushed page has no Back capsule")
+        XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule stands over the pushed page")
+        // A slow edge swipe, let go past the middle.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(1.5); shot("settings-back")
+        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back")
+        // A cancelled swipe: the pushed page stays, the capsule stays away.
+        openRow()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(1.5); shot("settings-cancelled")
+        XCTAssertTrue(any("page.back").firstMatch.exists, "the cancelled swipe lost the pushed page")
+        XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the pushed page after a cancelled swipe")
+        any("page.back").firstMatch.tap(); pause(1.5)
+        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after Back")
+    }
+
+    /// Holds the Bots page at rest for HERMES_E2E_HOLD seconds (default 14): the cards' faces
+    /// blink by picture swap; with `-bots.glassAll YES` in HERMES_E2E_ARGS they are glass bots.
+    func testHoldBots() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "bots")
+        pause(3)
+        pause(Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14)
+    }
+
+    /// Holds the Chats list at rest for HERMES_E2E_HOLD seconds (default 14): the recording
+    /// shows whether a row's face changes beyond a blink.
+    func testHoldList() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        pause(Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14)
+    }
+
+    /// Holds the app in a chat with a draft for HERMES_E2E_HOLD seconds (default 600) while the
+    /// Duo's hinge is driven from outside (Device Hub), for screen recordings and stills.
+    func testHoldChatWithDraft() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        openFirstChat(); pause(2)
+        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        if field.waitForExistence(timeout: 5) { field.tap(); pause(0.5); field.typeText("Draft kept across the fold"); pause(0.5) }
+        let hold = Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "600") ?? 600
+        print("HOLD start \(hold)s")
+        pause(hold)
+    }
+
+    /// Hidden tab pages stay out of the accessibility tree (#326): on Chats, each chat row is
+    /// found once (Home lists the recent chats too), and none of Home's activity blocks show.
+    func testHiddenPagesOutOfTheTree() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "dashboard")
+        pause(3)
+        let home = app.descendants(matching: .any).matching(identifier: "tab.chats").firstMatch
+        XCTAssertTrue(home.waitForExistence(timeout: 10)); home.tap(); pause(2)
+        waitForList()
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).count
+        let blocks = app.otherElements.matching(NSPredicate(format: "label CONTAINS ' sessions'")).count
+        print("AX-TREE chats rows=\(rows) home-blocks=\(blocks)")
+        XCTAssertEqual(rows, 1, "the chat row is in the tree \(rows) times")
+        XCTAssertEqual(blocks, 0, "Home's activity blocks are in the Chats tree")
+    }
+
     /// The pull-to-refresh wheel on every root that can refresh (Matt, 2026-10-12: "the pull to
     /// refresh wheel doesn't appear on some of the pages"): the bar is relaunched with each group
     /// of four tabs, every page pulled, and the wheel's "Refreshing" looked for after the release.
@@ -450,9 +647,11 @@ final class SmoothnessPerfUITests: XCTestCase {
         let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
         row.tap(); pause(1.5); shot("settings-pushed")
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 5), "the pushed page has no Back")
-        back.tap(); pause(1.5); shot("settings-root-again")
+        let back = any("page.back")
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "the pushed page has no Back capsule")
+        XCTAssertFalse(app.navigationBars.buttons.matching(identifier: "BackButton").firstMatch.exists, "the system's back button still shows on the pushed page")
+        back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5); shot("settings-root-again")
+        XCTAssertTrue(app.staticTexts["Settings"].firstMatch.waitForExistence(timeout: 5), "the Settings title capsule is not back")
     }
 
     /// The "/" list out of the field and back (type "/", then delete it).

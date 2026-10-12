@@ -356,6 +356,11 @@ struct TabRoot: ViewModifier {
             // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
             // refresh wheel sits beside it on the pages that can refresh.
             .pageHeading(tab.title, on: !model.wideLayout && !MorphTopBar.on)
+            // Out of the accessibility tree while another tab is up. RootView hides the whole
+            // page, but that flag sits outside the navigation stack, a UIKit container the flag
+            // does not pass through: Home's blocks, bots and chat rows stayed in the Chats
+            // tab's tree, off-screen, and VoiceOver and XCTest found the same chat twice (#326).
+            .accessibilityHidden(model.selectedTab != tab)
             // The page's pull-to-refresh state, for the bar's title capsule to host its wheel.
             .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in pullBelow = r.state; publishPull() } }
             .onChange(of: pullAround.map(ObjectIdentifier.init), initial: true) { _, _ in publishPull() }
@@ -366,9 +371,137 @@ struct TabRoot: ViewModifier {
             // An empty bar collapses (on the Duo the search drawer rode up under the capsules):
             // an invisible item keeps the bar at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
-            .onAppear { model.tabAtRoot[tab] = true }
+            // "At root" is set by the probe below: on a swipe back SwiftUI's onAppear fires as
+            // the pop begins, and the bar's capsules came back over the pushed page before it
+            // had moved (Matt, 2026-10-12: "swiping back on other pages is broken"). The probe
+            // waits for an interactive pop to finish (and stays put if it is cancelled).
             .onDisappear { model.tabAtRoot[tab] = false }
             .background(PopToRootProbe(tab: tab))
+            .background(RootArrivalProbe(tab: tab, active: MorphTopBar.active(model), popOne: model.popOne[tab, default: 0]) { model.tabAtRoot[tab] = true })
+    }
+}
+
+/// Under a tab's root page, a view that watches the stack's UIKit navigation controller:
+/// - tells the root it has arrived (at once on a plain appearance or a Back button's pop, at
+///   the end of an interactive pop, not at all if the swipe is cancelled), for `tabAtRoot`;
+/// - drives the morph bar for a pushed page (Matt, 2026-10-12: the title capsule morphs into
+///   the Back arrow and back, following the swipe like a chat): a 60 Hz poll of the stack's
+///   depth and transition coordinator while the root is in the window (a few property reads);
+/// - hides the pushed page's own back button and title under the bar's Back;
+/// - pops one page when the bar's Back bumps `popOne`.
+struct RootArrivalProbe: UIViewRepresentable {
+    /// The last decision, for the geometry probe's banner (a UI test's stills).
+    nonisolated(unsafe) static var last = "none"
+    let tab: AppModel.AppTab
+    let active: Bool
+    let popOne: Int
+    let arrived: () -> Void
+    func makeUIView(context: Context) -> ArrivalView { let v = ArrivalView(); v.isUserInteractionEnabled = false; v.tab = tab; v.active = active; v.arrived = arrived; return v }
+    func updateUIView(_ v: ArrivalView, context: Context) {
+        v.arrived = arrived; v.active = active
+        if popOne != v.popSeen { v.popSeen = popOne; if popOne > 0 { v.popOnePage() } }
+    }
+    final class ArrivalView: UIView {
+        var tab: AppModel.AppTab = .chats
+        var active = true
+        var arrived: (() -> Void)?
+        var popSeen = 0
+        private var link: CADisplayLink?
+        private var wasPushed = false
+        private var popStarted = false
+        private var watchingInteraction = false
+        private var nav: UINavigationController? { parentViewController?.navigationController }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            link?.invalidate(); link = nil
+            guard window != nil else { return }
+            let nav = self.nav
+            // The root's view re-enters the window as a page is pushed over it: not an arrival.
+            if let nav, nav.viewControllers.count > 1, nav.transitionCoordinator?.isInteractive != true {
+                Perf.stamp("root probe: under a pushed page, no arrival")
+            } else if let c = nav?.transitionCoordinator, c.isInteractive {
+                Perf.stamp("root probe: interactive pop, waiting"); RootArrivalProbe.last = "interactive, waiting"
+                c.notifyWhenInteractionChanges { [weak self] ctx in
+                    Perf.stamp("root probe: interaction ended cancelled=\(ctx.isCancelled)"); RootArrivalProbe.last = "interaction ended cancelled=\(ctx.isCancelled)"
+                    if !ctx.isCancelled { self?.arrived?() }
+                }
+            } else {
+                let why = nav == nil ? "no nav" : (nav?.transitionCoordinator == nil ? "coordinator nil" : "not interactive")
+                Perf.stamp("root probe: arrived at once (\(why))"); RootArrivalProbe.last = "at once (\(why))"
+                arrived?()
+            }
+            guard tab != .chats else { return }
+            let l = CADisplayLink(target: self, selector: #selector(tick))
+            l.add(to: .main, forMode: .common)
+            link = l
+            Perf.stamp("root probe \(tab.rawValue): link started, depth \(nav?.viewControllers.count ?? -1)")
+        }
+
+        @objc private func tick() {
+            guard active, let nav else { return }
+            let state = MorphState.shared
+            let depth = nav.viewControllers.count
+            let root = nav.viewControllers.first
+            if let c = nav.transitionCoordinator {
+                // A transition under way: which way it goes is read from its ends, not from
+                // the stack's depth (SwiftUI's stack keeps its depth until a pop commits).
+                let fromRoot = c.viewController(forKey: .from) === root
+                let toRoot = c.viewController(forKey: .to) === root
+                if fromRoot, !wasPushed {
+                    wasPushed = true; popStarted = false
+                    Perf.stamp("root probe \(tab.rawValue): push seen, active \(active), chat \(state.chat == nil ? "nil" : "set")")
+                    if let top = c.viewController(forKey: .to) { hideChrome(of: top) }
+                    if state.pushedTab == nil { state.pushPage(tab) }
+                } else if toRoot, wasPushed {
+                    if c.isInteractive {
+                        // The page's own slide is the progress the eye sees; the coordinator's
+                        // percentComplete lagged it on the phone.
+                        let width = max(1, nav.view.bounds.width)
+                        let slid = (c.viewController(forKey: .from)?.view.frame.minX ?? 0) / width
+                        let progress = min(1, max(0, max(CGFloat(c.percentComplete), slid)))
+                        state.scrub(progress)
+                        if !watchingInteraction {
+                            watchingInteraction = true
+                            c.notifyWhenInteractionChanges { [weak self] ctx in
+                                self?.watchingInteraction = false
+                                let remaining = max(0.12, ctx.transitionDuration * Double(1 - ctx.percentComplete))
+                                MorphState.shared.release(ctx.isCancelled ? 0 : 1, over: remaining)
+                                if ctx.isCancelled { self?.popStarted = false }
+                            }
+                        }
+                    } else if !popStarted {
+                        popStarted = true
+                        Perf.stamp("root probe \(tab.rawValue): pop seen (button)")
+                        state.pop()
+                    }
+                }
+            } else if depth > 1 {
+                if !wasPushed {
+                    // Pushed without a transition (a restored path): the Back at once.
+                    wasPushed = true
+                    if let top = nav.topViewController { hideChrome(of: top) }
+                    if state.pushedTab == nil { state.pushPage(tab) }
+                }
+                popStarted = false
+                if let top = nav.topViewController, top.navigationItem.hidesBackButton == false { hideChrome(of: top) }
+            } else if wasPushed {
+                // The pop is over: back at the root.
+                wasPushed = false; popStarted = false
+                if state.pushedTab == tab, !state.scrubbing, state.t < 1 { state.pop() }
+            }
+        }
+
+        /// The pushed page keeps its content; its system back button and title are the bar's.
+        private func hideChrome(of vc: UIViewController) {
+            vc.navigationItem.hidesBackButton = true
+            vc.navigationItem.titleView = UIView()
+        }
+
+        func popOnePage() {
+            guard let nav, nav.viewControllers.count > 1 else { return }
+            nav.popViewController(animated: true)
+        }
     }
 }
 

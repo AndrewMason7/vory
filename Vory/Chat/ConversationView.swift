@@ -398,7 +398,7 @@ struct ConversationView: View {
         var parts = [bot]
         if !model.isEmpty { parts.append(model) }
         // What it is working on, when the on-device model has written it; else the step it is on.
-        if chat.isRunning { parts.append(ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "Thinking…") } else if chat.isResuming { parts.append("Syncing…") }
+        if chat.isRunning { parts.append(ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "Thinking…") } else if chat.showsSyncing { parts.append("Syncing…") }
         return parts.joined(separator: " · ")
     }
     #endif
@@ -575,7 +575,7 @@ struct ChatHeader: View {
                         // sentence, and the pill would stretch to the edges for it.
                         // While it works: the goal the on-device model wrote, else the step it is on.
                         let goal = chat.isRunning ? ChatGoals.shared.goal(for: chat.storedID) : nil
-                        let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : idleLine)
+                        let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.showsSyncing ? "Syncing…" : idleLine)
                         Text(status.count > 42 ? String(status.prefix(41)).trimmingCharacters(in: .whitespaces) + "…" : status)
                             .font(.caption2).lineLimit(1)
                             .foregroundStyle(.secondary)

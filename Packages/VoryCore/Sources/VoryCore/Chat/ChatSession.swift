@@ -170,6 +170,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// True from open until `session.resume` has answered; the transcript shown meanwhile is the
     /// cached copy (or a REST page), so the chat appears instantly and syncs behind it.
     public private(set) var isResuming = false
+    /// "Syncing…" is for a chat with nothing to show yet; with the cached transcript on screen
+    /// the attach runs silently behind the title (Matt, 2026-10-12: "a Syncing… status, speed
+    /// that up").
+    public var showsSyncing: Bool { isResuming && items.isEmpty }
     public var resumeError: String?
     private var resumeTask: Task<Void, Never>?
     private var bannerIsReconnect = false
