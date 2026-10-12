@@ -386,7 +386,7 @@ struct TabRoot: ViewModifier {
 ///   the end of an interactive pop, not at all if the swipe is cancelled), for `tabAtRoot`;
 /// - drives the morph bar for a pushed page (Matt, 2026-10-12: the title capsule morphs into
 ///   the Back arrow and back, following the swipe like a chat);
-/// - hides the pushed page's own back button and title under the bar's Back;
+/// - hides the pushed page's own back button under the bar's Back (its title stays);
 /// - pops one page when the bar's Back bumps `popOne`.
 /// Event-driven: the stack's delegate (`NavTap`) reports each transition as it starts and each
 /// page once shown, and a display link runs only while a finger has a pop back to the root, for
@@ -570,10 +570,16 @@ struct RootArrivalProbe: UIViewRepresentable {
             MorphState.shared.scrub(min(1, max(0, max(CGFloat(c.percentComplete), slid))))
         }
 
-        /// The pushed page keeps its content; its system back button and title are the bar's.
+        /// A pushed page's own title stays, in the middle where the system puts it (Matt,
+        /// 2026-10-12, on a bot's page: "it shows up in the middle where it should be but then
+        /// disappears ... just have it actually stay appeared"). This is the one switch if that
+        /// turns out to be for a bot's page only (`tab == .bots`).
+        private var keepsTitle: Bool { true }
+
+        /// The pushed page keeps its content and its title; its system back button is the bar's.
         private func hideChrome(of vc: UIViewController) {
             vc.navigationItem.hidesBackButton = true
-            vc.navigationItem.titleView = UIView()
+            if !keepsTitle { vc.navigationItem.titleView = UIView() }
         }
 
         private func showChrome(of vc: UIViewController) {
