@@ -123,15 +123,9 @@ struct ConversationView: View {
     private func framed(_ chat: ChatSession) -> some View {
         #if os(macOS)
         thread(chat)
-            // With no toolbar strip the thread runs up under the bot's pill; it fades out
-            // there instead of meeting the pill and the window's edge at full strength.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black.opacity(0.35), .black], startPoint: .top, endPoint: .bottom).frame(height: 68)
-                    Color.black
-                }
-                .ignoresSafeArea()
-            }
+            // With no toolbar strip the thread runs up under the bot's pill and the window's edge
+            // at full strength, as on the phone (Matt, 2026-10-10: "remove the fades on the Mac
+            // too"); the 68 pt top fade mask that used to soften it is gone.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 dock(chat).frame(maxWidth: ChatStyle.readingColumn).frame(maxWidth: .infinity)
             }
