@@ -25,6 +25,8 @@ struct VoryApp: App {
         BotFace.motionEngine = UserDefaults.standard.object(forKey: "vory-motion-engine") == nil || UserDefaults.standard.bool(forKey: "vory-motion-engine")
         #if DEBUG
         BotAmbient.tickHook = { Perf.tick($0) }
+        // Which defaults keys change (every write re-runs the views that read defaults).
+        DefaultsWriteProbe.start()
         #endif
         _model = State(initialValue: AppModel.shared)
     }
@@ -99,3 +101,27 @@ struct VoryApp: App {
         }
     }
 }
+
+
+#if DEBUG
+/// Prints the defaults keys whose values changed since the last change notification.
+enum DefaultsWriteProbe {
+    nonisolated(unsafe) private static var last: [String: String] = [:]
+    private static func snapshot() -> [String: String] {
+        var out: [String: String] = [:]
+        for (k, v) in UserDefaults.standard.dictionaryRepresentation() where k.hasPrefix("composer") || k.hasPrefix("bots") || k.hasPrefix("chat") || k.hasPrefix("tab") || k.hasPrefix("vory") || k.hasPrefix("bot") || k.hasPrefix("summar") || k.hasPrefix("list") || k.hasPrefix("ai") {
+            out[k] = String(describing: v).prefix(40).description
+        }
+        return out
+    }
+    static func start() {
+        last = snapshot()
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: UserDefaults.standard, queue: .main) { _ in
+            let now = snapshot()
+            let changed = now.filter { last[$0.key] != $0.value }.map(\.key) + last.keys.filter { now[$0] == nil }
+            if !changed.isEmpty { Perf.tick("defaults:" + changed.sorted().joined(separator: ",")) }
+            last = now
+        }
+    }
+}
+#endif

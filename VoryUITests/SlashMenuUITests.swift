@@ -43,13 +43,22 @@ final class SlashMenuUITests: XCTestCase {
     /// The chooser's row for a command or skill, or for a model; the one on screen (every tab
     /// page is mounted, so the first match can be another copy).
     private func row(_ id: String) -> XCUIElement? {
-        app.buttons.matching(identifier: id).allElementsBoundByIndex.first { $0.exists && $0.isHittable }
+        // Not a row whose frame is under the keyboard: the simulator's keyboard comes and goes
+        // while the runner types, and a row's reported frame can lag a keyboard move; a tap
+        // there landed on the keyboard.
+        let keyboardTop = app.keyboards.firstMatch.exists ? app.keyboards.firstMatch.frame.minY : .infinity
+        return app.buttons.matching(identifier: id).allElementsBoundByIndex.first { $0.exists && $0.isHittable && $0.frame.midY < keyboardTop }
     }
 
     private func waitForRow(_ id: String, timeout: TimeInterval = 15) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let r = row(id) { return r }
+            if row(id) != nil {
+                // The simulator's keyboard comes back a moment after the runner types; a row
+                // found before that is tapped where it was. Look again once it has settled.
+                RunLoop.current.run(until: Date().addingTimeInterval(0.7))
+                if let r = row(id) { return r }
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         }
         shot("missing-\(id)")

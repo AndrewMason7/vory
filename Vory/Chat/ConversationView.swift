@@ -20,7 +20,7 @@ struct ConversationView: View {
     @State private var dockBottom: CGFloat = 0
     #if os(iOS)
     /// The tab bar's height under the chat, when it is there and runs along the bottom.
-    private var barReserve: CGFloat { model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) }
+    private var barReserve: CGFloat { model.tabBarReserved && !model.tabBarVertical ? VoryTabBar.reservedHeight(in: windowGeometry) : 0 }
     /// The fold of a partly open Duo across the window (Step D): a dock the keyboard has pushed
     /// onto it moves up above it, with Apple's margin, so the field is never under the fold.
     @Environment(\.reservedRegions) private var regions
@@ -47,7 +47,6 @@ struct ConversationView: View {
     /// transcript does for itself: SwiftUI's own avoidance hands the inset to any scroll view in
     /// the dock (the command list) instead of lifting the dock, which left the composer under
     /// the keyboard.
-    @State private var keyboardInset: CGFloat = 0
     @State private var sentInitial = false
     @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
@@ -81,6 +80,7 @@ struct ConversationView: View {
                         model.newChatRequest = UUID()
                     }
                     .onDisappear {
+                        Perf.stamp("pop: conversation disappeared")
                         if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
                         if model.visibleChat === chat { model.visibleChat = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
@@ -179,23 +179,27 @@ struct ConversationView: View {
         // The thread runs under the status bar (it ignores the top safe area) while the
         // header sits inside it, so the thread's top margin is the header plus that inset;
         // without it the first message starts under the pill.
-        thread(chat)
-            // Like Messages: header and dock float over the thread and the text scrolls under their glass.
-            // On a wide layout the dock keeps to the reading column, as on the Mac.
-            // No band under the header or under the dock (Matt, on the phone, 2026-10-10: "I
-            // dont like the fade at the top or the bottom, you should see the messages from all
-            // the way behind the message bar and behind the name"): the thread runs under both
-            // and shows through their glass; only its rest margins keep the ends clear.
+        // Like Messages: header and dock float over the thread and the text scrolls under their glass.
+        // No band under the header or under the dock (Matt, on the phone, 2026-10-10: "I
+        // dont like the fade at the top or the bottom, you should see the messages from all
+        // the way behind the message bar and behind the name"): the thread runs under both
+        // and shows through their glass; only its rest margins keep the ends clear.
+        ZStack(alignment: .bottom) {
+            // The thread keeps the window's full height whatever the keyboard does; its bottom
+            // margin is measured from the dock (`dockTop`), with the keyboard's final height
+            // as the fallback (`keyboardOverlap`, the window's number, unanimated).
+            thread(chat)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+            // The dock is a sibling, not an overlay of the thread: it sits in the keyboard's own
+            // safe area and rides the keyboard's animation (Matt, 2026-10-11: the bar "lags
+            // behind the keyboard opening and closing", "the keyboard collapses completely
+            // before the chat moves"): a hand-made spring took half a second against the
+            // keyboard's quarter. On a wide layout it keeps to the reading column, as on the Mac.
             // Above the tab bar when the bar stands under the chat (a wide layout with the bar
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
-            .overlay(alignment: .bottom) { dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift) }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-            // The keyboard as the window has it (in window space, re-placed on every resize or
-            // fold); the thread moves by the same value, so the two arrive together.
-            .onChange(of: windowGeometry.keyboardOverlap, initial: true) { _, inset in
-                withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) { keyboardInset = inset }
-            }
+            dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
+        }
             .overlay(alignment: .top) { header(chat) }
             // Voice mode runs out of sight under its pill, and in front on its own screen.
             .overlay(alignment: .top) {
@@ -267,7 +271,7 @@ struct ConversationView: View {
         let (dockTopArg, fallback, top, fade): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
         #else
         // Until the header has been measured, its default height plus the status bar's usual share.
-        let (dockTopArg, fallback, top, fade) = (dockTop, dockHeight + keyboardInset, headerHeight + windowGeometry.safeArea.top, ChatStyle.bandFade)
+        let (dockTopArg, fallback, top, fade) = (dockTop, dockHeight + windowGeometry.keyboardOverlap, headerHeight + windowGeometry.safeArea.top, ChatStyle.bandFade)
         #endif
         return TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
                        dockTop: dockTopArg, fallbackInset: fallback, topInset: top, headerBottom: headerBottom, bandFade: fade)
@@ -283,7 +287,7 @@ struct ConversationView: View {
                 if let e = chat.resumeError, chat.items.isEmpty {
                     ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(e))
                         // Centred in what is left above the composer and the keyboard.
-                        .padding(.bottom, dockHeight + keyboardInset)
+                        .padding(.bottom, dockHeight + windowGeometry.keyboardOverlap)
                 }
             }
     }
@@ -295,7 +299,6 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
             // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
-            .padding(.bottom, keyboardInset)
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
@@ -684,11 +687,57 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
     private static var key = 0
     private weak var nav: UINavigationController?
     private weak var pan: UIPanGestureRecognizer?
+    /// The back swipe's progress for whoever draws along with it (RootView's tab bar): the
+    /// fraction, and whether this is the end (then the fraction is 0 for a cancelled swipe or
+    /// 1 for a completed one, to be animated over `duration`).
+    nonisolated(unsafe) static var onProgress: ((_ fraction: CGFloat, _ ended: Bool, _ duration: Double) -> Void)?
+    private var tracking = false
+    /// The stack's depth when the swipe began: a pop that has already finished by the time
+    /// the finger lifts (a quick flick) shows as one controller fewer.
+    private var depthAtBegin = 0
+
+    @objc private func track(_ g: UIPanGestureRecognizer) {
+        guard let nav, let view = g.view else { return }
+        switch g.state {
+        case .began, .changed:
+            guard nav.transitionCoordinator?.isInteractive == true || g.state == .began else { return }
+            if !tracking { Perf.stamp("pop: swipe began"); depthAtBegin = nav.viewControllers.count }
+            tracking = true
+            let fraction = max(0, min(1, g.translation(in: view).x / max(1, view.bounds.width)))
+            Self.onProgress?(fraction, false, 0)
+        case .ended, .cancelled, .failed:
+            guard tracking else { return }
+            tracking = false
+            Perf.stamp("pop: swipe released")
+            if let c = nav.transitionCoordinator {
+                let duration = c.transitionDuration
+                let remaining = { (ctx: UIViewControllerTransitionCoordinatorContext) in max(0.15, duration * (1 - Double(ctx.percentComplete))) }
+                if c.isInteractive {
+                    c.notifyWhenInteractionChanges { ctx in
+                        Perf.stamp("pop: interaction ended cancelled=\(ctx.isCancelled) at \(ctx.percentComplete)")
+                        Self.onProgress?(ctx.isCancelled ? 0 : 1, true, remaining(ctx))
+                    }
+                } else {
+                    // The system's own handler ran first and has already decided the end.
+                    Perf.stamp("pop: swipe end decided cancelled=\(c.isCancelled) at \(c.percentComplete)")
+                    Self.onProgress?(c.isCancelled ? 0 : 1, true, remaining(c))
+                }
+                c.animate(alongsideTransition: nil) { ctx in Perf.stamp("pop: transition completed cancelled=\(ctx.isCancelled)") }
+            } else {
+                // No transition left: a flick that has already popped, or a pan that never did.
+                let popped = nav.viewControllers.count < depthAtBegin
+                Perf.stamp("pop: swipe ended with no transition, popped=\(popped)")
+                Self.onProgress?(popped ? 1 : 0, true, 0.2)
+            }
+        default: break
+        }
+    }
 
     static func install(on nav: UINavigationController) {
         guard let edge = nav.interactivePopGestureRecognizer else { return }
         edge.isEnabled = true
         if let existing = objc_getAssociatedObject(nav, &key) as? FullScreenPop {
+            edge.removeTarget(existing, action: #selector(track(_:))); edge.addTarget(existing, action: #selector(track(_:)))
             edge.delegate = existing
             if existing.pan == nil || existing.pan?.view == nil { existing.addPan(edge: edge) }
             return
@@ -697,6 +746,7 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
         d.nav = nav
         objc_setAssociatedObject(nav, &key, d, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         edge.delegate = d
+        edge.addTarget(d, action: #selector(track(_:)))
         d.addPan(edge: edge)
     }
 
@@ -707,6 +757,7 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
         let pan = UIPanGestureRecognizer()
         pan.name = "vory.fullScreenPop"
         pan.setValue(targets, forKey: "targets")
+        pan.addTarget(self, action: #selector(track(_:)))
         pan.delegate = self
         pan.maximumNumberOfTouches = 1
         nav.view.addGestureRecognizer(pan)
@@ -762,7 +813,11 @@ enum ComposerDrafts {
     }
 
     static func save(_ text: String, for chat: ChatSession) {
-        if text.isEmpty { UserDefaults.standard.removeObject(forKey: key(for: chat)) }
-        else { UserDefaults.standard.set(text, forKey: key(for: chat)) }
+        // Only a write that changes something: every defaults write re-runs the views that read
+        // defaults (the chat list's filters), and an empty draft was written on every Back.
+        let k = key(for: chat)
+        let stored = UserDefaults.standard.string(forKey: k)
+        if text.isEmpty { if stored != nil { UserDefaults.standard.removeObject(forKey: k) } }
+        else if stored != text { UserDefaults.standard.set(text, forKey: k) }
     }
 }

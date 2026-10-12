@@ -215,6 +215,10 @@ final class AppModel {
     var composeProfile: String?
     /// The custom tab bar hides while a chat is open on the Chats tab (path-driven, instant)…
     var chatsPathOpen = false
+    /// How far an interactive back swipe has pulled the chat away (0 to 1): while the bar is
+    /// hidden for that chat, it slides in by this much, so it tracks the finger like the
+    /// system's bars and goes back out when the swipe is cancelled (Matt, 2026-10-11).
+    var popProgress: CGFloat = 0
     /// …and while any view marked `hidesTabBar()` is on screen on that tab. Counted per tab: a
     /// tap on the bar as it slides away switches tabs, and the new tab must show it again while
     /// the old one keeps its chat open.
@@ -228,6 +232,14 @@ final class AppModel {
     /// A keyboard is up somewhere: the bar hides rather than floating over it.
     var keyboardUp = false
     var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen && !wideLayout) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
+    /// Chats and rooms pushed on the Chats tab's one-column stack, counted while on screen.
+    /// A pop empties the path the moment the swipe is let go (or Back is tapped), half a
+    /// second before the chat has slid away; the bar's reserved size snapping back right then
+    /// re-laid out the chat under the finger (the thread bounced, Matt, 2026-10-11). The bar's
+    /// slide still starts with the path; the room it takes waits for the chat to be gone.
+    var chatsOnScreen = 0
+    /// Whether the pages make room for the bar along their edge right now.
+    var tabBarReserved: Bool { !tabBarHidden && !(selectedTab == .chats && !wideLayout && chatsOnScreen > 0) }
 
     init() {
         let store = ConnectionStore()

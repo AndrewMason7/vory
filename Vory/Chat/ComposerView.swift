@@ -54,6 +54,19 @@ struct ComposerView: View {
     @State private var longTextOffer = false
     @State private var showAttach = false
     @State private var attachPanelHeight: CGFloat = 356
+    /// Where the + button sits in the composer stack: the panel's glass starts as that circle.
+    @State private var attachButtonFrame = CGRect(x: 10, y: 60, width: 36, height: 36)
+    /// The rows are in the tree only while the panel is open or folding away: hidden rows in a
+    /// closed panel stayed in the accessibility tree (reachable, and a test found them).
+    @State private var attachRowsShown = false
+    #if os(iOS)
+    /// Where the text field sits in the composer stack, and the stack's width: the "/" list's
+    /// glass starts as a circle at the field's leading edge and opens to the stack's width.
+    @State private var fieldFrame = CGRect(x: 10, y: 10, width: 300, height: 36)
+    @State private var stackWidth: CGFloat = 360
+    /// The rows last shown, kept through the fold-away (the items empty the moment it starts).
+    @State private var shownSlashItems: [SlashMenu.Item] = []
+    #endif
     @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.windowGeometry) private var windowGeometry
@@ -148,6 +161,7 @@ struct ComposerView: View {
     /// the model menu does (with a line in the thread), the chat's own model stays, and anything
     /// else goes in the field.
     private func pick(_ item: SlashMenu.Item, completing: Bool = false) {
+        Perf.stamp("slash: pick \(item.name)")
         menuMark = nil
         // With a reply quoted or files staged the text goes out as a message, not a command
         // (ChatSession.send), so the command waits in the field instead.
@@ -238,13 +252,107 @@ struct ComposerView: View {
     }
 
     var body: some View {
-        // One glass container for the composer, so the + button's glass can become the
-        // panel's and fold back into it (#285): the matching glassEffectIDs below did nothing
-        // outside a container, and the panel just scaled in.
+        // One glass container for the composer: the card's glass carries the "dock" id the
+        // chat morphs with. The + panel used to morph out of the button's glass here (#285);
+        // it now grows out of the button by a scale and fade (see the overlay below).
         GlassEffectContainer(spacing: 0) { composerStack }
+            // The panels above the card are measured against this view (the stack's own size).
+            .coordinateSpace(.named("composerStack"))
+            // Each panel in a glass container of its own, outside the card's: a glass shape
+            // changing inside the card's container re-hosted the card's views, and the text
+            // view lost the keyboard every time a panel opened (Matt, 2026-10-11). Behind the
+            // card, not over it: a panel folding away ends behind the + (or the field) instead
+            // of as a last shape drawn over it (Matt: "have it go behind the existing +").
+            .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { attachOverlay } }
+            #if os(iOS)
+            .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { slashOverlay } }
+            #endif
+            // Anything tapped outside the + panel closes it: a clear catcher far larger than
+            // the composer, behind the panels.
+            .background {
+                if showAttach {
+                    Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
+                        .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+                }
+            }
             // Where the composer stands in the window, for the fold above it (`roomUnderFold`).
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composerFrame = $0 }
     }
+
+    /// The + panel, always in the tree: closed, a faint circle the size of the + button on
+    /// the button; open, its shape, size and place animate to the full panel above the card
+    /// while the rows scale up inside it and fade in. No insert transition: a glass container
+    /// draws its members without their shadows while a transition runs, and the shadows came
+    /// back in one frame a third of a second after the panel had settled (the spring's late
+    /// end), under the card, the circles and the panel (Matt, 2026-10-11: "the dimmed part
+    /// late after the animation").
+    private var attachOverlay: some View {
+        let open = showAttach, button = attachButtonFrame
+        return Group {
+            if attachRowsShown || open {
+                attachPanel
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                        attachPanelHeight = h
+                        // How long the panel took to lay out after the tap (DEBUG "perf" log).
+                        if let t = attachTappedAt { attachTappedAt = nil; Perf.note("attach panel laid out \(Int(Date().timeIntervalSince(t) * 1000)) ms after the tap") }
+                    }
+            } else {
+                Color.clear.frame(width: 272, height: attachPanelHeight)
+            }
+        }
+            // The rows shrink with the shape and fade on their own quick curve: on the
+            // spring alone they showed as a clipped corner while the shape was small, and
+            // the first icon lingered on the + after a close (the spring's long tail).
+            .opacity(open ? 1 : 0)
+            .animation(open ? .easeIn(duration: 0.26) : .easeOut(duration: 0.14), value: open)
+            // Closed, nothing at all (no size) at the + button's centre, behind the card: the
+            // shape grows out from behind the + and folds back behind it.
+            .scaleEffect(open ? 1 : 0.02, anchor: .bottomLeading)
+            .frame(width: open ? 272 : 0, height: open ? attachPanelHeight : 0, alignment: .bottomLeading)
+            .clipShape(.rect(cornerRadius: open ? 30 : 0))
+            // The glass stays on: closed, the shape has no size and draws nothing. Switching
+            // the glass back on at an open placed it a frame late where the panel last was.
+            .modifier(PanelSurface(shape: .rect(cornerRadius: open ? 30 : 0)))
+            .opacity(open ? 1 : 0)
+            .offset(x: open ? 0 : button.midX, y: open ? -(attachPanelHeight + 10) : button.midY)
+            .allowsHitTesting(open)
+            .accessibilityHidden(!open)
+    }
+
+    #if os(iOS)
+    /// The "/" list (commands, skills, models) as a glass panel above the card, grown out of
+    /// the field's leading edge the way the + panel grows out of its button. It used to sit
+    /// inside the card: the card stretched to hold it, the thread's bottom margin followed
+    /// the card's height frame by frame and the whole thread re-laid out while it opened
+    /// (Matt, 2026-10-11: "/ commands ... still choppy"). The card keeps its height now.
+    private var slashOverlay: some View {
+        // Re-evaluated when the keyboard moves the dock: the rows' accessibility frames went
+        // stale otherwise (a UI test tapped a row where it had been before the keyboard rose).
+        let keyboard = windowGeometry.keyboardOverlap
+        let open = !menuItems.isEmpty || menuLoading, field = fieldFrame
+        let items = open ? menuItems : shownSlashItems
+        let height = min(commandListCap, CGFloat(max(items.count, menuLoading ? 1 : 0)) * SlashMenuList.rowHeight + 8)
+        // Closed, the panel is nothing at all (no size) at the field's leading edge: a closed
+        // circle of glass showed through its own opacity as an orb over the + while the panel
+        // folded away (Matt, 2026-10-11: "i dont want to see that at all").
+        return SlashMenuList(items: items, selection: markedIndex, loading: menuLoading, cap: commandListCap, glass: false) { pick($0) }
+            .frame(width: stackWidth)
+            .opacity(open ? 1 : 0)
+            .animation(open ? .easeIn(duration: 0.22) : .easeOut(duration: 0.12), value: open)
+            .scaleEffect(open ? 1 : 0.02, anchor: .bottomLeading)
+            .frame(width: open ? stackWidth : 0, height: open ? height : 0, alignment: .bottomLeading)
+            .clipShape(.rect(cornerRadius: open ? 22 : 0))
+            .modifier(PanelSurface(shape: .rect(cornerRadius: open ? 22 : 0)))
+            .opacity(open ? 1 : 0)
+            // Grows straight up from 10 pt above the card's top edge: its bottom edge never moves,
+            // so no part of it passes behind the card (seen through the card's glass as a shade).
+            .offset(x: open ? 0 : field.minX + 8, y: -(open ? height : 0) - 10 + 0 * keyboard)
+            // Its own spring: outside the card's animated subtree the shape snapped shut.
+            .animation(.snappy(duration: 0.28), value: open)
+            .allowsHitTesting(open)
+            .accessibilityHidden(!open)
+    }
+    #endif
 
     private var composerStack: some View {
         VStack(spacing: 8) {
@@ -258,32 +366,18 @@ struct ComposerView: View {
                 .padding(.horizontal, 8)
             }
         }
-        // The attach panel grows out of the + button and sits above the whole composer, the reply
-        // strip included (anchored to the button it overlapped the strip).
-        .overlay(alignment: .topLeading) {
-            if showAttach {
-                attachPanel
-                    .glassEffectID("attach", in: namespace)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                        attachPanelHeight = h
-                        // How long the panel took to lay out after the tap (DEBUG "perf" log).
-                        if let t = attachTappedAt { attachTappedAt = nil; Perf.note("attach panel laid out \(Int(Date().timeIntervalSince(t) * 1000)) ms after the tap") }
-                    }
-                    .offset(y: -(attachPanelHeight + 10))
-                    // The glass grows out of the button and folds back into it; the rows fade.
-                    .glassEffectTransition(.matchedGeometry)
-                    .transition(.opacity)
-                    .zIndex(2)
-            }
+        #if os(iOS)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stackWidth = $0 }
+        .onChange(of: menuItems.map(\.id)) { _, _ in if !menuItems.isEmpty { shownSlashItems = menuItems } }
+        .onChange(of: !menuItems.isEmpty || menuLoading) { _, open in
+            Smooth.animate("slashMenu")
+            // The kept rows go once the fold has ended, so a closed list has none.
+            if !open { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { if menuItems.isEmpty, !menuLoading { shownSlashItems = [] } } }
         }
-        // Anything tapped outside the panel closes it: a clear catcher far larger than the
-        // composer, under the panel.
-        .background {
-            if showAttach {
-                Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
-                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
-            }
+        .onChange(of: showAttach) { _, open in
+            if open { attachRowsShown = true } else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { if !showAttach { attachRowsShown = false } } }
         }
+        #endif
         .animation(.snappy(duration: 0.25), value: menuItems.map(\.id))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
@@ -320,6 +414,8 @@ struct ComposerView: View {
         #if os(iOS)
         // The camera question answered before the + panel can need it (see cameraAvailable).
         .task { try? await Task.sleep(for: .seconds(1)); _ = Self.cameraAvailable }
+        // The model list behind the chip, fetched before its first open.
+        .task { await chat.warmModelOptions() }
         // The cursor comes back after a layout switch rebuilt the chat (`ChatViewMemory`).
         .onAppear { if ChatViewMemory.focused.contains(ChatViewMemory.key(for: chat)) { focused = true } }
         .onDisappear { ChatViewMemory.setFocused(focused, for: chat) }
@@ -385,12 +481,14 @@ struct ComposerView: View {
         VStack(alignment: .leading, spacing: 6) {
             if !chat.staged.isEmpty { thumbnails }
             if !quote.isEmpty { quoteStrip }
+            #if os(macOS)
             if !menuItems.isEmpty || menuLoading {
                 SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap, glass: false) { pick($0) }
                     // In place, not sliding up from under the keyboard.
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 Divider()
             }
+            #endif
             if let holdNote {
                 Text(holdNote)
                     .font(.caption).foregroundStyle(.secondary)
@@ -423,6 +521,9 @@ struct ComposerView: View {
                     .transition(.opacity)
             } else {
                 textField
+                    #if os(iOS)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { fieldFrame = $0 }
+                    #endif
             }
             HStack(alignment: .center, spacing: 8) {
                 attachMenu.layoutPriority(1)
@@ -597,11 +698,11 @@ struct ComposerView: View {
     /// in Messages, grown out of the button and folded back into it.
     private var attachMenu: some View {
         Button {
-            // The panel takes the keyboard's place, as the + tray does in Messages: with the
-            // keyboard up it grew over the thread and covered the header (a tester, on the
-            // first build with Voice mode in it).
+            // The keyboard stays up (Matt, 2026-10-11: "it shouldn't close the keyboard"); the
+            // panel is capped to the room between the header and the card and scrolls inside it,
+            // where it used to take the keyboard's place and, uncapped, covered the header.
             // The slash list closes with it: on the Duo the two stood open together, the panel pushed up onto the fold.
-            if !showAttach { focused = false; attachTappedAt = Date(); menuDismissed = true }
+            if !showAttach { attachTappedAt = Date(); menuDismissed = true }
             Smooth.animate("plusPanel")
             withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
@@ -611,7 +712,7 @@ struct ComposerView: View {
                 .rotationEffect(.degrees(showAttach ? 45 : 0))
                 .frame(width: 36, height: 36)
                 .glassEffect(.regular.interactive(), in: .circle)
-                .glassEffectID(showAttach ? "attach-open" : "attach", in: namespace)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { attachButtonFrame = $0 }
             .accessibilityIdentifier("composer.attach")
         }
         .buttonStyle(.plain)
@@ -643,11 +744,24 @@ struct ComposerView: View {
         items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) })
         items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
         items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
-        return AttachPanel(items: items) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+        return AttachPanel(items: items, surface: false, cap: attachCap) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+    }
+
+    /// The room above the card for the + panel: down from the header (the status bar plus the
+    /// pill, about 60 pt) to 10 pt above the card, wherever the keyboard has put the card.
+    private var attachCap: CGFloat {
+        #if os(iOS)
+        guard composerFrame.minY > 0 else { return 400 }
+        let room = composerFrame.minY - windowGeometry.safeArea.top - 60 - 10
+        return max(180, roomUnderFold.map { min(room, $0) } ?? room)
+        #else
+        return 600
+        #endif
     }
 
     private func send() async {
         var t = text
+        Perf.stamp("slash: send \(t.prefix(30))")
         if !quote.isEmpty {
             // A Markdown quote the bot reads as context; the quoted bubble is left out of the
             // app's own history recall.

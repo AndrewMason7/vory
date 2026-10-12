@@ -8,8 +8,27 @@ extension ChatSession {
     /// selected at the time: after a switch elsewhere, a pick sent another bot's provider to
     /// this chat.
     func modelOptions(refresh: Bool = false) async throws -> ModelOptionsResult {
+        let key = modelOptionsCacheKey
+        if !refresh, let cached = ModelOptionsCache.results[key] { return cached }
         let q = refresh ? [URLQueryItem(name: "refresh", value: "true")] : []
-        return try await runtime.api.get("/api/model/options", query: q, profile: Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile))
+        let result: ModelOptionsResult = try await runtime.api.get("/api/model/options", query: q, profile: Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile))
+        ModelOptionsCache.results[key] = result
+        return result
+    }
+
+    /// The list already fetched for this chat's bot, if any (the model menu opens with it).
+    var cachedModelOptions: ModelOptionsResult? { ModelOptionsCache.results[modelOptionsCacheKey] }
+
+    /// Fetches the list ahead of the first open of the model menu, quietly: the menu used to
+    /// load it on its first open and rebuild itself while it opened (Matt, 2026-10-11: "load
+    /// the stuff behind the model chip so it doesn't look weird on first open").
+    func warmModelOptions() async {
+        guard cachedModelOptions == nil else { return }
+        _ = try? await modelOptions()
+    }
+
+    private var modelOptionsCacheKey: String {
+        "\(ObjectIdentifier(runtime).hashValue)|\(Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile) ?? "")"
     }
 
     /// The bot whose model list a chat reads: its own, or the selected one for a chat that has
@@ -17,6 +36,12 @@ extension ChatSession {
     nonisolated static func modelOptionsProfile(chat: String?, selected: String?) -> String? {
         chat ?? selected
     }
+}
+
+/// The model lists fetched this run, one per gateway and bot, shared by the model menu, the
+/// model page and the "/model " chooser. "Refresh models" asks the gateway again.
+@MainActor enum ModelOptionsCache {
+    static var results: [String: ModelOptionsResult] = [:]
 }
 
 extension ModelOptionsResult {
@@ -59,6 +84,12 @@ struct ModelMenuContent: View {
     @State private var loading = false
     @State private var error: String?
 
+    init(chat: ChatSession) {
+        self.chat = chat
+        // Opens with the list already fetched for this bot (warmed when the chat opened).
+        _options = State(initialValue: chat.cachedModelOptions)
+    }
+
     var body: some View {
         Group {
             if let options {
@@ -90,7 +121,7 @@ struct ModelMenuContent: View {
             Toggle("YOLO (skip approvals, this session)", isOn: Binding(get: { chat.info?.yolo ?? false }, set: { v in Task { try? await chat.setYolo(v) } }))
             Button { Task { await load(refresh: true) } } label: { Label("Refresh models", systemImage: "arrow.clockwise") }
         }
-        .task { await load(refresh: false) }
+        .task { if options == nil { await load(refresh: false) } }
     }
 
     private var currentCapabilities: ModelCapabilities? {
