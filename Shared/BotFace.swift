@@ -87,15 +87,19 @@ public enum BotFace {
             // A diamond on its point, corners softened (1.5, the preview's gem).
             return roundedPolygon(sides: 4, in: r.insetBy(dx: r.width * 0.03, dy: r.height * 0.03), rotation: -.pi / 2, corner: r.width * 0.09)
         case "bubble":
-            // A speech bubble: a wide ellipse with a short tail toward the bottom-left.
-            var p = Path()
+            // A speech bubble: a wide ellipse with a short tail toward the bottom-left, as one
+            // outline. Two overlapping shapes drew the tail as a lighter triangle with a white
+            // wedge where it met the body (their windings cancelled there, and the rim and the
+            // glass drew the ellipse's edge across the tail; Matt on 1.5 (17): "Message bubble
+            // bot shape is also broken").
             let w = r.width, h = r.height
-            p.addEllipse(in: CGRect(x: r.minX + w * 0.06, y: r.minY + h * 0.14, width: w * 0.88, height: h * 0.60))
-            p.move(to: CGPoint(x: r.minX + w * 0.30, y: r.minY + h * 0.62))
-            p.addLine(to: CGPoint(x: r.minX + w * 0.16, y: r.minY + h * 0.92))
-            p.addLine(to: CGPoint(x: r.minX + w * 0.48, y: r.minY + h * 0.72))
-            p.closeSubpath()
-            return p
+            let body = Path(ellipseIn: CGRect(x: r.minX + w * 0.06, y: r.minY + h * 0.14, width: w * 0.88, height: h * 0.60))
+            var tail = Path()
+            tail.move(to: CGPoint(x: r.minX + w * 0.30, y: r.minY + h * 0.62))
+            tail.addLine(to: CGPoint(x: r.minX + w * 0.16, y: r.minY + h * 0.92))
+            tail.addLine(to: CGPoint(x: r.minX + w * 0.48, y: r.minY + h * 0.72))
+            tail.closeSubpath()
+            return body.union(tail)
         case "cloud":
             var p = Path()
             let w = r.width, h = r.height
