@@ -327,7 +327,7 @@ struct ChatListView: View {
             if let runtime {
                 Picker("Profile", selection: Binding(get: { runtime.selectedProfile ?? "" }, set: { runtime.selectedProfile = $0 })) {
                     ForEach(runtime.profiles) { p in
-                        Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                        Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
                     }
                 }
                 Toggle(isOn: Bindable(prefs).allBots) { Label("All bots", systemImage: "person.2") }
@@ -356,7 +356,7 @@ struct ChatListView: View {
             // visibly jumped as it re-laid out.
             // A rendered, untinted image: live glass went murky on the toolbar's glass and a
             // painted view picked up the toolbar's tint in light mode.
-            Image(uiImage: BotAvatarImage.make(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
+            Image(uiImage: BotAvatarImage.cached(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
                 .accessibilityLabel("Profile: \(runtime?.selectedProfile ?? "none")")
         }
         .id("\(prefs.botColorsRaw)|\(prefs.botAvatarsRaw)|\(prefs.glassAll)|\(colorScheme == .light)")

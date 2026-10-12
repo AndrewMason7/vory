@@ -99,7 +99,7 @@ struct SettingsView: View {
                         if let rt = model.runtime, !rt.profiles.isEmpty {
                             Picker("Profile", selection: Binding(get: { rt.selectedProfile ?? "" }, set: { rt.selectedProfile = $0 })) {
                                 ForEach(rt.profiles) { p in
-                                    Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, size: 24, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                                    Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, size: 24, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
                                 }
                             }
                             // The menu's icons are rendered images; a new identity redraws them when a look changes.
@@ -459,7 +459,7 @@ struct BotsSettingsView: View {
                     Picker("Default bot", selection: $defaultProfile) {
                         Text("Follow the gateway").tag("")
                         ForEach(rt.profiles) { p in
-                            Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                            Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
                         }
                     }
                     .onChange(of: defaultProfile) { _, _ in rt.returnToDefaultProfile() }
