@@ -328,6 +328,7 @@ struct MorphTopBar: View {
         case .mid:
             HStack(spacing: 0) {
                 Text(model.selectedTab.title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("morph.title")
                 PullRefreshWheel(fromBelow: model.pullStates[model.selectedTab])
             }
         case .trail:
@@ -430,6 +431,10 @@ struct MorphTopBar: View {
 
     private var listLayout: some View {
         let chrome = tabChrome(model.selectedTab)
+        // At least a control's height on every page, so the title capsule sits on the same line
+        // whether or not the page has round controls beside it (Matt on 1.5 (17): "the title
+        // headings like bot and settings they should all be on the exact same spot"; centred in a
+        // row of 44 pt circles, Bots' sat 4 pt below Settings' bare one).
         return HStack(spacing: 10) {
             if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
             HStack(spacing: 0) {
@@ -451,6 +456,7 @@ struct MorphTopBar: View {
             case nil: EmptyView()
             }
         }
+        .frame(minHeight: 44)
     }
 
     /// A pushed page's one control: a Back circle where the chat's Back sits, on the root

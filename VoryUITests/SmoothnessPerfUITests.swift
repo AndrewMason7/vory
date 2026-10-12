@@ -352,6 +352,37 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// Every root's title capsule on the same line (Matt on 1.5 (17): "the title headings like bot
+    /// and settings they should all be on the exact same spot"): the same top and height on every
+    /// tab, and the same leading edge on the tabs without a round control before it (Chats' bot,
+    /// Files' Home).
+    func testHeadingSpotEveryRoot() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        let slots = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'tab.'")).allElementsBoundByIndex
+        let tabs = slots.map { String($0.identifier.dropFirst(4)) }
+        var frames: [(tab: String, frame: CGRect, lead: Bool)] = []
+        for tab in tabs {
+            let slot = any("tab.\(tab)")
+            if slot.waitForExistence(timeout: 5) { slot.tap(); pause(1.2) }
+            let title = any("morph.title")
+            XCTAssertTrue(title.waitForExistence(timeout: 5), "\(tab): no title capsule")
+            let lead = any("chats.profile").exists || any("files.home").exists
+            print("HEADING \(tab) \(title.frame) lead=\(lead)")
+            frames.append((tab, title.frame, lead))
+        }
+        guard let first = frames.first else { return XCTFail("no tabs") }
+        for f in frames {
+            XCTAssertEqual(f.frame.minY, first.frame.minY, accuracy: 0.5, "\(f.tab)'s title is not on \(first.tab)'s line")
+            XCTAssertEqual(f.frame.height, first.frame.height, accuracy: 0.5, "\(f.tab)'s title is not \(first.tab)'s height")
+        }
+        let bare = frames.filter { !$0.lead }
+        for f in bare.dropFirst() {
+            XCTAssertEqual(f.frame.minX, bare[0].frame.minX, accuracy: 0.5, "\(f.tab)'s title does not start where \(bare[0].tab)'s does")
+        }
+    }
+
     /// A page pushed on Settings, then Chats and back: the pushed page's Back belongs to its tab
     /// (Chats shows its own title and no Back), and it is there again back on Settings.
     func testPushedPageTabSwitch() throws {
