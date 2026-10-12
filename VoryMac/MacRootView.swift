@@ -148,7 +148,10 @@ private struct MainSplitView: View {
             // same four rules the iPhone applies. The other pages are cheap to build (Settings
             // from Bots: ~80 ms) and keep mounting on demand.
             NavigationSplitView(columnVisibility: $columns) {
-                Sidebar(tabs: tabs)
+                // Its rail's ⌘ numbers only while it shows: the other page's rail has them then
+                // (declared twice, ⌘2 from Bots fired on both rails, and on Chats ⌘3 and ⌘4 then did
+                // nothing until the next click on the rail).
+                Sidebar(tabs: tabs, shortcuts: chats)
             } content: {
                 ChatListView(detailPath: $chatPath)
                     // A renamed bot's open chat is stale (#315): back to the placeholder;
@@ -186,7 +189,15 @@ private struct MainSplitView: View {
         .onAppear { appearedAt = Date(); openOnLaunchTab(tabs) }
         // Signpost intervals for the hitch traces (Smooth, 1.5): a page switch and a chat open
         // on the Mac, so Instruments can score each one by name; free when nothing listens.
-        .onChange(of: model.selectedTab) { _, _ in Smooth.animate("page") }
+        .onChange(of: model.selectedTab) { _, now in
+            Smooth.animate("page")
+            // Leaving Chats, the keyboard focus leaves it too: the hidden page stays mounted, and
+            // its composer or list kept the focus (keys and pastes aimed at a page not on show).
+            // The window holds it, as when the page was torn down.
+            if now != .chats, let w = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MacWindow.main) == true }), w.firstResponder !== w {
+                w.makeFirstResponder(nil)
+            }
+        }
         .onChange(of: chatPath) { _, _ in Smooth.animate("chatOpen") }
         .onChange(of: tabs) { _, now in
             openOnLaunchTab(now)
@@ -231,6 +242,8 @@ private let liveVory = BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BF
 private struct Sidebar: View {
     @Environment(AppModel.self) private var model
     var tabs: [AppModel.AppTab]
+    /// Whether this rail declares the pages' ⌘ numbers (only the rail on show does).
+    var shortcuts = true
 
     static let width: CGFloat = 84
 
@@ -240,7 +253,7 @@ private struct Sidebar: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 2) {
                 ForEach(Array(tabs.enumerated()), id: \.element) { i, tab in
-                    RailItem(tab: tab, selected: model.selectedTab == tab, badge: badge(tab), shortcut: i < 9 ? Character("\(i + 1)") : nil) {
+                    RailItem(tab: tab, selected: model.selectedTab == tab, badge: badge(tab), shortcut: i < 9 ? Character("\(i + 1)") : nil, shortcutOn: shortcuts) {
                         // The page already showing, chosen again (a click or its ⌘ number): back to
                         // its top, as a second tap on the phone's tab bar does.
                         if model.selectedTab == tab { model.tabReselected[tab, default: 0] += 1 } else { model.selectedTab = tab }
@@ -274,6 +287,7 @@ private struct RailItem: View {
     var selected: Bool
     var badge: Int
     var shortcut: Character?
+    var shortcutOn = true
     var action: () -> Void
     @State private var hovering = false
 
@@ -305,11 +319,8 @@ private struct RailItem: View {
         .accessibilityHint(shortcut.map { "Shows \(tab.title). Command \($0)." } ?? "Shows \(tab.title).")
         .accessibilityIdentifier("rail.\(tab.rawValue)")
         .accessibilityAddTraits(selected ? .isSelected : [])
-        if let shortcut {
-            button.keyboardShortcut(KeyEquivalent(shortcut), modifiers: .command)
-        } else {
-            button
-        }
+        // Optional rather than an if/else, so the button keeps its identity when the rail hides.
+        button.keyboardShortcut(shortcutOn ? shortcut.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) } : nil)
     }
 }
 
