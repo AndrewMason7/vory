@@ -166,6 +166,10 @@ private struct MainSplitView: View {
         // vouch for is hidden until its probe answers, so the start waits a few seconds for it,
         // and only while nothing else has been chosen meanwhile.
         .onAppear { appearedAt = Date(); openOnLaunchTab(tabs) }
+        // Signpost intervals for the hitch traces (Smooth, 1.5): a page switch and a chat open
+        // on the Mac, so Instruments can score each one by name; free when nothing listens.
+        .onChange(of: model.selectedTab) { _, _ in Smooth.animate("page") }
+        .onChange(of: chatPath) { _, _ in Smooth.animate("chatOpen") }
         .onChange(of: tabs) { _, now in
             openOnLaunchTab(now)
             // The page showing left the rail (the plugin went, or the layout changed): back to Chats.
