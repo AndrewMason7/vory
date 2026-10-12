@@ -955,8 +955,6 @@ public final class BotAmbient {
     /// A turn is running or waiting anywhere (Mac, fed by the menu bar's turn board). Idle
     /// bots blink and glance only while it is; otherwise they hold still and cost nothing.
     public var anyWorking = false
-    /// Settings › Appearance › Animate bots (Mac): off, every bot holds still.
-    public static let animateKey = "bots.animate"
     /// DEBUG counting of timeline evaluations (the app sets it to Perf.tick): how often faces
     /// wake while the screen is at rest.
     nonisolated(unsafe) public static var tickHook: ((String) -> Void)?
@@ -1073,7 +1071,6 @@ public struct BotFaceView: View {
     /// Whether this bot's window is where someone can see it (Mac; always true elsewhere).
     @Environment(\.botsLive) private var windowLive
     #if os(macOS)
-    @AppStorage(BotAmbient.animateKey) private var animateSetting = true
     #endif
     /// A few frames' grace after the bot stops or its look changes while held, so the frame it
     /// holds is the current one at rest (eyes open, body still), never a half blink.
@@ -1316,11 +1313,12 @@ public struct BotFaceView: View {
     public var body: some View {
         // Whether this bot moves at all. On the Mac every bot cost CPU all the time, in the
         // background too (#248): it moves only while its window is visible and in front, the
-        // display is awake, Animate bots is on and Reduce Motion is off; held, it shows its
-        // current pose at rest. An idle bot's eyes (blinks, glances) play only while something
-        // is working. Elsewhere this is as before: the display flag is never set off the Mac.
+        // display is awake and Reduce Motion is off; held, it shows its current pose at rest. An
+        // idle bot's eyes (blinks, glances) play only while something is working. The old
+        // "Animate bots" switch is gone (2026-10-11): Settings › Bots › Style › Still is the quiet
+        // choice. Elsewhere this is as before: the display flag is never set off the Mac.
         #if os(macOS)
-        let live = !drawn && windowLive && !ambient.displayAsleep && animateSetting && !reduceMotion
+        let live = !drawn && windowLive && !ambient.displayAsleep && !reduceMotion
         let eyeLife = live && !mood.still && (ambient.anyWorking || self.state != .idle)
         #else
         let live = !drawn && windowLive && !ambient.displayAsleep

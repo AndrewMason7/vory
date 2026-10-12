@@ -20,6 +20,16 @@ enum MacBotMotion {
         }
     }
 
+    /// The 1.4 Mac switch Settings › Appearance › "Animate bots" (#248), removed in 1.5: a stored
+    /// "off" becomes the Still style once, so nobody's bots start moving after the update; the key
+    /// is dropped either way.
+    static let oldAnimateKey = "bots.animate"
+    static func migrateAnimateSwitch(defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: oldAnimateKey) != nil else { return }
+        if defaults.bool(forKey: oldAnimateKey) == false { defaults.set("still", forKey: styleKey) }
+        defaults.removeObject(forKey: oldAnimateKey)
+    }
+
     /// Hands the setting to the engine: at launch, and whenever Settings changes it.
     static func apply(defaults: UserDefaults = .standard) {
         BotFace.motionScale = scale(for: defaults.string(forKey: styleKey))

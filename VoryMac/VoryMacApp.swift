@@ -18,7 +18,9 @@ struct VoryMacApp: App {
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         Keychain.migrateToAccessGroupIfNeeded()
         BotFace.liveGlass = true
-        // Settings › Bots › Motion, as the iPhone applies it at launch (the Mac has no gyroscope part).
+        // Settings › Bots › Style, as the iPhone applies it at launch (the Mac has no gyroscope
+        // part); the 1.4 "Animate bots" switch folds into it first.
+        MacBotMotion.migrateAnimateSwitch()
         MacBotMotion.apply()
         _model = State(initialValue: AppModel.shared)
     }

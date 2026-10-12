@@ -662,7 +662,6 @@ struct AppearanceView: View {
 
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
     #if os(macOS)
-    @AppStorage(BotAmbient.animateKey) private var animateBots = true
     private func tabBinding(_ tab: AppModel.AppTab) -> Binding<Bool> {
         Binding(get: { layout.contains(tab) }, set: { on in var l = layout; l.set(tab, enabled: on); layoutRaw = l.encoded })
     }
@@ -701,12 +700,6 @@ struct AppearanceView: View {
                 Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow \(DeviceWords.isMac ? "System Settings" : "\(DeviceWords.your)'s own settings").")
             }
             #if os(macOS)
-            // Bots cost CPU while they move (#248): a switch to hold them still for good.
-            Section {
-                Toggle("Animate bots", isOn: $animateBots)
-            } footer: {
-                Text("Off, the bots hold still. On, they move while Vory is in front and can be seen, and idle bots blink only while a bot is working; Reduce Motion in System Settings holds them still too.")
-            }
             // The Mac's sidebar holds every page: a switch each, arrows for the order.
             Section {
                 ForEach(layout.tabs, id: \.self) { tab in
