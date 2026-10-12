@@ -45,7 +45,8 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     func push(_ c: ChatSession) {
         chat = c
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = 0 } }
-        else { withAnimation(.snappy(duration: 0.3)) { t = 0 } }
+        // Quick, as the system's own glass morphs are (Matt, 2026-10-12: "too slow").
+        else { withAnimation(.snappy(duration: 0.22)) { t = 0 } }
     }
     func scrub(_ fraction: CGFloat) {
         guard chat != nil else { return }
@@ -75,8 +76,8 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// A pop that was not a swipe (the Back button): the timed morph.
     func pop() {
         guard chat != nil, !scrubbing else { return }
-        let d = 0.3
-        withAnimation(.easeOut(duration: d)) { t = 1 }
+        let d = 0.22
+        withAnimation(.snappy(duration: d)) { t = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) { if self.t >= 1 { self.chat = nil } }
     }
 }
@@ -176,8 +177,8 @@ struct MorphTopBar: View {
             .glassEffect(present ? .regular : .identity, in: .capsule)
             .position(x: f.midX, y: f.midY)
             .opacity(present ? 1 : 0)
-            .animation(.snappy(duration: 0.3), value: model.selectedTab)
-            .animation(.snappy(duration: 0.3), value: present)
+            .animation(.snappy(duration: 0.22), value: model.selectedTab)
+            .animation(.snappy(duration: 0.22), value: present)
         }
     }
 
@@ -387,6 +388,8 @@ struct MorphTopBar: View {
     }
 
     private func chatLayout(_ chat: ChatSession) -> some View {
+        // The chat's row sits lower than the list's: the seated face rises 43 pt over the pill's
+        // top, and at the list's height it went up under the Dynamic Island (Matt, 2026-10-12).
         HStack(spacing: 12) {
             Color.clear.frame(width: 44, height: 44).measured(.lead, into: $chatFrames)
             Spacer(minLength: 0)
@@ -394,12 +397,13 @@ struct MorphTopBar: View {
             Spacer(minLength: 0)
             Color.clear.frame(width: 44, height: 44).measured(.trail, into: $chatFrames)
         }
+        .padding(.top, 30)
     }
 
     /// The pill's words: the bot's name and the chat's title (or step), as `ChatHeader` shows them.
     private func pillText(_ chat: ChatSession) -> some View {
         let label = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
-        let status = chat.isRunning ? (chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : chat.title)
+        let status = chat.isRunning ? (chat.statusLine ?? "Thinking…") : (chat.showsSyncing ? "Syncing…" : chat.title)
         return VStack(spacing: 1) {
             HStack(spacing: 3) {
                 Text(label.count > 26 ? String(label.prefix(25)) + "…" : label).font(.caption.weight(.semibold)).lineLimit(1)
@@ -433,7 +437,7 @@ private extension View {
         onGeometryChange(for: CGRect.self) { $0.frame(in: .named("morph")) } action: { f in
             guard frames.wrappedValue[slot] != f else { return }
             if frames.wrappedValue[slot] != nil || last?.wrappedValue[slot] != nil {
-                withAnimation(.snappy(duration: 0.3)) { frames.wrappedValue[slot] = f }
+                withAnimation(.snappy(duration: 0.22)) { frames.wrappedValue[slot] = f }
             } else {
                 frames.wrappedValue[slot] = f
             }

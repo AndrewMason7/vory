@@ -187,6 +187,74 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// The list keeps its place through a chat and back (Matt, 2026-10-12: "the chats list
+    /// jumps, so it'll almost reload everything when going back"): scrolled a screen down, a
+    /// row's frame before the chat opens equals its frame after the swipe back.
+    func testListKeepsPlaceAfterBack() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        app.swipeUp(velocity: .slow); pause(1.5)
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Standup notes' OR label CONTAINS[c] 'Backup verification'"))
+        guard let row = rows.allElementsBoundByIndex.first(where: { $0.isHittable }) else { shot("list-no-row"); return XCTFail("no row to track after the scroll") }
+        let before = row.frame; shot("list-before")
+        print("LIST-PLACE before \(before)")
+        row.tap(); pause(2.5)
+        XCTAssertTrue(any("chat.dock").waitForExistence(timeout: 10), "the chat did not open")
+        shot("chat-open")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(0.2); shot("list-back-early"); pause(1.5); shot("list-back")
+        let after = rows.allElementsBoundByIndex.first(where: { $0.label == row.label })?.frame ?? .zero
+        print("LIST-PLACE after \(after)")
+        XCTAssertEqual(before.minY, after.minY, accuracy: 2, "the list moved after the swipe back: \(before) → \(after)")
+    }
+
+    /// Step D before-pictures: the states that meet the Duo's fold, each held HERMES_E2E_STEP
+    /// seconds (default 7) while the displays are recorded from outside: the composer with the
+    /// keyboard, the + panel, the "/" list, then the Bots grid. Prints "STEPD <state> <time>".
+    func testStepDStates() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        let hold = Double(ProcessInfo.processInfo.environment["HERMES_E2E_STEP"] ?? "7") ?? 7
+        func mark(_ s: String) { print("STEPD \(s) \(Date().timeIntervalSince1970)") }
+        launch(url: url, token: token)
+        waitForList()
+        openFirstChat(); pause(2)
+        let field = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer field")
+        field.tap(); pause(0.5); field.typeText("Draft kept across the fold"); pause(1)
+        mark("composer-keyboard"); pause(hold)
+        if let plus = app.buttons.matching(NSPredicate(format: "label == 'Attach'")).allElementsBoundByIndex.first(where: { $0.isHittable }) {
+            plus.tap(); pause(1.5); mark("plus-panel"); pause(hold)
+            if let close = app.buttons.matching(NSPredicate(format: "label == 'Close attach panel'")).allElementsBoundByIndex.first(where: { $0.isHittable }) { close.tap() } else { plus.tap() }
+            pause(1)
+        } else { mark("plus-panel-missing") }
+        // The "/" list opens on a "/" at the start of the text: the draft goes first.
+        field.tap(); pause(0.5)
+        for _ in 0..<26 { field.typeText(XCUIKeyboardKey.delete.rawValue) }
+        pause(0.5); field.typeText("/"); pause(1.5); mark("slash-list"); pause(hold)
+        field.typeText(XCUIKeyboardKey.delete.rawValue); pause(1)
+        // The tab bar is away inside a chat: Back to the list first.
+        back(); pause(2)
+        let bots = app.descendants(matching: .any).matching(identifier: "tab.bots").firstMatch
+        if bots.waitForExistence(timeout: 3) { bots.tap(); pause(2); mark("bots-grid"); pause(hold) } else { mark("bots-grid-missing") }
+        mark("done")
+    }
+
+    /// Holds the app in a chat with a draft for HERMES_E2E_HOLD seconds (default 600) while the
+    /// Duo's hinge is driven from outside (Device Hub), for screen recordings and stills.
+    func testHoldChatWithDraft() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        openFirstChat(); pause(2)
+        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        if field.waitForExistence(timeout: 5) { field.tap(); pause(0.5); field.typeText("Draft kept across the fold"); pause(0.5) }
+        let hold = Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "600") ?? 600
+        print("HOLD start \(hold)s")
+        pause(hold)
+    }
+
     /// Hidden tab pages stay out of the accessibility tree (#326): on Chats, each chat row is
     /// found once (Home lists the recent chats too), and none of Home's activity blocks show.
     func testHiddenPagesOutOfTheTree() throws {

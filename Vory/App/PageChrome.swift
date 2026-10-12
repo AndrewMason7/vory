@@ -100,8 +100,9 @@ struct PullRefresh: ViewModifier {
 }
 
 /// The pull-to-refresh wheel beside a page's title: an arc that fills as the pull comes, then
-/// the spinner while the refresh runs. A fixed slot whenever the page can refresh, so the title
-/// never moves as the wheel comes and goes; nothing at all on a page that cannot.
+/// the spinner while the refresh runs. Its slot opens with the pull and closes after the
+/// refresh (Matt, 2026-10-12: no empty space in the Chats capsule at rest); the title keeps
+/// its leading edge, so it never moves, and the capsule grows to the right and back.
 struct PullRefreshWheel: View {
     /// A heading's wheel claims the state (`hosted`), and the pull then adds no wheel of its
     /// own. The pull's own wheel must not claim it: it would remove itself, come back, and
@@ -111,6 +112,8 @@ struct PullRefreshWheel: View {
     var fromBelow: PullRefreshState? = nil
     @Environment(PullRefreshState.self) private var around: PullRefreshState?
     private var pull: PullRefreshState? { fromBelow ?? around }
+    /// The slot is open while the arc shows or the spinner runs.
+    private var open: Bool { guard let pull else { return false }; return pull.refreshing || pull.shown > 0 }
     @State private var claimed: PullRefreshState?
     /// Grows with the title's type (the accessibility sizes), as a glyph beside it would.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
@@ -125,9 +128,9 @@ struct PullRefreshWheel: View {
                 if pull.refreshing { ProgressView().controlSize(.small).transition(.opacity) }
             }
         }
-        .frame(width: pull == nil ? 0 : side, height: side)
-        .padding(.leading, pull == nil ? 0 : side * 0.4)
-        .animation(.snappy(duration: 0.2), value: pull?.refreshing ?? false)
+        .frame(width: open ? side : 0, height: side)
+        .padding(.leading, open ? side * 0.4 : 0)
+        .animation(.snappy(duration: 0.3), value: open)
         // The claim follows the state: the bar's one wheel is handed each tab's state in turn
         // (onAppear ran once, so the second tab's pull added its own wheel as well).
         .onChange(of: pull.map(ObjectIdentifier.init), initial: true) { _, _ in

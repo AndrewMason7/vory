@@ -187,7 +187,10 @@ struct ChatListView: View {
             // bar centred its title, which landed beside the trailing buttons; the title goes
             // into the leading group after the bot circle, as on a phone.
             #if os(iOS)
-            .pageHeading(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !model.wideLayout && !MorphTopBar.on)
+            // In two columns as well: the list column is narrow, and the system's centred
+            // inline title had 30 pt between the bot circle and the trailing group ("Ch…" on
+            // the open Duo, 2026-10-12). The morph bar draws the title itself on one column.
+            .pageHeading(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !MorphTopBar.active(model))
             #endif
             #if os(iOS)
             // The morph prototype draws the list's controls over the page (MorphTopBar): the bar
@@ -798,6 +801,15 @@ struct ChatListView: View {
                                          source: "ios", model: chat.modelName.isEmpty ? nil : chat.modelName,
                                          startedAt: chat.items.first?.timestamp.timeIntervalSince1970 ?? now, lastActive: max(last, now - 1),
                                          messageCount: chat.items.count, isActive: chat.isRunning, archived: false, pinned: false, profile: chat.profileName))
+            }
+            // A chat keeps its place until it has new messages: the gateway counts an attach as
+            // activity, so the chat just read floated to the top on the way back and every row
+            // shifted (Matt, 2026-10-12: "the chats list jumps ... we want it to remain the same
+            // when going into a chat and out of"). Its old time stays until something was said.
+            let before = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            all = all.map { s in
+                guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
+                var kept = s; kept.lastActive = was; return kept
             }
             sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
             // What Siri can name without the app on screen: the bots and the recent chats' titles (#310).
