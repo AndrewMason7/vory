@@ -352,32 +352,40 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
-    /// A bot's shape changed in its card (Look, then a shape: HERMES_E2E_SHAPE, Circle by
-    /// default), then the list and the Bots page, and the Bots page again after a relaunch (Matt
-    /// on 1.5 (17): "after changing UniFi from cloud to circle it now broke the look"): stills to
-    /// hold the changed bot against the others.
+    /// A bot's shape changed in its card (Look, then a shape), then the list and the Bots page,
+    /// and the Bots page again after a relaunch (Matt on 1.5 (17): "after changing UniFi from
+    /// cloud to circle it now broke the look"): stills to hold the changed bot against the others.
+    /// The bot starts as HERMES_E2E_SHAPE_FROM (Cloud; set, then a relaunch, so the Bots page is
+    /// first drawn with it, as Matt's was) and becomes HERMES_E2E_SHAPE (Circle).
     func testShapeChange() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
-        let target = ProcessInfo.processInfo.environment["HERMES_E2E_SHAPE"] ?? "Circle"
+        let e = ProcessInfo.processInfo.environment
+        let from = e["HERMES_E2E_SHAPE_FROM"] ?? "Cloud", target = e["HERMES_E2E_SHAPE"] ?? "Circle"
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        func changeShape(to shape: String) {
+            openFirstChat(); pause(1.5)
+            let pill = any("chat.titlePill")
+            XCTAssertTrue(pill.waitForExistence(timeout: 5), "no title pill")
+            pill.tap(); pause(1.5)
+            let look = app.buttons["Look"].firstMatch
+            XCTAssertTrue(look.waitForExistence(timeout: 5), "no Look tab in the bot's card")
+            look.tap(); pause(1)
+            let tile = app.buttons[shape].firstMatch
+            for _ in 0..<4 where !tile.isHittable { app.swipeUp(velocity: .slow); pause(0.5) }
+            XCTAssertTrue(tile.waitForExistence(timeout: 5), "no \(shape) tile")
+            tile.tap(); pause(1.5); shot("studio-\(shape)")
+            if app.buttons["Done"].exists { app.buttons["Done"].tap() } else if app.buttons["Close"].exists { app.buttons["Close"].tap() }
+            pause(1); shot("chat-\(shape)")
+            back(); pause(1.5)
+        }
         launch(url: url, token: token)
         waitForList()
-        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        changeShape(to: from)
+        launch(url: url, token: token)
+        waitForList()
         any("tab.bots").tap(); pause(2); shot("bots-before")
         any("tab.chats").tap(); pause(1.5)
-        openFirstChat(); pause(1.5)
-        let pill = any("chat.titlePill")
-        XCTAssertTrue(pill.waitForExistence(timeout: 5), "no title pill")
-        pill.tap(); pause(1.5)
-        let look = app.buttons["Look"].firstMatch
-        XCTAssertTrue(look.waitForExistence(timeout: 5), "no Look tab in the bot's card")
-        look.tap(); pause(1)
-        let tile = app.buttons[target].firstMatch
-        for _ in 0..<4 where !tile.isHittable { app.swipeUp(velocity: .slow); pause(0.5) }
-        XCTAssertTrue(tile.waitForExistence(timeout: 5), "no \(target) tile")
-        tile.tap(); pause(1.5); shot("studio-\(target)")
-        if app.buttons["Done"].exists { app.buttons["Done"].tap() } else if app.buttons["Close"].exists { app.buttons["Close"].tap() }
-        pause(1); shot("chat-after")
-        back(); pause(1.5); shot("list-after")
+        changeShape(to: target); shot("list-after")
         any("tab.bots").tap(); pause(2); shot("bots-after")
         launch(url: url, token: token, tab: "bots")
         pause(4); shot("bots-relaunch")
