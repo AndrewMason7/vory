@@ -187,6 +187,22 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// Hidden tab pages stay out of the accessibility tree (#326): on Chats, each chat row is
+    /// found once (Home lists the recent chats too), and none of Home's activity blocks show.
+    func testHiddenPagesOutOfTheTree() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "dashboard")
+        pause(3)
+        let home = app.descendants(matching: .any).matching(identifier: "tab.chats").firstMatch
+        XCTAssertTrue(home.waitForExistence(timeout: 10)); home.tap(); pause(2)
+        waitForList()
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).count
+        let blocks = app.otherElements.matching(NSPredicate(format: "label CONTAINS ' sessions'")).count
+        print("AX-TREE chats rows=\(rows) home-blocks=\(blocks)")
+        XCTAssertEqual(rows, 1, "the chat row is in the tree \(rows) times")
+        XCTAssertEqual(blocks, 0, "Home's activity blocks are in the Chats tree")
+    }
+
     /// The pull-to-refresh wheel on every root that can refresh (Matt, 2026-10-12: "the pull to
     /// refresh wheel doesn't appear on some of the pages"): the bar is relaunched with each group
     /// of four tabs, every page pulled, and the wheel's "Refreshing" looked for after the release.

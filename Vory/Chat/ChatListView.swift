@@ -195,6 +195,9 @@ struct ChatListView: View {
             // bar's room and the search drawer. Hiding the bar here made the pushed chat's own
             // hidden bar come back (the system title and back button drew over the prototype).
             .toolbar(removing: MorphTopBar.active(model) ? .title : nil)
+            // Out of the accessibility tree while another tab is up (#326; TabRoot does the
+            // same for the other roots, inside their stacks where the flag is honoured).
+            .accessibilityHidden(model.selectedTab != .chats)
             // An empty bar collapses (the Duo's search drawer rode up under the capsules): an
             // invisible item keeps it at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }

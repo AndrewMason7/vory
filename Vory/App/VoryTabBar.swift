@@ -356,6 +356,11 @@ struct TabRoot: ViewModifier {
             // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
             // refresh wheel sits beside it on the pages that can refresh.
             .pageHeading(tab.title, on: !model.wideLayout && !MorphTopBar.on)
+            // Out of the accessibility tree while another tab is up. RootView hides the whole
+            // page, but that flag sits outside the navigation stack, a UIKit container the flag
+            // does not pass through: Home's blocks, bots and chat rows stayed in the Chats
+            // tab's tree, off-screen, and VoiceOver and XCTest found the same chat twice (#326).
+            .accessibilityHidden(model.selectedTab != tab)
             // The page's pull-to-refresh state, for the bar's title capsule to host its wheel.
             .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in pullBelow = r.state; publishPull() } }
             .onChange(of: pullAround.map(ObjectIdentifier.init), initial: true) { _, _ in publishPull() }
