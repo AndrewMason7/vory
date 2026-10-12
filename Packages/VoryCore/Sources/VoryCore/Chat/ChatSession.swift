@@ -221,7 +221,11 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// call gets back, and when.
     var gatewayStandIn: (@MainActor (String, [String: JSONValue]) async throws -> JSONValue)?
 
-    public var modelName: String { info?.model ?? "" }
+    /// The model the chat last ran with (this device's cache), or its bot's default, until the
+    /// attach brings `info`: the chip said "Model" for the first frames of every reopened chat
+    /// (Matt, 2026-10-11). The bot's default is read live: the profiles may land after the open.
+    private var cachedModel: String?
+    public var modelName: String { info?.model ?? cachedModel ?? runtime.profiles.first { $0.name == profileName }?.model ?? "" }
     public var subtitle: String {
         let m = modelName.isEmpty ? "no model" : (modelName.split(separator: "/").last.map(String.init) ?? modelName)
         // Model and context first: on a phone the subtitle truncates at the end, and the profile
@@ -338,6 +342,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             items = TranscriptItem.fromHistory(cached)
             fetchedRowIDs = Set(items.map(\.id))
         }
+        if info == nil, cachedModel == nil {
+            cachedModel = TranscriptCache.loadInfo(connection: runtime.connection.id, storedID: storedID)?.model
+            // No cache and no bots yet (a first launch whose profile load failed and was not
+            // asked again): the bot's default model needs the list.
+            if cachedModel == nil, runtime.profiles.isEmpty { Task { [runtime] in await runtime.loadProfiles() } }
+        }
         isResuming = true
         resumeError = nil
         let needsPrefetch = items.isEmpty
@@ -365,6 +375,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     private func saveTranscriptCache() {
         TranscriptCache.save(items, connection: runtime.connection.id, storedID: storedID)
+        if let info { TranscriptCache.saveInfo(info, connection: runtime.connection.id, storedID: storedID) }
     }
 
     /// Whether a snapshot's in-flight prompt is already the last user row of its messages. With

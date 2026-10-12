@@ -99,6 +99,21 @@ struct ConversationView: View {
                         if let b = mentionedBot { ProfileInfoSheet(chat: nil, profileName: b).sheetFrame().withAppModel() }
                     }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
+                    // The morph prototype's Back, drawn outside the stack (MorphTopBar).
+                    // The morph prototype's bar, drawn outside the stack, asks for the chat's actions
+                    // here; only the chat the bar shows answers.
+                    .onChange(of: model.chatRequest) { _, r in
+                        guard let r, MorphState.shared.chat === chat else { return }
+                        model.chatRequest = nil
+                        switch r.kind {
+                        case .back: dismiss()
+                        case .profile: showProfile = true
+                        case .rename: renaming = true
+                        case .context: showContext = true
+                        case .newChat: Task { await newChat() }
+                        case .close: model.runtime?.closeChat(chat); dismiss()
+                        }
+                    }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,
                     // restored when the chat opens, cleared by a send (the composer empties the text).
@@ -194,7 +209,9 @@ struct ConversationView: View {
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
             dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
         }
-            .overlay(alignment: .top) { header(chat) }
+            // On a one-column layout the morph bar (MorphTopBar) draws the chat's controls; on a
+            // wide window this header does, over the detail column.
+            .overlay(alignment: .top) { if !MorphTopBar.active(model) { header(chat) } }
             // Voice mode runs out of sight under its pill, and in front on its own screen.
             .overlay(alignment: .top) {
                 if HandsFreeSession.shared.isActive(for: chat), HandsFreeSession.shared.minimized {

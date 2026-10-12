@@ -40,6 +40,10 @@ struct KanbanView: View {
         .onDisappear { appeared = false }
         .task(id: active) { await follow() }
         .reloadable { await store?.refresh() }
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .boardNew else { return }
+            model.pageRequest = nil; showNew = true
+        }
         .sheet(item: $detailTask) { t in
             KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
         }
@@ -196,8 +200,10 @@ struct KanbanView: View {
                 Button { Task { await store?.nudge() } } label: { Label("Nudge Dispatcher", systemImage: "hare") }
                 Button { Task { await store?.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             } label: { Label("Board options", systemImage: "ellipsis.circle") }
+            if !MorphTopBar.active(model) {
             Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
                 .disabled(store?.isPresent != true)
+            }
         }
     }
 

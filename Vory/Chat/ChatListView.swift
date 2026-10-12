@@ -174,10 +174,31 @@ struct ChatListView: View {
             }
             .navigationTitle(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats")
             .navigationBarTitleDisplayMode(.inline)
+            #if os(iOS)
+            // The search field is tucked under the title and revealed by a pull, as on the Bots
+            // and Settings pages (Matt, 2026-10-12). On iOS 26 this drawer coexists with
+            // pull-to-refresh (Bots does both), so the pinned custom field it replaced, from
+            // before this iOS, is gone; the field no longer rides in and out with the bar on the
+            // way back from a chat.
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+            #endif
             // One column on a window wider than a phone (the open Duo upright, 669 pt): the
             // bar centred its title, which landed beside the trailing buttons; the title goes
             // into the leading group after the bot circle, as on a phone.
-            .modifier(LeadingTitle(title: selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !model.wideLayout))
+            #if os(iOS)
+            .pageHeading(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !model.wideLayout && !MorphTopBar.on)
+            #endif
+            #if os(iOS)
+            // The morph prototype draws the list's controls over the page (MorphTopBar): the bar
+            // stays, empty (its title removed, its items below skipped), so the rows keep the
+            // bar's room and the search drawer. Hiding the bar here made the pushed chat's own
+            // hidden bar come back (the system title and back button drew over the prototype).
+            .toolbar(removing: MorphTopBar.active(model) ? .title : nil)
+            // An empty bar collapses (the Duo's search drawer rode up under the capsules): an
+            // invisible item keeps it at its height under the prototype.
+            .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
+            #endif
             .background(InteractivePopEnabler())
             // The stack's path is watched by whoever owns it (ChatsSplitPage for the model's
             // stack, this view for its own) and reported through `chatsPathOpen`: reading the
@@ -197,7 +218,7 @@ struct ChatListView: View {
                     ToolbarItem(placement: .topBarLeading) { Button("Done") { endSelecting() }.accessibilityIdentifier("chats.select.done") }
                     ToolbarItemGroup(placement: .topBarTrailing) { selectionActions }
                 } else {
-                ToolbarItem(placement: .topBarLeading) { profileMenu }
+                ToolbarItem(placement: .topBarLeading) { if !MorphTopBar.active(model) { profileMenu } }
                 #if os(macOS)
                 // Two buttons, the same size, that fit over the list at its narrowest: a button
                 // each for refresh, new bot, sort and filters ran past the column's edge and sat
@@ -207,6 +228,7 @@ struct ChatListView: View {
                 ToolbarItem(placement: .primaryAction) { composeMenu }
                 #else
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    if !MorphTopBar.active(model) {
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
                     // One View menu (sort + filters) wherever the list is a split view's column
                     // or shares a strip with the system's items: three buttons beside the title
@@ -223,6 +245,7 @@ struct ChatListView: View {
                         sortMenu
                         filterMenu
                     }
+                    }
                 }
                 #endif
                 }
@@ -231,6 +254,17 @@ struct ChatListView: View {
             // "I shouldn't have to name it or choose appearance"); a long press is the
             // Messages-style sheet (To: bots, project, first message, files).
             .onChange(of: model.newChatRequest) { _, r in if r != nil { openFreshChat() } }
+            // The list's own actions asked for from outside (the morph prototype's bar, the
+            // shared menu items).
+            .onChange(of: model.chatListRequest) { _, r in
+                guard let r else { return }
+                model.chatListRequest = nil
+                switch r.kind {
+                case .newBot: showNewBot = true
+                case .manageProjects: showProjects = true
+                case .selectChats: withAnimation(.snappy) { selecting = true }
+                }
+            }
             .onChange(of: model.newChatSheetRequest) { _, r in
                 guard r != nil, model.selectedTab == .chats, runtime != nil else { returnFromCompose(); return }
                 sheetStarted = false
@@ -261,7 +295,16 @@ struct ChatListView: View {
                 }
             }
             .onChange(of: searchText) { _, q in Task { await search(q) } }
+            #if os(macOS)
             .refreshable { await load() }
+            #else
+            // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
+            // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
+            .pullRefresh(ownWheel: true) { await load() }
+            // The list's pull state, for the morph bar's title capsule to host the wheel (the
+            // other roots publish theirs from TabRoot; the Chats page has no TabRoot).
+            .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[.chats] = r.state } }
+            #endif
             .task(id: runtime?.connection.id) { await load() }
             .task(id: runtime?.selectedProfile) { await load() }
             .task(id: prefs.allBots) { await load() }
@@ -324,38 +367,13 @@ struct ChatListView: View {
 
     private var profileMenu: some View {
         Menu {
-            if let runtime {
-                Picker("Profile", selection: Binding(get: { runtime.selectedProfile ?? "" }, set: { runtime.selectedProfile = $0 })) {
-                    ForEach(runtime.profiles) { p in
-                        Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
-                    }
-                }
-                Toggle(isOn: Bindable(prefs).allBots) { Label("All bots", systemImage: "person.2") }
-                #if os(macOS)
-                Button { showNewBot = true } label: { Label("New Bot…", systemImage: "plus") }
-                #endif
-                Divider()
-                Section(runtime.connection.name) {
-                    Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
-                    if case .open = runtime.socketState {} else {
-                        Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
-                    }
-                }
-                // Two gateways (a main machine and a homelab, say): switch here instead of
-                // Settings › Gateways. Sessions belong to each gateway, so the list reloads.
-                if model.store.connections.count > 1 {
-                    Section("Switch gateway") {
-                        ForEach(model.store.connections.filter { $0.id != runtime.connection.id }) { c in
-                            Button { Task { await model.activate(c) } } label: { Label(c.name, systemImage: "server.rack") }
-                        }
-                    }
-                }
-            }
+            ChatListProfileItems()
         } label: {
             // A fixed-size avatar: a text label changed width with each profile name and the bar
             // visibly jumped as it re-laid out.
             // A rendered, untinted image: live glass went murky on the toolbar's glass and a
             // painted view picked up the toolbar's tint in light mode.
+            // Memoised: drawn afresh on every pass it flashed while the bar re-laid out (a pull).
             Image(uiImage: BotAvatarImage.cached(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
                 .accessibilityLabel("Profile: \(runtime?.selectedProfile ?? "none")")
         }
@@ -364,14 +382,7 @@ struct ChatListView: View {
 
     /// Sort on its own button: inside the filter menu it sat under every project, a long
     /// scroll away once there were many.
-    private var sortItems: some View {
-        Picker("Sort by", selection: Bindable(prefs).sortKey) {
-            Label("Recent", systemImage: "clock").tag("recent")
-            Label("Title", systemImage: "textformat").tag("title")
-            Label("Bot", systemImage: "person").tag("bot")
-            Label("Model", systemImage: "cpu").tag("model")
-        }
-    }
+    private var sortItems: some View { ChatListSortItems() }
 
     #if os(macOS)
     /// Refresh, sort, filters and Select in one menu.
@@ -449,30 +460,7 @@ struct ChatListView: View {
         .accessibilityIdentifier("chats.filters")
     }
 
-    @ViewBuilder private var filterItems: some View {
-            Section("Show") {
-                Toggle(isOn: Bindable(prefs).pinnedOnly) { Label("Pinned only", systemImage: "pin") }
-                Toggle(isOn: Bindable(prefs).needsYouOnly) { Label("Needs you", systemImage: "exclamationmark.bubble") }
-                Toggle(isOn: Bindable(prefs).liveOnly) { Label("Working now", systemImage: "bolt") }
-                Toggle(isOn: Bindable(prefs).showArchived) { Label("Archived", systemImage: "archivebox") }
-                Toggle(isOn: Bindable(prefs).groupsOnly) { Label("Group chats", systemImage: "person.3") }
-            }
-            if let runtime, runtime.projects.available == true {
-                Section("Project") {
-                    Picker("Project", selection: Bindable(prefs).projectFilter) {
-                        Label("All projects", systemImage: "folder").tag("")
-                        ForEach(runtime.projects.open) { p in Label(p.name, systemImage: "folder.fill").tag(p.id) }
-                        Label("No project", systemImage: "folder.badge.questionmark").tag("__none__")
-                    }
-                    Toggle(isOn: Bindable(prefs).byProject) { Label("Group by project", systemImage: "rectangle.grid.1x2") }
-                    Button { showProjects = true } label: { Label("Manage projects…", systemImage: "folder.badge.gearshape") }
-                }
-            }
-            Button { withAnimation(.snappy) { selecting = true } } label: { Label("Select Chats", systemImage: "checkmark.circle") }
-            if filtering {
-                Button { prefs.pinnedOnly = false; prefs.needsYouOnly = false; prefs.liveOnly = false; prefs.groupsOnly = false; prefs.showArchived = true; prefs.projectFilter = "" } label: { Label("Clear filters", systemImage: "xmark.circle") }
-            }
-    }
+    private var filterItems: some View { ChatListFilterItems() }
 
     /// The filters and the sort applied to the loaded (or searched) sessions.
     private func filtered(_ list: [StoredSession], runtime: GatewayRuntime) -> [StoredSession] {
@@ -515,35 +503,28 @@ struct ChatListView: View {
         }
     }
 
-    /// The search field, our own rather than `.searchable`: the system's drawer sat where the
-    /// pull-to-refresh spinner draws, so the spinner appeared inside the field. Pinned under the
-    /// title by a safe-area inset; the list and its spinner scroll beneath it.
+    #if os(macOS)
+    /// The Mac's search field, pinned over the list (the window toolbar put it at the far end,
+    /// over the open chat). The phone uses the native `.searchable` drawer instead.
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search chats", text: $searchText)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.search)
-                #if os(macOS)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
                 .onExitCommand { searchText = ""; searchFocused = false }
-                #endif
             if !searchText.isEmpty {
                 Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                     .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
         }
-        #if os(macOS)
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(Color.primary.opacity(0.06), in: .capsule)
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
-        #else
-        .padding(.horizontal, 14).padding(.vertical, 9)
-        .glassEffect(.regular, in: .capsule)
-        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 6)
-        #endif
     }
+    #endif
 
     @ViewBuilder private func list(_ runtime: GatewayRuntime) -> some View {
         let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
@@ -638,10 +619,13 @@ struct ChatListView: View {
         }
     }
 
-    /// What sits over the list: the search field on the Mac, then whatever needs saying.
+    /// What sits over the list: the search field on the Mac (the phone uses the native search
+    /// drawer), then whatever needs saying.
     private func topBars(_ runtime: GatewayRuntime) -> some View {
         VStack(spacing: 0) {
+            #if os(macOS)
             searchField
+            #endif
             if let waiting = model.needsSignIn {
                 GatewaySignInBanner(connection: waiting)
                     .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
@@ -1275,29 +1259,6 @@ struct RoomRoute: Hashable, Codable {
 /// The bar's title at the leading edge, after the leading items, instead of centred (iOS,
 /// where the layout is not wide). The navigation title stays for accessibility and the back
 /// label; only the bar's own drawing of it is removed.
-private struct LeadingTitle: ViewModifier {
-    let title: String
-    let on: Bool
-    func body(content: Content) -> some View {
-        #if os(iOS)
-        if on {
-            content
-                .toolbar(removing: .title)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        // Its whole width: squeezed by the trailing group on a phone it read "Ch…".
-                        Text(title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                }
-        } else {
-            content
-        }
-        #else
-        content
-        #endif
-    }
-}
 
 
 #if os(iOS)
@@ -1325,6 +1286,100 @@ private struct OwnPathWatch: ViewModifier {
             }
         } else {
             content
+        }
+    }
+}
+
+// MARK: The list's menu items, shared with the morph prototype's bar (MorphTopBar)
+
+/// The sort choices.
+struct ChatListSortItems: View {
+    @Environment(AppModel.self) private var model
+    private var prefs: ChatListPrefs { ChatListPrefs.shared }
+    private var runtime: GatewayRuntime? { model.runtime }
+    @ViewBuilder var body: some View {
+        Picker("Sort by", selection: Bindable(prefs).sortKey) {
+            Label("Recent", systemImage: "clock").tag("recent")
+            Label("Title", systemImage: "textformat").tag("title")
+            Label("Bot", systemImage: "person").tag("bot")
+            Label("Model", systemImage: "cpu").tag("model")
+        }
+        }
+}
+
+/// The filters, the project switch and Select.
+struct ChatListFilterItems: View {
+    @Environment(AppModel.self) private var model
+    private var prefs: ChatListPrefs { ChatListPrefs.shared }
+    private var runtime: GatewayRuntime? { model.runtime }
+    private var filtering: Bool { prefs.pinnedOnly || prefs.needsYouOnly || prefs.liveOnly || prefs.groupsOnly || !prefs.showArchived || !prefs.projectFilter.isEmpty }
+    @ViewBuilder var body: some View {
+            Section("Show") {
+                Toggle(isOn: Bindable(prefs).pinnedOnly) { Label("Pinned only", systemImage: "pin") }
+                Toggle(isOn: Bindable(prefs).needsYouOnly) { Label("Needs you", systemImage: "exclamationmark.bubble") }
+                Toggle(isOn: Bindable(prefs).liveOnly) { Label("Working now", systemImage: "bolt") }
+                Toggle(isOn: Bindable(prefs).showArchived) { Label("Archived", systemImage: "archivebox") }
+                Toggle(isOn: Bindable(prefs).groupsOnly) { Label("Group chats", systemImage: "person.3") }
+            }
+            if let runtime, runtime.projects.available == true {
+                Section("Project") {
+                    Picker("Project", selection: Bindable(prefs).projectFilter) {
+                        Label("All projects", systemImage: "folder").tag("")
+                        ForEach(runtime.projects.open) { p in Label(p.name, systemImage: "folder.fill").tag(p.id) }
+                        Label("No project", systemImage: "folder.badge.questionmark").tag("__none__")
+                    }
+                    Toggle(isOn: Bindable(prefs).byProject) { Label("Group by project", systemImage: "rectangle.grid.1x2") }
+                    Button { model.chatListRequest = .init(.manageProjects) } label: { Label("Manage projects…", systemImage: "folder.badge.gearshape") }
+                }
+            }
+            Button { model.chatListRequest = .init(.selectChats) } label: { Label("Select Chats", systemImage: "checkmark.circle") }
+            if filtering {
+                Button { prefs.pinnedOnly = false; prefs.needsYouOnly = false; prefs.liveOnly = false; prefs.groupsOnly = false; prefs.showArchived = true; prefs.projectFilter = "" } label: { Label("Clear filters", systemImage: "xmark.circle") }
+            }
+        }
+}
+
+/// The bot picker, All bots, the connection and the gateway switch.
+struct ChatListProfileItems: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
+    private var prefs: ChatListPrefs { ChatListPrefs.shared }
+    private var runtime: GatewayRuntime? { model.runtime }
+    @ViewBuilder var body: some View {
+            if let runtime {
+                Picker("Profile", selection: Binding(get: { runtime.selectedProfile ?? "" }, set: { runtime.selectedProfile = $0 })) {
+                    ForEach(runtime.profiles) { p in
+                        Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                    }
+                }
+                Toggle(isOn: Bindable(prefs).allBots) { Label("All bots", systemImage: "person.2") }
+                #if os(macOS)
+                Button { model.chatListRequest = .init(.newBot) } label: { Label("New Bot…", systemImage: "plus") }
+                #endif
+                Divider()
+                Section(runtime.connection.name) {
+                    Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
+                    if case .open = runtime.socketState {} else {
+                        Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
+                    }
+                }
+                // Two gateways (a main machine and a homelab, say): switch here instead of
+                // Settings › Gateways. Sessions belong to each gateway, so the list reloads.
+                if model.store.connections.count > 1 {
+                    Section("Switch gateway") {
+                        ForEach(model.store.connections.filter { $0.id != runtime.connection.id }) { c in
+                            Button { Task { await model.activate(c) } } label: { Label(c.name, systemImage: "server.rack") }
+                        }
+                    }
+                }
+            }
+            }
+    private func connectionSymbol(_ s: SocketState) -> String {
+        switch s {
+        case .open: return "checkmark.circle.fill"
+        case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
+        case .authRejected, .failed: return "xmark.octagon.fill"
+        case .idle: return "circle"
         }
     }
 }

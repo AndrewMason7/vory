@@ -44,6 +44,10 @@ struct VoryTabBar: View {
     /// Where the finger is along the capsule while it drags the lens; nil when not dragging.
     @State private var dragX: CGFloat?
     @State private var pressStart: Date?
+    /// The tab the lens is over while it is dragged: tinted, not yet shown. The page switches
+    /// when the lens is dropped (Matt, 2026-10-11: switching as it passed made the drag lag,
+    /// each pass cross-faded two whole pages under a live glass lens).
+    @State private var hoverTab: AppModel.AppTab?
 
     /// The system capsule is 62 pt; the user wanted it a little shorter, bottom edge kept.
     private let barHeight: CGFloat = 56
@@ -213,7 +217,7 @@ struct VoryTabBar: View {
     /// (no labels at all while the lens is being dragged, like the system bar, or when
     /// Settings › Appearance › Tab labels is off).
     @ViewBuilder private func slot(_ tab: AppModel.AppTab, dragging: Bool) -> some View {
-        let selected = model.selectedTab == tab
+        let selected = (hoverTab ?? model.selectedTab) == tab
         let labelled = selected && !dragging && showLabels && axis == .horizontal
         VStack(spacing: 2) {
             icon(for: tab, size: axis == .vertical ? 21 : (labelled ? 21 : 25))
@@ -238,7 +242,8 @@ struct VoryTabBar: View {
     }
 
     /// A press moves the lens under the finger once it is held for a moment or slides sideways;
-    /// the page switches as the lens passes each tab. A quick press is a tap on that tab.
+    /// the tab under the lens is tinted as it passes and the page switches to it when the lens
+    /// is dropped. A quick press is a tap on that tab.
     private func barGesture(slotAlong: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
@@ -249,16 +254,23 @@ struct VoryTabBar: View {
                 if dragX == nil { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                 let along = axis == .horizontal ? v.location.x : v.location.y
                 dragX = along
-                if let tab = tab(at: along, slotAlong: slotAlong), tab != model.selectedTab {
+                if let tab = tab(at: along, slotAlong: slotAlong), tab != (hoverTab ?? model.selectedTab) {
                     UISelectionFeedbackGenerator().selectionChanged()
-                    withAnimation(.snappy(duration: 0.28)) { model.selectedTab = tab }
+                    hoverTab = tab
                 }
             }
             .onEnded { v in
                 let along = axis == .horizontal ? v.location.x : v.location.y
-                if dragX == nil, let tab = tab(at: along, slotAlong: slotAlong) { select(tab) }
+                let dropped = dragX != nil
                 dragX = nil
                 pressStart = nil
+                hoverTab = nil
+                guard let tab = tab(at: along, slotAlong: slotAlong) else { return }
+                if dropped {
+                    if tab != model.selectedTab { withAnimation(.snappy(duration: 0.28)) { model.selectedTab = tab } }
+                } else {
+                    select(tab)
+                }
             }
     }
 
@@ -331,9 +343,29 @@ struct HidesTabBar: ViewModifier {
 /// while deeper pops the stack the way a swipe back would, animated.
 struct TabRoot: ViewModifier {
     @Environment(AppModel.self) private var model
+    /// The page's pull-to-refresh state when its `.reloadable` is applied outside this marker
+    /// (Bots, Files): by environment then, by preference when it sits inside (Home, Projects,
+    /// the Board, Status, Sessions, Tasks). The bar's title capsule hosts the wheel either way;
+    /// Bots and Files had no wheel (Matt, 2026-10-12).
+    @Environment(PullRefreshState.self) private var pullAround: PullRefreshState?
+    @State private var pullBelow: PullRefreshState?
     var tab: AppModel.AppTab
+    private func publishPull() { model.pullStates[tab] = pullBelow ?? pullAround }
     func body(content: Content) -> some View {
         content
+            // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
+            // refresh wheel sits beside it on the pages that can refresh.
+            .pageHeading(tab.title, on: !model.wideLayout && !MorphTopBar.on)
+            // The page's pull-to-refresh state, for the bar's title capsule to host its wheel.
+            .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in pullBelow = r.state; publishPull() } }
+            .onChange(of: pullAround.map(ObjectIdentifier.init), initial: true) { _, _ in publishPull() }
+            // Under the morph prototype the bar draws the title: the stack's own (large by
+            // default on a root) goes, as it does on Chats, so no root shows two.
+            .navigationBarTitleDisplayMode(MorphTopBar.active(model) ? .inline : .automatic)
+            .toolbar(removing: MorphTopBar.active(model) ? .title : nil)
+            // An empty bar collapses (on the Duo the search drawer rode up under the capsules):
+            // an invisible item keeps the bar at its height under the prototype.
+            .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
             .onAppear { model.tabAtRoot[tab] = true }
             .onDisappear { model.tabAtRoot[tab] = false }
             .background(PopToRootProbe(tab: tab))

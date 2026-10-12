@@ -40,6 +40,24 @@ public enum TranscriptCache {
         }
     }
 
+    /// The session's last known settings (its model above all), kept beside the transcript so a
+    /// chat reopens with its model's name on the chip, not "Model" until the attach answers.
+    static func infoURL(connection: UUID, storedID: String) -> URL? {
+        url(connection: connection, storedID: storedID)?.deletingPathExtension().appendingPathExtension("info.json")
+    }
+
+    public static func loadInfo(connection: UUID, storedID: String) -> SessionLiveInfo? {
+        guard let u = infoURL(connection: connection, storedID: storedID), let data = try? Data(contentsOf: u) else { return nil }
+        return try? JSONDecoder().decode(SessionLiveInfo.self, from: data)
+    }
+
+    public static func saveInfo(_ info: SessionLiveInfo, connection: UUID, storedID: String) {
+        guard let u = infoURL(connection: connection, storedID: storedID) else { return }
+        writer.async {
+            if let data = try? JSONEncoder().encode(info) { try? data.write(to: u, options: .atomic) }
+        }
+    }
+
     /// Waits for the saves already asked for (tests, and a clear that must come after them).
     public static func flush() { writer.sync {} }
 
