@@ -171,16 +171,20 @@ struct BotAvatar: View {
         .frame(width: size, height: size)
         .accessibilityHidden(true)
         // Between blinks the open picture; at each blink the shut one for 120 ms (one wakeup
-        // per blink), unless the list is moving or the page is away (then the blink is skipped).
-        .task(id: "\(profile)|\(size)|\(active)|\(mood.state == .idle)") {
-            guard !active, !drawn, !mood.followsTilt, mood.state == .idle else { return }
+        // per blink), unless the list is moving (then the blink is skipped). Only on the page in
+        // front: the loop starts again as its page comes forward or goes (a face mounted behind
+        // another tab never blinked, and one that started in front kept waking behind a hidden
+        // tab, #248). The Mac stays still at rest (Matt, 2026-10-12: "Stay still on the Mac"):
+        // its faces blink only while a bot is working, as its live faces do.
+        .task(id: "\(profile)|\(size)|\(active)|\(mood.state == .idle)|\(pageLive)|\(BotAmbient.shared.decorativeActive)") {
+            guard pageLive, BotAmbient.shared.decorativeActive, !active, !drawn, !mood.followsTilt, mood.state == .idle else { return }
             while !Task.isCancelled {
                 let now = Date().timeIntervalSinceReferenceDate
                 let next = BotMotionModel.nextBlink(after: now + 0.1, seed: blinkSeed)
                 try? await Task.sleep(for: .seconds(max(0.05, next - now)))
                 if Task.isCancelled { return }
                 // Reduce Motion holds the eyes open on the live face too (no blink).
-                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || !pageLive || Self.reduceMotionOn { continue }
+                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || Self.reduceMotionOn { continue }
                 eyesShut = true
                 try? await Task.sleep(for: .milliseconds(120))
                 eyesShut = false
