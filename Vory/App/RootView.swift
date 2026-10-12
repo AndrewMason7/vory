@@ -77,6 +77,11 @@ struct RootView: View {
                         // Below the morph bar's chat row (its capsules sit 30 pt lower since
                         // 2026-10-12): at 40 the probe sat over Back and a UI test's tap missed.
                         .padding(.top, 150).allowsHitTesting(false)
+                        .overlay(alignment: .bottomLeading) {
+                            Text("root \(model.tabAtRoot[model.selectedTab].map { $0 ? "yes" : "no" } ?? "nil")  probe \(RootArrivalProbe.last)")
+                                .font(.caption2.monospaced()).padding(4).background(.orange.opacity(0.9)).foregroundStyle(.black)
+                                .offset(y: 22).allowsHitTesting(false)
+                        }
                 }
             }
         }

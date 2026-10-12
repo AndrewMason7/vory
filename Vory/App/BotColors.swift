@@ -116,6 +116,13 @@ struct BotAvatar: View {
     /// around each blink, it drew a shade brighter than the still: Matt, 2026-10-12, "randomly
     /// loading the bot colors ... it should just load it once and keep it").
     @State private var eyesShut = false
+    private static var reduceMotionOn: Bool {
+        #if os(iOS)
+        UIAccessibility.isReduceMotionEnabled
+        #else
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #endif
+    }
 
     /// A small idle face in a list draws as a picture: one cached image per look, no Canvas, no
     /// shadow filter pass on every scrolled frame (the phone's list fling spent its frames on
@@ -173,7 +180,7 @@ struct BotAvatar: View {
                 try? await Task.sleep(for: .seconds(max(0.05, next - now)))
                 if Task.isCancelled { return }
                 // Reduce Motion holds the eyes open on the live face too (no blink).
-                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || !pageLive || UIAccessibility.isReduceMotionEnabled { continue }
+                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || !pageLive || Self.reduceMotionOn { continue }
                 eyesShut = true
                 try? await Task.sleep(for: .milliseconds(120))
                 eyesShut = false

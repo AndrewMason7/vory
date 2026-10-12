@@ -303,6 +303,39 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// A page pushed on a tab other than Chats (a Settings row), then the edge swipe back: the
+    /// bar's capsules must not stand over the pushed page, nor come back before the page has
+    /// gone (Matt, 2026-10-12: "swiping back on other pages is broken"), and the title capsule
+    /// must be back and live once the page is at its root.
+    func testPushedPageSwipeBack() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        pause(4)
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        // A Settings row pushes its page; the bar's title capsule is the "Settings" static text
+        // (the pushed page's own Back button carries the same word, as a button).
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        let title = app.staticTexts["Settings"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "no Settings title capsule at the root")
+        func openRow() { for _ in 0..<3 { row.tap(); if app.buttons["BackButton"].firstMatch.waitForExistence(timeout: 3) { break } }; pause(1.5) }
+        openRow(); shot("settings-pushed")
+        XCTAssertTrue(app.buttons["BackButton"].firstMatch.exists, "the pushed page has no Back")
+        XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule stands over the pushed page")
+        // A slow edge swipe, let go past the middle.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(1.5); shot("settings-back")
+        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back")
+        // A cancelled swipe: the pushed page stays, the capsule stays away.
+        openRow()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(1.5); shot("settings-cancelled")
+        XCTAssertTrue(app.buttons["BackButton"].firstMatch.exists, "the cancelled swipe lost the pushed page")
+        XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the pushed page after a cancelled swipe")
+        app.buttons["BackButton"].firstMatch.tap(); pause(1.5)
+        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after Back")
+    }
+
     /// Holds the Bots page at rest for HERMES_E2E_HOLD seconds (default 14): the cards' faces
     /// blink by picture swap; with `-bots.glassAll YES` in HERMES_E2E_ARGS they are glass bots.
     func testHoldBots() throws {

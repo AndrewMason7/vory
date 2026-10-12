@@ -516,7 +516,10 @@ extension TranscriptView {
         for delay in [300, 900] {
             try? await Task.sleep(for: .milliseconds(delay))
             guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
-            if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { scrollPosition.scrollTo(edge: .bottom) }
+            // Eased, not snapped: a tap that moved a little on its way in nudged the thread,
+            // and the two snaps back read as a jump (Matt, 2026-10-12, "opening a chat and
+            // moving my finger a bit").
+            if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
     }
 

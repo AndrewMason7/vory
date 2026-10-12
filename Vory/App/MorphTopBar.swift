@@ -103,6 +103,8 @@ struct MorphTopBar: View {
     /// swap", 2026-10-12); `-vory-morph-fade` keeps the old cross-fade for a comparison.
     static var cutsPages: Bool { on && !ProcessInfo.processInfo.arguments.contains("-vory-morph-fade") }
     private var state: MorphState { MorphState.shared }
+    /// The list's title capsule: one height on every tab, scaled with the headline.
+    @ScaledMetric(relativeTo: .headline) private var titleHeight: CGFloat = 38
     /// The two end states' capsule frames, measured from invisible copies laid out underneath.
     @State private var chatFrames: [MorphSlot: CGRect] = [:]
     @State private var listFrames: [MorphSlot: CGRect] = [:]
@@ -168,7 +170,14 @@ struct MorphTopBar: View {
         // those pages keep the system's own bar (their title and Back).
         let pushedAway = model.selectedTab == .chats ? (model.chatsPathOpen && state.chat == nil) : (model.tabAtRoot[model.selectedTab] == false)
         let present = !pushedAway && (state.chat != nil ? (shown < 0.5 || pageHas) : pageHas)
-        if let b = listFrames[slot] ?? lastListFrames[slot] ?? chatFrames[slot] {
+        // Pushed away (another tab's page, a group chat): no capsule at all. Inside the glass
+        // container neither a capsule's opacity nor a transition is honoured, so a "fade"
+        // left the controls standing over every pushed page (1.5 (14), Matt: "swiping back
+        // on other pages is broken"). The capsules return once the page is back at its root,
+        // which the root probe says only when a pop has finished.
+        if pushedAway {
+            EmptyView()
+        } else if let b = listFrames[slot] ?? lastListFrames[slot] ?? chatFrames[slot] {
             let f = chatFrames[slot].map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
             ZStack {
                 // Only the state that is showing takes taps: the other sits in the stack at
@@ -177,23 +186,23 @@ struct MorphTopBar: View {
                 // incoming one arrives past the half, so the capsule carries one control at a
                 // time instead of two half-faded over each other (Matt, 2026-10-12, against the
                 // Claude app's morph: crisp, each element fading in place).
-                if let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
+                // Settled, only the shown set is mounted: a menu's label in the glass kept a
+                // ghost of the other set at opacity 0 (the list's bot chip behind Back, the
+                // list's icons behind …; Matt, 2026-10-12).
+                if shown < 0.98, let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
                 // Keyed by tab, so a tab switch cross-fades one page's control into the next's.
-                listContent(slot).id(model.selectedTab).transition(.opacity).opacity(Double(max(0, (shown - 0.5) * 2.4))).allowsHitTesting(shown >= 0.5 && pageHas)
+                if shown > 0.02 { listContent(slot).id(model.selectedTab).transition(.opacity).opacity(Double(max(0, (shown - 0.5) * 2.4))).allowsHitTesting(shown >= 0.5 && pageHas) }
             }
             // An absent slot shrinks to nothing where it was: a view's opacity does not fade
             // glass (the + panel taught that), so the capsule also drops its glass there, in
             // the one modifier so its identity holds.
-            // Absent on this page: shrunk to nothing where it was. Pushed away (another tab's
-            // page, a group chat): faded in place, with the page's own transition (the squeeze
-            // read as a glitch on the other pages, Matt 2026-10-12).
-            .frame(width: present || pushedAway ? f.width : 0, height: present || pushedAway ? f.height : 0)
+            // Absent on this page: shrunk to nothing where it was (a view's opacity does not
+            // fade glass, so the capsule also drops its glass there, in the one modifier).
+            .frame(width: present ? f.width : 0, height: present ? f.height : 0)
             .clipShape(.capsule)
             .glassEffect(present ? .regular : .identity, in: .capsule)
             .position(x: f.midX, y: f.midY)
             .opacity(present ? 1 : 0)
-            .scaleEffect(pushedAway ? 0.92 : 1)
-            .animation(.easeOut(duration: 0.2), value: pushedAway)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
             .animation(.snappy(duration: 0.22), value: present)
         }
@@ -393,7 +402,10 @@ struct MorphTopBar: View {
                 Text(model.selectedTab.title).font(.headline).fixedSize()
                 PullRefreshWheel(hosting: false, fromBelow: model.pullStates[model.selectedTab])
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            // A set height, not the text's measured one: measured afresh on each tab switch it
+            // came out a few points taller for a moment and the capsule breathed (Matt,
+            // 2026-10-12: "the height of the bubble from bot to settings seems to change").
+            .padding(.horizontal, 12).frame(height: titleHeight)
             .measured(.mid, into: $listFrames, last: $lastListFrames)
             Spacer(minLength: 0)
             switch chrome.trail {

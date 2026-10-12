@@ -371,9 +371,42 @@ struct TabRoot: ViewModifier {
             // An empty bar collapses (on the Duo the search drawer rode up under the capsules):
             // an invisible item keeps the bar at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
-            .onAppear { model.tabAtRoot[tab] = true }
+            // "At root" is set by the probe below: on a swipe back SwiftUI's onAppear fires as
+            // the pop begins, and the bar's capsules came back over the pushed page before it
+            // had moved (Matt, 2026-10-12: "swiping back on other pages is broken"). The probe
+            // waits for an interactive pop to finish (and stays put if it is cancelled).
             .onDisappear { model.tabAtRoot[tab] = false }
             .background(PopToRootProbe(tab: tab))
+            .background(RootArrivalProbe { model.tabAtRoot[tab] = true })
+    }
+}
+
+/// Tells the root page it has arrived: at once on a plain appearance or a Back button's pop,
+/// at the end of an interactive pop (not at all if the swipe is cancelled).
+struct RootArrivalProbe: UIViewRepresentable {
+    /// The last decision, for the geometry probe's banner (a UI test's stills).
+    nonisolated(unsafe) static var last = "none"
+    let arrived: () -> Void
+    func makeUIView(context: Context) -> ArrivalView { let v = ArrivalView(); v.isUserInteractionEnabled = false; v.arrived = arrived; return v }
+    func updateUIView(_ v: ArrivalView, context: Context) { v.arrived = arrived }
+    final class ArrivalView: UIView {
+        var arrived: (() -> Void)?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            let nav = parentViewController?.navigationController
+            if let c = nav?.transitionCoordinator, c.isInteractive {
+                Perf.stamp("root probe: interactive pop, waiting"); RootArrivalProbe.last = "interactive, waiting"
+                c.notifyWhenInteractionChanges { [weak self] ctx in
+                    Perf.stamp("root probe: interaction ended cancelled=\(ctx.isCancelled)"); RootArrivalProbe.last = "interaction ended cancelled=\(ctx.isCancelled)"
+                    if !ctx.isCancelled { self?.arrived?() }
+                }
+            } else {
+                let why = nav == nil ? "no nav" : (nav?.transitionCoordinator == nil ? "coordinator nil" : "not interactive")
+                Perf.stamp("root probe: arrived at once (\(why))"); RootArrivalProbe.last = "at once (\(why))"
+                arrived?()
+            }
+        }
     }
 }
 
