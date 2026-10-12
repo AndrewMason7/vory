@@ -89,6 +89,25 @@ final class SmoothnessPerfUITests: XCTestCase {
         back(); pause(1.5)
     }
 
+    /// A chat this device has never opened (no transcript or settings cache), pushed and popped:
+    /// for a frame check of what the page shows before its history lands.
+    func testColdOpen() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        // A fresh install on the phone asks about the local network first; the list waits on it.
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
+        if allow.waitForExistence(timeout: 8) { allow.tap() }
+        waitForList()
+        pause(2.5)
+        let rows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Weekly dependency audit'"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 20), "no audit chat")
+        let row = try XCTUnwrap(rows.allElementsBoundByIndex.min { $0.frame.minY < $1.frame.minY }, "no audit chat on screen")
+        row.tap()
+        XCTAssertTrue(any("chat.dock").waitForExistence(timeout: 20), "the chat did not open")
+        pause(3)
+        back(); pause(1.5)
+    }
+
     /// The "/" list out of the field and back (type "/", then delete it).
     func testSlashMenu() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }

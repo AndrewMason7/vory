@@ -163,7 +163,9 @@ struct TranscriptView: View {
             ScrollView {
                 TimeRevealColumn {
                 ThreadStack(alignment: .leading, spacing: 10) {
-                    if chat.items.isEmpty, chat.resumeError == nil {
+                    // Not while the history is still on its way: a reopened chat showed "Say
+                    // something" for a few frames before its rows landed (Matt, 2026-10-11).
+                    if chat.items.isEmpty, chat.resumeError == nil, !chat.isResuming {
                         VStack(spacing: 8) {
                             BotAvatar(profile: chat.profileName, size: 56)
                             Text("Say something to \(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName)").foregroundStyle(.secondary)
@@ -210,6 +212,10 @@ struct TranscriptView: View {
                 }
                 .padding(.horizontal, wideReplies ? 10 : 16)
                 .padding(.top, 8)
+                // A reopened chat whose history is still on its way shows nothing, then the rows
+                // land as one (the fade is the only animation of the stack, see below).
+                .opacity(chat.isResuming && chat.items.isEmpty ? 0 : 1)
+                .animation(.easeOut(duration: 0.25), value: chat.items.isEmpty)
                 // A reading column in the middle of the pane on a wide layout, a page wide however
                 // wide the window is; the full width on the phone.
                 .frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity)
