@@ -767,6 +767,32 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Settings"].firstMatch.waitForExistence(timeout: 5), "the Settings title capsule is not back")
     }
 
+    /// A bot's page pushed from the Bots grid (Matt on 1.5 (17): "the back button leave behind a
+    /// trail button once in the new window", and "Bot name also disappears when it should show"):
+    /// the + is gone as the Back forms, and the page keeps its title. Pushed through the card's
+    /// menu ("Chats"): an XCTest tap on a card lands on its face, which keeps the tap.
+    func testMorphPushedBotPage() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "bots")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let plus = any("bots.newBot")
+        XCTAssertTrue(plus.waitForExistence(timeout: 10), "no + on the Bots page")
+        pause(2); shot("bots-root")
+        // The first card's name pill, left column.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.26, dy: 0.30)).press(forDuration: 1.2)
+        let chats = app.buttons.matching(NSPredicate(format: "label == 'Chats' AND identifier != 'tab.chats'")).firstMatch
+        XCTAssertTrue(chats.waitForExistence(timeout: 5), "no card menu")
+        chats.tap()
+        XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "the bot's page has no Back capsule")
+        pause(1.5); shot("bot-pushed")
+        XCTAssertFalse(plus.exists && plus.isHittable, "the Bots + stays over the bot's page")
+        let title = app.navigationBars.staticTexts.firstMatch
+        print("BOT-PAGE title '\(title.exists ? title.label : "none")'")
+        XCTAssertTrue(title.exists && !title.label.isEmpty, "the bot's page has no title")
+        any("page.back").tap(); pause(1.5); shot("bots-again")
+        XCTAssertTrue(plus.waitForExistence(timeout: 5) && plus.isHittable, "the + is not back on the Bots page")
+    }
+
     /// The "/" list out of the field and back (type "/", then delete it).
     func testSlashMenu() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
