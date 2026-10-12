@@ -79,14 +79,14 @@ extension BotFace {
         // The halo is the view's (`BotHalo`), behind the bot in a layer the square does not clip.
 
         // The body: the rest silhouette morphing into the leading symbol.
-        let body: Path = {
+        let body: Path = shapeBlend(spec, {
             guard let leading else { return bodyPath(spec.shape, in: box, time: 0, active: false, phase: 0) }
             if leading == .bubbles {
                 // The body becomes the middle bubble; the other two grow beside it.
                 return BotRings.body(spec, toward: .bubbles, amount: lead, in: box)
             }
             return BotRings.body(spec, toward: leading, amount: lead, in: box)
-        }()
+        }(), in: box)
         if parts != .eyes {
             if bodyAndEyes { fillBody(body, tint: tint, in: &ctx, box: box, s: s, light: light, dim: f.dim, pale: pale, glass: spec.isGlass) }
             // The parts a symbol is made of beyond the body: the other bubbles, the exclamation's
@@ -201,7 +201,7 @@ public struct BotFrameShape: Shape {
         self.spec = spec; self.visual = visual; self.amount = amount; self.inset = inset
     }
     public func path(in rect: CGRect) -> Path {
-        let p = visual.map { BotRings.body(spec, toward: $0, amount: amount, in: rect) } ?? BotFace.bodyPath(spec.shape, in: rect, time: 0, active: false, phase: 0)
+        let p = BotFace.shapeBlend(spec, visual.map { BotRings.body(spec, toward: $0, amount: amount, in: rect) } ?? BotFace.bodyPath(spec.shape, in: rect, time: 0, active: false, phase: 0), in: rect)
         return inset > 0 ? BotFace.rimInner(p, inset: inset) : p
     }
 }

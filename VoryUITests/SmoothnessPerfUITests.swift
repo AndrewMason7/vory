@@ -107,6 +107,24 @@ final class SmoothnessPerfUITests: XCTestCase {
         if plus.waitForExistence(timeout: 5) { plus.tap(); pause(1.5); plus.tap(); pause(1.5) }
     }
 
+    /// Settings › Appearance flung down to the bot rows and back (Matt, 2026-10-11: "lags so
+    /// hard" as the bots come in).
+    func testAppearanceScroll() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        // The row is further down the Settings root; rows off screen are not in the tree yet.
+        XCTAssertTrue(any("settings.row.gateways").waitForExistence(timeout: 40), "no settings")
+        var row = any("settings.row.appearance")
+        for _ in 0..<5 where !row.exists { app.swipeUp(velocity: .slow); pause(0.6); row = any("settings.row.appearance") }
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "no Appearance row")
+        row.tap(); pause(2)
+        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric], options: longOptions) {
+            for _ in 0..<4 { app.swipeUp(velocity: .fast); pause(0.9) }
+            for _ in 0..<4 { app.swipeDown(velocity: .fast); pause(0.9) }
+            stopMeasuring()
+        }
+    }
+
     /// The + panel out of the + button and back.
     func testPlusPanel() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
