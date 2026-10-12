@@ -14,7 +14,7 @@ private let pullLog = Logger(subsystem: "Vory", category: "perf")
 /// What a pull has come to, for the wheel beside the title to draw from. One object per page,
 /// read only by the wheel: the page's body does not re-run with every frame of a pull.
 @MainActor @Observable final class PullRefreshState {
-    /// 0 at the edge of the search drawer, 1 at the trigger.
+    /// 0 until a quarter of the way into a full pull, 1 at the trigger.
     var progress: CGFloat = 0
     var refreshing = false
     var armed = false
@@ -44,6 +44,14 @@ struct PullRefreshKey: PreferenceKey {
 /// moment the finger lifts (never mid-pull, never twice on the bounce), the wheel spinning there
 /// for at least a breath before it fades. VoiceOver gets a "Refresh" action.
 struct PullRefresh: ViewModifier {
+    /// Where the pull arms, in points pulled past the top (the haptic and the refresh's trigger).
+    static let armAt: CGFloat = 104
+    /// Where the wheel and the title capsule start to open: a quarter of a full pull as the
+    /// finger feels it (Matt on 1.5 (17): "it shouldn't start until it's a quarter of the way into
+    /// a full pull down"). The full pull is the finger's travel from rest to the trigger: under
+    /// the scroll view's rubber band 104 pt of over-pull takes about 215 pt of finger on a 17 Pro,
+    /// and a quarter of that (about 54 pt) pulls the page about 28 pt.
+    static let startAt: CGFloat = 28
     let action: @MainActor () async -> Void
     /// A page without a `PageHeading` (a pushed page with the system's title): the wheel goes
     /// at the leading edge on its own.
@@ -60,12 +68,12 @@ struct PullRefresh: ViewModifier {
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, v in
-                // 0 at the top; negative when over-pulled. The wheel fills from the drawer's
-                // edge (~24 pt in) to the trigger (~104 pt), so a short pull only shows search.
-                // Armed only while the finger is down: the spring-back does not re-arm it.
+                // 0 at the top; negative when over-pulled. The wheel fills from a quarter of
+                // a full pull to the trigger, so a short pull only shows search. Armed only while
+                // the finger is down: the spring-back does not re-arm it.
                 guard !state.refreshing else { return }
                 let over = max(0, -v)
-                if state.dragging { state.progress = min(1, max(0, (over - 24) / 80)) }
+                if state.dragging { state.progress = min(1, max(0, (over - Self.startAt) / (Self.armAt - Self.startAt))) }
                 if state.progress >= 1, state.dragging, !state.armed {
                     state.armed = true
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -100,9 +108,10 @@ struct PullRefresh: ViewModifier {
 }
 
 /// The pull-to-refresh wheel beside a page's title: an arc that fills as the pull comes, then
-/// the spinner while the refresh runs. Its slot opens with the pull and closes after the
-/// refresh (Matt, 2026-10-12: no empty space in the Chats capsule at rest); the title keeps
-/// its leading edge, so it never moves, and the capsule grows to the right and back.
+/// the spinner while the refresh runs. Its slot opens with the finger, from a quarter of a full
+/// pull to all of it at the trigger, and closes after the refresh (Matt, 2026-10-12: no empty
+/// space in the Chats capsule at rest); the title keeps its leading edge, so it never moves,
+/// and the capsule grows to the right and back.
 struct PullRefreshWheel: View {
     /// A heading's wheel claims the state (`hosted`), and the pull then adds no wheel of its
     /// own. The pull's own wheel must not claim it: it would remove itself, come back, and
@@ -114,6 +123,10 @@ struct PullRefreshWheel: View {
     private var pull: PullRefreshState? { fromBelow ?? around }
     /// The slot is open while the arc shows or the spinner runs.
     private var open: Bool { guard let pull else { return false }; return pull.refreshing || pull.shown > 0 }
+    /// How far: with the pull while the finger has it (the layout follows the finger), all the
+    /// way while the refresh runs. Opening at once at the first sliver of a pull made the capsule
+    /// grow well before the pull had begun to mean anything.
+    private var openness: CGFloat { guard let pull else { return 0 }; return pull.refreshing ? 1 : min(1, pull.shown) }
     @State private var claimed: PullRefreshState?
     /// Grows with the title's type (the accessibility sizes), as a glyph beside it would.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
@@ -128,8 +141,8 @@ struct PullRefreshWheel: View {
                 if pull.refreshing { ProgressView().controlSize(.small).transition(.opacity) }
             }
         }
-        .frame(width: open ? side : 0, height: side)
-        .padding(.leading, open ? side * 0.4 : 0)
+        .frame(width: side * openness, height: side)
+        .padding(.leading, side * 0.4 * openness)
         .animation(.snappy(duration: 0.3), value: open)
         // The claim follows the state: the bar's one wheel is handed each tab's state in turn
         // (onAppear ran once, so the second tab's pull added its own wheel as well).
