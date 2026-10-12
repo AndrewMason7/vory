@@ -121,7 +121,9 @@ struct BotAvatar: View {
     /// a blink (held while the list scrolls), the finish spin, a tap. Faces that stand for a
     /// working session, bigger faces and the painted twin keep the live view.
     private var restsAsImage: Bool {
-        guard !active, !drawn, override == nil, size <= 44, choice != .photo, mood.state == .idle else { return false }
+        // Any size: the Bots page's cards (78 pt) and the dashboard's faces rest as pictures
+        // too; a face that leans with the device keeps its live view.
+        guard !active, !drawn, override == nil, !mood.followsTilt, choice != .photo, mood.state == .idle else { return false }
         let now = Date()
         let a = BotAmbient.shared
         if let s = mood.session, let d = a.finishedSessions[s], now.timeIntervalSince(d) < 1.2 { return false }
@@ -154,7 +156,7 @@ struct BotAvatar: View {
         // Between blinks the picture; the live face is mounted a moment before each blink and
         // taken down after it, unless the list is moving (then the blink is skipped).
         .task(id: "\(profile)|\(size)|\(active)|\(mood.state == .idle)") {
-            guard !active, !drawn, size <= 44, mood.state == .idle else { return }
+            guard !active, !drawn, !mood.followsTilt, mood.state == .idle else { return }
             while !Task.isCancelled {
                 let now = Date().timeIntervalSinceReferenceDate
                 let next = BotMotionModel.nextBlink(after: now + 0.1, seed: blinkSeed)

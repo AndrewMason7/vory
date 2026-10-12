@@ -58,6 +58,18 @@ enum BotAvatarImage {
         return img
     }
 
+    /// A look that is not a bot's own (the Look tab's shape and eye tiles): memoised by its spec.
+    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme) -> UIImage {
+        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        let r = ImageRenderer(content: BotFaceView(spec: spec, size: size, active: false, drawn: true).environment(\.colorScheme, scheme))
+        r.scale = 3
+        r.isOpaque = false
+        let img = (r.uiImage ?? UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in }).withRenderingMode(.alwaysOriginal)
+        cache.setObject(img, forKey: key)
+        return img
+    }
+
     @MainActor static func make(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         if BotAvatarStore.choice(for: profile) == .photo, let photo = BotAvatarStore.photo(for: profile) {

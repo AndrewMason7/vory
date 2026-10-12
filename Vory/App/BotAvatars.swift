@@ -134,6 +134,7 @@ enum BotAvatarStore {
 
 /// The Creator Studio: pick the bot's body, its eyes and its colour, and watch it come alive.
 struct CreatorStudio: View {
+    @Environment(\.colorScheme) private var colorScheme
     var profile: String
     @Binding var choice: BotAvatarChoice
     @AppStorage(BotColors.storageKey) private var colorsRaw = ""
@@ -164,12 +165,12 @@ struct CreatorStudio: View {
             switch tab {
             case .body:
                 grid(BotLookSpec.shapes, selected: shape, name: BotLookSpec.name(ofShape:)) { s in
-                    BotFaceView(spec: BotLookSpec(shape: s, eyes: eyes, hex: hex, finish: current.finish), size: 58, active: shape == s)
+                    tile(BotLookSpec(shape: s, eyes: eyes, hex: hex, finish: current.finish), live: shape == s)
                 } pick: { choice = .studio(shape: $0, eyes: eyes, glass: glass) }
                 photoRow
             case .eyes:
                 grid(BotLookSpec.eyeStyles, selected: eyes, name: BotLookSpec.name(ofEyes:)) { e in
-                    BotFaceView(spec: BotLookSpec(shape: shape, eyes: e, hex: hex, finish: current.finish), size: 58, active: eyes == e)
+                    tile(BotLookSpec(shape: shape, eyes: e, hex: hex, finish: current.finish), live: eyes == e)
                 } pick: { choice = .studio(shape: shape, eyes: $0, glass: glass) }
             case .colour:
                 colourRow
@@ -190,6 +191,18 @@ struct CreatorStudio: View {
         .padding(.vertical, 6)
         .animation(.snappy, value: tab)
         .onAppear { custom = BotColors.color(for: profile) }
+    }
+
+    /// A tile's face: the picked one lives and moves, the others are cached stills. Eighteen
+    /// live faces (a canvas, a shadow pass and a timeline each) made the Look tab scroll in
+    /// jerks (Matt, 2026-10-11: "load only when clicked on").
+    @ViewBuilder private func tile(_ spec: BotLookSpec, live: Bool) -> some View {
+        if live {
+            BotFaceView(spec: spec, size: 58, active: true)
+        } else {
+            Image(uiImage: BotAvatarImage.cached(spec: spec, size: 58, scheme: colorScheme))
+                .resizable().frame(width: 58, height: 58)
+        }
     }
 
     private func grid<V: View>(_ ids: [String], selected: String, name: @escaping (String) -> String, @ViewBuilder preview: @escaping (String) -> V, pick: @escaping (String) -> Void) -> some View {
