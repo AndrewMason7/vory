@@ -108,6 +108,62 @@ final class SmoothnessPerfUITests: XCTestCase {
         back(); pause(1.5)
     }
 
+    /// A fast back swipe out of a chat, for a frame check of the bar and the list's top coming
+    /// back (Matt, 2026-10-12: "swiping back fast the nav bar pops up kinda choppy").
+    func testFastSwipeBack() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        openFirstChat(); pause(2)
+        for _ in 0..<3 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)), withVelocity: .fast, thenHoldForDuration: 0)
+            XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).firstMatch.waitForExistence(timeout: 10), "the swipe did not go back")
+            pause(1.5)
+            openFirstChat(); pause(2)
+        }
+        back(); pause(1.5)
+    }
+
+    /// Pull to refresh with the search drawer hidden, then reveal the drawer and pull again,
+    /// for a frame check that the refresh spinner does not draw inside the search field (the
+    /// 2026-10-10 bug the old pinned field caused; Matt, 2026-10-12 moved to the native drawer).
+    func testSearchDrawerAndRefresh() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        // Drawer hidden: a slow pull from the top refreshes (and flashes the drawer on the way).
+        let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
+        top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        pause(2.5)
+        // Reveal the drawer and leave it shown: a short pull.
+        top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)), withVelocity: .slow, thenHoldForDuration: 0.2)
+        pause(1.5)
+        // Drawer shown: pull to refresh again.
+        top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        pause(2.5)
+    }
+
+    /// Every root page's heading and its pull-to-refresh (Home, Files, Settings, then Chats): a
+    /// screenshot at rest and one mid-refresh each, for a look at the wheel beside the title.
+    func testPageHeadings() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let slots = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'tab.'")).allElementsBoundByIndex
+        let tabs = slots.map { String($0.identifier.dropFirst(4)) }.filter { $0 != "chats" } + ["chats"]
+        for tab in tabs {
+            let slot = app.descendants(matching: .any).matching(identifier: "tab.\(tab)").firstMatch
+            if slot.waitForExistence(timeout: 5) { slot.tap(); pause(1.5) }
+            shot("\(tab)-rest")
+            let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            pause(0.25)
+            shot("\(tab)-refreshing")
+            pause(1.5)
+        }
+    }
+
     /// The "/" list out of the field and back (type "/", then delete it).
     func testSlashMenu() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }

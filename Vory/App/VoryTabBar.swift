@@ -346,6 +346,9 @@ struct TabRoot: ViewModifier {
     var tab: AppModel.AppTab
     func body(content: Content) -> some View {
         content
+            // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
+            // refresh wheel sits beside it on the pages that can refresh.
+            .pageHeading(tab.title, on: !model.wideLayout)
             .onAppear { model.tabAtRoot[tab] = true }
             .onDisappear { model.tabAtRoot[tab] = false }
             .background(PopToRootProbe(tab: tab))

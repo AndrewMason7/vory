@@ -135,12 +135,13 @@ extension View {
         #endif
     }
 
-    /// Pull to refresh on the phone; a Refresh button in the toolbar (⌘R) on the Mac.
+    /// Pull to refresh on the phone (Vory's own, the wheel beside the title: `PullRefresh`); a
+    /// Refresh button in the toolbar (⌘R) on the Mac.
     @ViewBuilder func reloadable(_ action: @escaping @MainActor () async -> Void) -> some View {
         #if os(macOS)
         toolbar { ToolbarItem(placement: .automatic) { ReloadButton(action: action) } }
         #else
-        refreshable { await action() }
+        pullRefresh(ownWheel: true, action)
         #endif
     }
 }

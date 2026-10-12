@@ -174,10 +174,21 @@ struct ChatListView: View {
             }
             .navigationTitle(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats")
             .navigationBarTitleDisplayMode(.inline)
+            #if os(iOS)
+            // The search field is tucked under the title and revealed by a pull, as on the Bots
+            // and Settings pages (Matt, 2026-10-12). On iOS 26 this drawer coexists with
+            // pull-to-refresh (Bots does both), so the pinned custom field it replaced, from
+            // before this iOS, is gone; the field no longer rides in and out with the bar on the
+            // way back from a chat.
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+            #endif
             // One column on a window wider than a phone (the open Duo upright, 669 pt): the
             // bar centred its title, which landed beside the trailing buttons; the title goes
             // into the leading group after the bot circle, as on a phone.
-            .modifier(LeadingTitle(title: selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !model.wideLayout))
+            #if os(iOS)
+            .pageHeading(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !model.wideLayout)
+            #endif
             .background(InteractivePopEnabler())
             // The stack's path is watched by whoever owns it (ChatsSplitPage for the model's
             // stack, this view for its own) and reported through `chatsPathOpen`: reading the
@@ -261,7 +272,13 @@ struct ChatListView: View {
                 }
             }
             .onChange(of: searchText) { _, q in Task { await search(q) } }
+            #if os(macOS)
             .refreshable { await load() }
+            #else
+            // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
+            // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
+            .pullRefresh { await load() }
+            #endif
             .task(id: runtime?.connection.id) { await load() }
             .task(id: runtime?.selectedProfile) { await load() }
             .task(id: prefs.allBots) { await load() }
@@ -356,7 +373,8 @@ struct ChatListView: View {
             // visibly jumped as it re-laid out.
             // A rendered, untinted image: live glass went murky on the toolbar's glass and a
             // painted view picked up the toolbar's tint in light mode.
-            Image(uiImage: BotAvatarImage.make(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
+            // Memoised: drawn afresh on every pass it flashed while the bar re-laid out (a pull).
+            Image(uiImage: BotAvatarImage.cached(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
                 .accessibilityLabel("Profile: \(runtime?.selectedProfile ?? "none")")
         }
         .id("\(prefs.botColorsRaw)|\(prefs.botAvatarsRaw)|\(prefs.glassAll)|\(colorScheme == .light)")
@@ -515,35 +533,28 @@ struct ChatListView: View {
         }
     }
 
-    /// The search field, our own rather than `.searchable`: the system's drawer sat where the
-    /// pull-to-refresh spinner draws, so the spinner appeared inside the field. Pinned under the
-    /// title by a safe-area inset; the list and its spinner scroll beneath it.
+    #if os(macOS)
+    /// The Mac's search field, pinned over the list (the window toolbar put it at the far end,
+    /// over the open chat). The phone uses the native `.searchable` drawer instead.
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search chats", text: $searchText)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.search)
-                #if os(macOS)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
                 .onExitCommand { searchText = ""; searchFocused = false }
-                #endif
             if !searchText.isEmpty {
                 Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                     .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
         }
-        #if os(macOS)
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(Color.primary.opacity(0.06), in: .capsule)
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
-        #else
-        .padding(.horizontal, 14).padding(.vertical, 9)
-        .glassEffect(.regular, in: .capsule)
-        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 6)
-        #endif
     }
+    #endif
 
     @ViewBuilder private func list(_ runtime: GatewayRuntime) -> some View {
         let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
@@ -638,10 +649,13 @@ struct ChatListView: View {
         }
     }
 
-    /// What sits over the list: the search field on the Mac, then whatever needs saying.
+    /// What sits over the list: the search field on the Mac (the phone uses the native search
+    /// drawer), then whatever needs saying.
     private func topBars(_ runtime: GatewayRuntime) -> some View {
         VStack(spacing: 0) {
+            #if os(macOS)
             searchField
+            #endif
             if let waiting = model.needsSignIn {
                 GatewaySignInBanner(connection: waiting)
                     .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
@@ -1275,29 +1289,6 @@ struct RoomRoute: Hashable, Codable {
 /// The bar's title at the leading edge, after the leading items, instead of centred (iOS,
 /// where the layout is not wide). The navigation title stays for accessibility and the back
 /// label; only the bar's own drawing of it is removed.
-private struct LeadingTitle: ViewModifier {
-    let title: String
-    let on: Bool
-    func body(content: Content) -> some View {
-        #if os(iOS)
-        if on {
-            content
-                .toolbar(removing: .title)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        // Its whole width: squeezed by the trailing group on a phone it read "Ch…".
-                        Text(title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                }
-        } else {
-            content
-        }
-        #else
-        content
-        #endif
-    }
-}
 
 
 #if os(iOS)
