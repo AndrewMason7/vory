@@ -334,12 +334,22 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the pushed page after a cancelled swipe")
         any("page.back").firstMatch.tap(); pause(1.5)
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after Back")
-        // A fast flick from the edge (to 0.9, as testSwipeBackKinds: shorter, XCTest's drag
-        // never popped the page): the system finishes the pop on its speed.
+        // A fast flick from the edge (to 0.9, as testSwipeBackKinds; a shorter one never popped
+        // the page). The system decides whether it pops (on the phone it sometimes cancels a
+        // synthesized flick from 80% across), and the bar must match what it chose: the root's
+        // row on screen again means it popped.
         openRow()
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)), withVelocity: .fast, thenHoldForDuration: 0)
         pause(1.5); shot("settings-flicked")
-        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after a flick")
+        let popped = row.exists && row.isHittable
+        print("FLICK \(popped ? "popped" : "cancelled")")
+        if popped {
+            XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after a flick")
+            XCTAssertFalse(any("page.back").exists, "the Back circle stayed after a flick popped the page")
+        } else {
+            XCTAssertTrue(any("page.back").exists, "a cancelled flick lost the Back circle")
+            XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the page after a cancelled flick")
+        }
     }
 
     /// A page pushed on Settings, then Chats and back: the pushed page's Back belongs to its tab
