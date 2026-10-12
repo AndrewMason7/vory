@@ -174,7 +174,7 @@ struct ChatListView: View {
                     ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash", description: Text(model.activationError ?? "Choose a gateway in Settings."))
                 }
             }
-            .navigationTitle(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats")
+            .navigationTitle(windowTitle)
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             // The search field is tucked under the title and revealed by a pull, as on the Bots
@@ -370,6 +370,14 @@ struct ChatListView: View {
         guard let back = model.composeReturnTab else { return }
         model.composeReturnTab = nil
         withAnimation(.snappy(duration: 0.28)) { model.selectedTab = back }
+    }
+
+    /// The list's title; while the Mac keeps this page mounted behind another page, that page's
+    /// (the deepest title wins the window's, and this one read "Chats" over Settings).
+    private var windowTitle: String {
+        if !pageShown { return model.selectedTab.title }
+        if selecting { return selection.isEmpty ? "Select Chats" : "\(selection.count) Selected" }
+        return "Chats"
     }
 
     private var profileMenu: some View {

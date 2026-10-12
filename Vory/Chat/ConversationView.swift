@@ -64,7 +64,7 @@ struct ConversationView: View {
             if let chat {
                 framed(chat)
                     .handsOff(chat)
-                    .navigationTitle(chat.title)
+                    .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
                     .toolbar(.hidden, for: .navigationBar)
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
@@ -146,7 +146,7 @@ struct ConversationView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 dock(chat).frame(maxWidth: ChatStyle.readingColumn).frame(maxWidth: .infinity)
             }
-            .navigationSubtitle(macSubtitle(chat))
+            .navigationSubtitle(pageShown ? macSubtitle(chat) : "")
             // No toolbar strip over the thread: the bot and the menu float on the window, as in
             // Messages. A short thread sits at the bottom with nothing above it, and the
             // toolbar's own background spread down over that gap as a lighter band.
