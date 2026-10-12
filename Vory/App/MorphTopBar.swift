@@ -439,4 +439,20 @@ private extension View {
         // the slot comes from its chrome (`tabChrome`), not from the frames.
     }
 }
+#else
+import SwiftUI
+import VoryCore
+
+/// The Mac keeps its window toolbar and its own chrome: the bar is never on there, so the
+/// pages' `if !MorphTopBar.active(model)` guards read as always-shown.
+enum MorphTopBar {
+    static var on: Bool { false }
+    static var cutsPages: Bool { false }
+    static func active(_ model: AppModel) -> Bool { false }
+}
+/// No bar, no chat shown by it: the chat's request handler never matches.
+@MainActor final class MorphState {
+    static let shared = MorphState()
+    var chat: ChatSession? { nil }
+}
 #endif
