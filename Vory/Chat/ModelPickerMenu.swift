@@ -241,52 +241,6 @@ struct ReasoningEffortMenu: View {
     }
 }
 
-/// Context gauge in the nav bar; tap for the breakdown sheet. Glyph only on a phone (the
-/// percentage is in the subtitle), glyph + `24.1k / 128k · 19%` where there is room.
-struct TokenChipView: View {
-    var usage: Usage?
-    var onTap: () -> Void
-    @Environment(\.horizontalSizeClass) private var sizeClass
-
-    var body: some View {
-        Button(action: onTap) {
-            if sizeClass == .compact {
-                Image(systemName: gaugeSymbol)
-            } else {
-                Label(label, systemImage: gaugeSymbol).monospacedDigit().lineLimit(1)
-            }
-        }
-        .accessibilityLabel("Context usage \(label)")
-    }
-
-    /// The needle tracks the fill level so the glyph alone says something.
-    private var gaugeSymbol: String {
-        let pct = usage.flatMap(Self.percent) ?? 0
-        switch pct {
-        case ..<20: return "gauge.with.dots.needle.0percent"
-        case ..<55: return "gauge.with.dots.needle.33percent"
-        case ..<85: return "gauge.with.dots.needle.67percent"
-        default: return "gauge.with.dots.needle.100percent"
-        }
-    }
-
-    static func percent(_ u: Usage) -> Int? { u.computedContextPercent }
-
-    private var label: String {
-        guard let u = usage else { return "—" }
-        let used = u.contextUsed ?? u.total ?? 0
-        if let max = u.contextMax, max > 0 {
-            let pct = u.contextPercent ?? Int(Double(used) / Double(max) * 100)
-            return "\(compact(used)) / \(compact(max)) · \(pct)%"
-        }
-        return compact(used)
-    }
-
-    private func compact(_ n: Int) -> String {
-        n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1e6) : n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
-    }
-}
-
 struct ContextBreakdownSheet: View {
     var chat: ChatSession
     @Environment(\.dismiss) private var dismiss

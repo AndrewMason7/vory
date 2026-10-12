@@ -53,6 +53,10 @@ struct ComposerView: View {
     /// Shown after a paste that dropped a lot of text into the field.
     @State private var longTextOffer = false
     @State private var showAttach = false
+    /// The context breakdown sheet, from the ring in the bar (the … menu opens the same one).
+    @State private var showContextSheet = false
+    /// Settings › Appearance: the figure beside the ring as tokens ("18/200K") instead of "9%".
+    @AppStorage(ChatStyle.contextAsTokens) private var contextAsTokens = false
     @State private var attachPanelHeight: CGFloat = 356
     /// Where the + button sits in the composer stack: the panel's glass starts as that circle.
     @State private var attachButtonFrame = CGRect(x: 10, y: 60, width: 36, height: 36)
@@ -531,6 +535,7 @@ struct ComposerView: View {
                 // level alone and the send button was cut by the card's edge.
                 modelChip
                 Spacer(minLength: 0)
+                contextRing
                 trailingControl.layoutPriority(1)
             }
         }
@@ -662,6 +667,49 @@ struct ComposerView: View {
     }
 
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
+    /// How full the chat's context is (#325): a ring and the percentage left of the mic or
+    /// send, the same number as … › Context usage, which a tap opens too. Nothing until the
+    /// chat has usage numbers. Quiet until 80 %, orange from there, red from 95 %. Its own
+    /// size and a fixed gap from the button; the model chip truncates before it does.
+    @ViewBuilder private var contextRing: some View {
+        if let pct = chat.usage?.computedContextPercent {
+            let fill = CGFloat(min(100, max(0, pct))) / 100
+            let tint: Color = pct >= 95 ? .red : pct >= 80 ? .orange : Color.primary.opacity(0.55)
+            Button { showContextSheet = true } label: {
+                HStack(spacing: 5) {
+                    ZStack {
+                        Circle().stroke(Color.primary.opacity(0.12), lineWidth: 2.5)
+                        Circle().trim(from: 0, to: fill)
+                            .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    .frame(width: 15, height: 15)
+                    Text(contextAsTokens ? Self.tokensLabel(chat.usage) : "\(pct)%").font(.caption.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(pct >= 80 ? tint : Color.secondary)
+                }
+                .fixedSize()
+                .padding(.trailing, 4)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .layoutPriority(1)
+            // The numbers change as the turn runs and never animate: no motion in the bar while
+            // typing, and nothing of it moves with the + panel or the keyboard.
+            .transaction { $0.animation = nil }
+            .accessibilityLabel("Context \(pct) percent used")
+            .accessibilityIdentifier("composer.context")
+            .sheet(isPresented: $showContextSheet) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
+        }
+    }
+
+    /// "18/200K": the context used and its window, in thousands (one decimal under 10K).
+    static func tokensLabel(_ u: Usage?) -> String {
+        guard let u, let max = u.contextMax, max > 0 else { return "" }
+        let used = u.contextUsed ?? u.total ?? 0
+        func k(_ n: Int) -> String { n < 10_000 ? String(format: "%.1f", Double(n) / 1000) : "\(Int((Double(n) / 1000).rounded()))" }
+        return "\(k(used))/\(k(max))K"
+    }
+
     @ViewBuilder private var trailingControl: some View {
         if dictation.isListening {
             TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
