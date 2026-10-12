@@ -311,6 +311,26 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// The tab bar's lens held on Chats and dragged slowly across to Settings and back (Matt:
+    /// "holding the nav bar selector and then dragging it across to change views is a bit laggy").
+    func testTabLensDrag() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        let chats = app.descendants(matching: .any).matching(identifier: "tab.chats").firstMatch
+        let settings = app.descendants(matching: .any).matching(identifier: "tab.settings").firstMatch
+        XCTAssertTrue(chats.waitForExistence(timeout: 10) && settings.exists, "no tab bar slots")
+        let from = chats.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let to = settings.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        measure(metrics: [smooth("touch")], options: options) {
+            from.press(forDuration: 0.5, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+            pause(1.2)
+            to.press(forDuration: 0.5, thenDragTo: from, withVelocity: .slow, thenHoldForDuration: 0.3)
+            pause(1.2)
+            stopMeasuring()
+        }
+    }
+
     // MARK: The heavy list (Matt: with lots of chats and bots "that is where it gets sluggish").
     // These want the mock with --extra-sessions 60 --extra-bots 12 (14 bots, 112 chats).
 

@@ -44,6 +44,10 @@ struct VoryTabBar: View {
     /// Where the finger is along the capsule while it drags the lens; nil when not dragging.
     @State private var dragX: CGFloat?
     @State private var pressStart: Date?
+    /// The tab the lens is over while it is dragged: tinted, not yet shown. The page switches
+    /// when the lens is dropped (Matt, 2026-10-11: switching as it passed made the drag lag,
+    /// each pass cross-faded two whole pages under a live glass lens).
+    @State private var hoverTab: AppModel.AppTab?
 
     /// The system capsule is 62 pt; the user wanted it a little shorter, bottom edge kept.
     private let barHeight: CGFloat = 56
@@ -213,7 +217,7 @@ struct VoryTabBar: View {
     /// (no labels at all while the lens is being dragged, like the system bar, or when
     /// Settings › Appearance › Tab labels is off).
     @ViewBuilder private func slot(_ tab: AppModel.AppTab, dragging: Bool) -> some View {
-        let selected = model.selectedTab == tab
+        let selected = (hoverTab ?? model.selectedTab) == tab
         let labelled = selected && !dragging && showLabels && axis == .horizontal
         VStack(spacing: 2) {
             icon(for: tab, size: axis == .vertical ? 21 : (labelled ? 21 : 25))
@@ -238,7 +242,8 @@ struct VoryTabBar: View {
     }
 
     /// A press moves the lens under the finger once it is held for a moment or slides sideways;
-    /// the page switches as the lens passes each tab. A quick press is a tap on that tab.
+    /// the tab under the lens is tinted as it passes and the page switches to it when the lens
+    /// is dropped. A quick press is a tap on that tab.
     private func barGesture(slotAlong: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
@@ -249,16 +254,23 @@ struct VoryTabBar: View {
                 if dragX == nil { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                 let along = axis == .horizontal ? v.location.x : v.location.y
                 dragX = along
-                if let tab = tab(at: along, slotAlong: slotAlong), tab != model.selectedTab {
+                if let tab = tab(at: along, slotAlong: slotAlong), tab != (hoverTab ?? model.selectedTab) {
                     UISelectionFeedbackGenerator().selectionChanged()
-                    withAnimation(.snappy(duration: 0.28)) { model.selectedTab = tab }
+                    hoverTab = tab
                 }
             }
             .onEnded { v in
                 let along = axis == .horizontal ? v.location.x : v.location.y
-                if dragX == nil, let tab = tab(at: along, slotAlong: slotAlong) { select(tab) }
+                let dropped = dragX != nil
                 dragX = nil
                 pressStart = nil
+                hoverTab = nil
+                guard let tab = tab(at: along, slotAlong: slotAlong) else { return }
+                if dropped {
+                    if tab != model.selectedTab { withAnimation(.snappy(duration: 0.28)) { model.selectedTab = tab } }
+                } else {
+                    select(tab)
+                }
             }
     }
 
