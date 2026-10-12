@@ -70,7 +70,6 @@ struct VoryMacApp: App {
                 // Foreground on the Mac is "the frontmost app": local notifications only while not.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     LocalNotifier.isForeground = true
-                    BotAmbient.shared.enabled = true
                     Task { await model.push.refreshAuthorization() }
                     // Anything changed on another device since: take it.
                     CloudSync.shared.syncNow()
