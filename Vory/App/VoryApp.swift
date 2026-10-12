@@ -71,20 +71,26 @@ struct VoryApp: App {
                             try? await Task.sleep(for: .seconds(1))
                             CloudSync.shared.syncNow()
                         }
-                        Task { await model.push.refreshAuthorization() }
-                        Task { await model.refreshCompanionUpdateFlag() }
-                        // Live Activities whose turn ended while the app was away must not linger,
-                        // and one whose turn is still going must not be ended on old knowledge.
-                        LiveActivityController.settleAtForeground(runtime: model.runtime)
-                        AwayWatch.shared.returned(runtime: model.runtime)
-                        Task { await model.push.refreshRelayIfStale() }
-                        // Which gateways have a remembered sign-in, read again: a launch while the
-                        // phone was locked could not read them, and that process may still be
-                        // the one running.
-                        model.store.remembered.reload()
-                        // A session that ran out while the app was away: a remembered sign-in
-                        // signs it in again now (after the app's own lock, if that is up).
-                        Task { await model.signInAgainIfExpired() }
+                        // The rest waits for the system's return animation (about half a second):
+                        // Keychain reads, the activities' settle and the network checks on the
+                        // first frames made the app land with a hitch (Matt, 2026-10-12).
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(600))
+                            Task { await model.push.refreshAuthorization() }
+                            Task { await model.refreshCompanionUpdateFlag() }
+                            // Live Activities whose turn ended while the app was away must not linger,
+                            // and one whose turn is still going must not be ended on old knowledge.
+                            LiveActivityController.settleAtForeground(runtime: model.runtime)
+                            AwayWatch.shared.returned(runtime: model.runtime)
+                            Task { await model.push.refreshRelayIfStale() }
+                            // Which gateways have a remembered sign-in, read again: a launch while the
+                            // phone was locked could not read them, and that process may still be
+                            // the one running.
+                            model.store.remembered.reload()
+                            // A session that ran out while the app was away: a remembered sign-in
+                            // signs it in again now (after the app's own lock, if that is up).
+                            Task { await model.signInAgainIfExpired() }
+                        }
                     case .background:
                         // Out of sight: streaming replies stop redrawing (see GatewayRuntime.isAway).
                         model.runtime?.isAway = true

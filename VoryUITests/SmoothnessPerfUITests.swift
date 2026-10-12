@@ -284,6 +284,25 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    /// Away to the Home screen and back, three times: how long until the list answers, and a
+    /// recording for the frames of the return (Matt, 2026-10-12: "opening task switcher and
+    /// then back to Vory app still has that weird lag time").
+    func testAppSwitchReturn() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'"))
+        for i in 1...3 {
+            XCUIDevice.shared.press(.home); pause(1.5)
+            let t0 = Date()
+            app.activate()
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline, !(rows.firstMatch.exists && rows.firstMatch.isHittable) { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            print("APP-SWITCH return \(i): list answered after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            pause(2)
+        }
+    }
+
     /// Holds the app in a chat with a draft for HERMES_E2E_HOLD seconds (default 600) while the
     /// Duo's hinge is driven from outside (Device Hub), for screen recordings and stills.
     func testHoldChatWithDraft() throws {

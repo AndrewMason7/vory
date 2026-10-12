@@ -46,7 +46,7 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
         chat = c
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = 0 } }
         // Quick, as the system's own glass morphs are (Matt, 2026-10-12: "too slow").
-        else { withAnimation(.spring(duration: 0.26, bounce: 0)) { t = 0 } }
+        else { withAnimation(.spring(duration: 0.32, bounce: 0)) { t = 0 } }
     }
     func scrub(_ fraction: CGFloat) {
         guard chat != nil else { return }
@@ -59,9 +59,9 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     func release(_ fraction: CGFloat, over duration: Double) {
         guard chat != nil else { return }
         scrubbing = false
-        // Quick either way: the system's remainder can be half a second, the morph takes
-        // at most a quarter (the Claude app's pace, Matt 2026-10-12).
-        let d = min(0.25, max(0.12, duration))
+        // With the page: the bar finishing ahead of the slide made the list's controls land
+        // before the list (Matt, 2026-10-12: "the nav bar reappears weirdly").
+        let d = min(0.4, max(0.18, duration))
         let end: CGFloat = fraction >= 1 ? 1 : 0
         withAnimation(.spring(duration: d, bounce: 0)) { t = end }
         // Settled for certain once the transition is over: a trailing event from the second
@@ -78,7 +78,7 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// A pop that was not a swipe (the Back button): the timed morph.
     func pop() {
         guard chat != nil, !scrubbing else { return }
-        let d = 0.26
+        let d = 0.32
         withAnimation(.spring(duration: d, bounce: 0)) { t = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) { if self.t >= 1 { self.chat = nil } }
     }
@@ -122,11 +122,17 @@ struct MorphTopBar: View {
                 if let chat = state.chat { chatLayout(chat).opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
                 // The capsules that are seen, one per slot, at the frame between the two.
                 ForEach(MorphSlot.allCases, id: \.self) { slot in capsule(slot) }
-                // The seated face rides above the middle capsule in the chat state.
-                if let chat = state.chat, let a = chatFrames[.mid], let b = listFrames[.mid] { face(chat, over: lerp(a, b, shown)) }
             }
             .coordinateSpace(.named("morph"))
             .padding(.horizontal, 16).padding(.top, 4)
+        }
+        // The seated face rides above the middle capsule in the chat state: outside the glass
+        // container, which composites its glass over anything drawn inside it (the face sat
+        // behind its pill, Matt 2026-10-12). Same inset as the measured space.
+        .overlay(alignment: .topLeading) {
+            if let chat = state.chat, let a = chatFrames[.mid], let b = listFrames[.mid] {
+                face(chat, over: lerp(a, b, shown)).padding(.horizontal, 16).padding(.top, 4)
+            }
         }
         // The bar's type stops at XXXL, as the system's own bar does: at the accessibility
         // sizes the three capsules no longer fit one row (the actions ran off the right edge
@@ -178,11 +184,16 @@ struct MorphTopBar: View {
             // An absent slot shrinks to nothing where it was: a view's opacity does not fade
             // glass (the + panel taught that), so the capsule also drops its glass there, in
             // the one modifier so its identity holds.
-            .frame(width: present ? f.width : 0, height: present ? f.height : 0)
+            // Absent on this page: shrunk to nothing where it was. Pushed away (another tab's
+            // page, a group chat): faded in place, with the page's own transition (the squeeze
+            // read as a glitch on the other pages, Matt 2026-10-12).
+            .frame(width: present || pushedAway ? f.width : 0, height: present || pushedAway ? f.height : 0)
             .clipShape(.capsule)
             .glassEffect(present ? .regular : .identity, in: .capsule)
             .position(x: f.midX, y: f.midY)
             .opacity(present ? 1 : 0)
+            .scaleEffect(pushedAway ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.2), value: pushedAway)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
             .animation(.snappy(duration: 0.22), value: present)
         }
@@ -190,14 +201,16 @@ struct MorphTopBar: View {
 
     private func face(_ chat: ChatSession, over mid: CGRect) -> some View {
         let drop = BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName).spec(hex: "").shape)
-        return BotAvatar(profile: chat.profileName, size: 52, active: chat.isRunning,
+        return BotAvatar(profile: chat.profileName, size: 44, active: chat.isRunning,
                          mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
             .scaleEffect(reduceMotion ? 1 : 0.6 + 0.4 * (1 - t))
             // The face lands last: it is seen only once the pill is nearly in place.
             .opacity(Double(max(0, 1 - shown * 2.4)))
-            // Seated on the pill by its base, as ChatHeader seats it: 9 pt over the top edge
-            // plus the shape's own seat.
-            .position(x: mid.midX, y: mid.minY + 9 - 26 + 52 * drop)
+            // Seated on the pill by its base, 10 pt over the top edge plus the shape's own seat:
+            // a 44-pt face seated this low lets the row sit 18 pt under the bar's top with the
+            // head's top at 50 pt, under the Dynamic Island's edge (Matt, 2026-10-12: the
+            // buttons were too far down, the head must stay off the island).
+            .position(x: mid.midX, y: mid.minY + 10 - 22 + 44 * drop)
             .allowsHitTesting(false)
     }
 
@@ -258,7 +271,7 @@ struct MorphTopBar: View {
             switch chrome.lead {
             case .botMenu:
                 Menu { ChatListProfileItems() } label: {
-                    Image(uiImage: BotAvatarImage.cached(profile: model.runtime?.selectedProfile ?? "?", size: 26, scheme: scheme))
+                    Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: scheme))
                         .renderingMode(.original).frame(width: 44, height: 44).contentShape(.circle)
                 }
                 .menuStyle(.button).buttonStyle(.plain)
@@ -395,8 +408,8 @@ struct MorphTopBar: View {
     }
 
     private func chatLayout(_ chat: ChatSession) -> some View {
-        // The chat's row sits lower than the list's: the seated face rises 43 pt over the pill's
-        // top, and at the list's height it went up under the Dynamic Island (Matt, 2026-10-12).
+        // The chat's row sits a little lower than the list's: the seated face rises over the
+        // pill's top, and at the list's height it went up under the Dynamic Island.
         HStack(spacing: 12) {
             Color.clear.frame(width: 44, height: 44).measured(.lead, into: $chatFrames)
             Spacer(minLength: 0)
@@ -404,7 +417,7 @@ struct MorphTopBar: View {
             Spacer(minLength: 0)
             Color.clear.frame(width: 44, height: 44).measured(.trail, into: $chatFrames)
         }
-        .padding(.top, 30)
+        .padding(.top, 18)
     }
 
     /// The pill's words: the bot's name and the chat's title (or step), as `ChatHeader` shows them.

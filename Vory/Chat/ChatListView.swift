@@ -380,7 +380,7 @@ struct ChatListView: View {
             // A rendered, untinted image: live glass went murky on the toolbar's glass and a
             // painted view picked up the toolbar's tint in light mode.
             // Memoised: drawn afresh on every pass it flashed while the bar re-laid out (a pull).
-            Image(uiImage: BotAvatarImage.cached(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
+            Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
                 .accessibilityLabel("Profile: \(runtime?.selectedProfile ?? "none")")
         }
         .id("\(prefs.botColorsRaw)|\(prefs.botAvatarsRaw)|\(prefs.glassAll)|\(colorScheme == .light)")

@@ -238,6 +238,15 @@ final class AppModel {
     /// Each root page's pull-to-refresh state, for the bar's title capsule to host the wheel.
     var pullStates: [AppTab: PullRefreshState] = [:]
     #endif
+    /// The bot the Chats list's chip shows. Opening a chat selects that chat's bot, and the
+    /// list goes back to the default bot once the chat is gone: while the chat is up the chip
+    /// shows the bot it will come back to, not the drifted one (the chip read one colour
+    /// through the swipe back and switched after it, Matt 2026-10-12).
+    var listChipProfile: String? {
+        guard let rt = runtime else { return nil }
+        if let chat = visibleChat, rt.selectedProfile == chat.profileName, let d = rt.defaultProfile { return d }
+        return rt.selectedProfile
+    }
     /// …and while any view marked `hidesTabBar()` is on screen on that tab. Counted per tab: a
     /// tap on the bar as it slides away switches tabs, and the new tab must show it again while
     /// the old one keeps its chat open.
