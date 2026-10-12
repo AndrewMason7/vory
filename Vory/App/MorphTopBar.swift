@@ -206,6 +206,12 @@ struct MorphTopBar: View {
         let pushedAway = model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil
         let awayHas = state.chat != nil ? true : (state.pushedTab != nil ? slot == .mid : pageHas)
         let present = !pushedAway && (shown < 0.5 ? awayHas : pageHas)
+        // Going away (a page pushed on another tab), a slot the away state does not have goes at
+        // once, at the push's start: its glass cannot fade inside the container, and shrinking
+        // it with the morph left the Bots + standing beside the Back as it formed (Matt on 1.5
+        // (17): "the back button leave behind a trail button once in the new window"). It comes
+        // back with the usual move; a tab switch still shrinks it where it was.
+        let goesAtOnce = !present && state.away
         if pushedAway {
             EmptyView()
         } else if let b = listFrames[slot] ?? lastListFrames[slot] ?? chatFrames[slot] {
@@ -238,7 +244,7 @@ struct MorphTopBar: View {
             .position(x: f.midX, y: f.midY)
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
-            .animation(.snappy(duration: 0.22), value: present)
+            .animation(goesAtOnce ? nil : .snappy(duration: 0.22), value: present)
         }
     }
 
