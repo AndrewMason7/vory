@@ -111,9 +111,11 @@ struct BotAvatar: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.botsLive) private var pageLive
-    /// The live face is mounted around a blink (and for a finish spin or a tap); between those
-    /// an idle small face is the cached still, see `restsAsImage`.
-    @State private var liveForBlink = false
+    /// A small idle face blinks by picture: the eyes-shut still for a moment, then the open one.
+    /// The live view is mounted only for a finish spin or a tap, see `restsAsImage` (mounted
+    /// around each blink, it drew a shade brighter than the still: Matt, 2026-10-12, "randomly
+    /// loading the bot colors ... it should just load it once and keep it").
+    @State private var eyesShut = false
 
     /// A small idle face in a list draws as a picture: one cached image per look, no Canvas, no
     /// shadow filter pass on every scrolled frame (the phone's list fling spent its frames on
@@ -129,7 +131,7 @@ struct BotAvatar: View {
         if let s = mood.session, let d = a.finishedSessions[s], now.timeIntervalSince(d) < 1.2 { return false }
         if mood.session == nil, let d = a.finished[profile], now.timeIntervalSince(d) < 1.2 { return false }
         if let d = a.tapped[profile], now.timeIntervalSince(d) < 1.2 { return false }
-        return !liveForBlink
+        return true
     }
     /// The same seed the live view blinks on, so the picture and the live face agree on when.
     private var blinkSeed: Int {
@@ -145,7 +147,7 @@ struct BotAvatar: View {
             if choice == .photo, let image = BotAvatarStore.photo(for: profile) {
                 Image(uiImage: image).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
             } else if restsAsImage {
-                Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme))
+                Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme, closed: eyesShut))
                     .resizable().frame(width: size, height: size)
             } else if size <= 40, !drawn, override == nil {
                 // A row's face: the cached still stays underneath while the live view mounts
@@ -161,19 +163,20 @@ struct BotAvatar: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
-        // Between blinks the picture; the live face is mounted a moment before each blink and
-        // taken down after it, unless the list is moving (then the blink is skipped).
+        // Between blinks the open picture; at each blink the shut one for 120 ms (one wakeup
+        // per blink), unless the list is moving or the page is away (then the blink is skipped).
         .task(id: "\(profile)|\(size)|\(active)|\(mood.state == .idle)") {
             guard !active, !drawn, !mood.followsTilt, mood.state == .idle else { return }
             while !Task.isCancelled {
                 let now = Date().timeIntervalSinceReferenceDate
                 let next = BotMotionModel.nextBlink(after: now + 0.1, seed: blinkSeed)
-                try? await Task.sleep(for: .seconds(max(0.05, next - now - 0.08)))
+                try? await Task.sleep(for: .seconds(max(0.05, next - now)))
                 if Task.isCancelled { return }
-                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || !pageLive { continue }
-                liveForBlink = true
-                try? await Task.sleep(for: .milliseconds(560))
-                liveForBlink = false
+                // Reduce Motion holds the eyes open on the live face too (no blink).
+                if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || !pageLive || UIAccessibility.isReduceMotionEnabled { continue }
+                eyesShut = true
+                try? await Task.sleep(for: .milliseconds(120))
+                eyesShut = false
             }
         }
     }

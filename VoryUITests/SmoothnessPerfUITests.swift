@@ -303,6 +303,24 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// Holds the Bots page at rest for HERMES_E2E_HOLD seconds (default 14): the cards' faces
+    /// blink by picture swap; with `-bots.glassAll YES` in HERMES_E2E_ARGS they are glass bots.
+    func testHoldBots() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "bots")
+        pause(3)
+        pause(Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14)
+    }
+
+    /// Holds the Chats list at rest for HERMES_E2E_HOLD seconds (default 14): the recording
+    /// shows whether a row's face changes beyond a blink.
+    func testHoldList() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        pause(Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14)
+    }
+
     /// Holds the app in a chat with a draft for HERMES_E2E_HOLD seconds (default 600) while the
     /// Duo's hinge is driven from outside (Device Hub), for screen recordings and stills.
     func testHoldChatWithDraft() throws {

@@ -50,10 +50,13 @@ enum BotAvatarImage {
     @MainActor private static let cache = NSCache<NSString, UIImage>()
     /// `make`, memoised by look: the thread draws one of these beside every reply, and a live
     /// bot view per row (glass, timeline) is what made a long thread stutter while scrolling.
-    @MainActor static func cached(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light) -> UIImage {
-        let key = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)" as NSString
+    /// `closed`: the same face mid-blink, for a list row's blink by picture swap.
+    @MainActor static func cached(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light, closed: Bool = false) -> UIImage {
+        let key = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(closed ? "shut" : "open")" as NSString
         if let hit = cache.object(forKey: key) { return hit }
+        BotFace.stillBlink = closed ? 1 : 0
         let img = make(profile: profile, size: size, scheme: scheme)
+        BotFace.stillBlink = 0
         cache.setObject(img, forKey: key)
         return img
     }
