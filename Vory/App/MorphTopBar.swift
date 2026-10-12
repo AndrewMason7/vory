@@ -318,7 +318,7 @@ struct MorphTopBar: View {
                         .renderingMode(.original).frame(width: 44, height: 44).contentShape(.circle)
                 }
                 .menuStyle(.button).buttonStyle(.plain)
-                .accessibilityLabel("Profile: \(model.runtime?.selectedProfile ?? "none")")
+                .accessibilityLabel("Profile: \(model.listChipProfile ?? "none")")
                 .accessibilityShowsLargeContentViewer { Label("Profile", systemImage: "person.crop.circle") }
                 .accessibilityIdentifier("chats.profile")
             case .filesHome:

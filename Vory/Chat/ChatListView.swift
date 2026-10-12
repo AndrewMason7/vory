@@ -400,7 +400,7 @@ struct ChatListView: View {
             // painted view picked up the toolbar's tint in light mode.
             // Memoised: drawn afresh on every pass it flashed while the bar re-laid out (a pull).
             Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
-                .accessibilityLabel("Profile: \(runtime?.selectedProfile ?? "none")")
+                .accessibilityLabel("Profile: \(model.listChipProfile ?? "none")")
         }
         .id("\(prefs.botColorsRaw)|\(prefs.botAvatarsRaw)|\(prefs.glassAll)|\(colorScheme == .light)")
     }

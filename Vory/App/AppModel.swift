@@ -239,13 +239,24 @@ final class AppModel {
     var pullStates: [AppTab: PullRefreshState] = [:]
     #endif
     /// The bot the Chats list's chip shows. Opening a chat selects that chat's bot, and the
-    /// list goes back to the default bot once the chat is gone: while the chat is up the chip
-    /// shows the bot it will come back to, not the drifted one (the chip read one colour
-    /// through the swipe back and switched after it, Matt 2026-10-12).
+    /// list goes back to the default bot once the chat is gone: while the chat covers the list
+    /// the chip shows the bot it will come back to, not the drifted one (the chip read one
+    /// colour through the swipe back and switched after it, Matt 2026-10-12). With the chat
+    /// beside the list (two columns, the Mac) the list in view is the chat's bot's, so the chip
+    /// is too: it showed the default bot over another bot's chats there.
     var listChipProfile: String? {
         guard let rt = runtime else { return nil }
-        if let chat = visibleChat, rt.selectedProfile == chat.profileName, let d = rt.defaultProfile { return d }
+        if chatCoversList, let chat = visibleChat, rt.selectedProfile == chat.profileName, let d = rt.defaultProfile { return d }
         return rt.selectedProfile
+    }
+    /// A chat stands over the list (one column: the phone, the closed Duo, a narrow window)
+    /// rather than beside it.
+    private var chatCoversList: Bool {
+        #if os(macOS)
+        false
+        #else
+        !wideLayout
+        #endif
     }
     /// …and while any view marked `hidesTabBar()` is on screen on that tab. Counted per tab: a
     /// tap on the bar as it slides away switches tabs, and the new tab must show it again while
