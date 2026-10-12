@@ -241,6 +241,49 @@ final class SmoothnessPerfUITests: XCTestCase {
         mark("done")
     }
 
+    /// A chat opened in landscape, then turned upright: where the bar's Back and pill are for
+    /// accessibility, and whether Back's tap leaves the chat (BarAfterRotationUITests fails
+    /// there; the probe shows the bar active with the chat adopted).
+    func testBackFrameAfterTurn() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        XCUIDevice.shared.orientation = .landscapeLeft; pause(2.5)
+        openFirstChat(); pause(1.5)
+        let back = app.buttons["chat.back"].firstMatch, pill = app.buttons["chat.titlePill"].firstMatch, more = app.buttons["chat.more"].firstMatch
+        print("BACK-FRAME landscape back \(back.frame) pill \(pill.frame) more \(more.frame) window \(app.windows.firstMatch.frame)")
+        XCUIDevice.shared.orientation = .portrait; pause(2.5)
+        print("BACK-FRAME portrait back \(back.frame) hittable \(back.isHittable) pill \(pill.frame) more \(more.frame) window \(app.windows.firstMatch.frame)")
+        back.tap(); pause(1.5)
+        print("BACK-FRAME after-tap dock \(any("chat.dock").exists) profile.close \(app.buttons["profile.close"].firstMatch.exists) rows \(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).count)")
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    /// Severity of the keyboard-up turn (BarAfterRotation's failing part): a chat opened in
+    /// landscape with the composer focused, turned upright; does Back exist and is it hittable,
+    /// and does the edge swipe still leave the chat?
+    func testKeyboardTurnSwipeBack() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        XCUIDevice.shared.orientation = .landscapeLeft; pause(2.5)
+        openFirstChat(); pause(1.5)
+        let field = app.textViews["composer.text"].firstMatch
+        if field.waitForExistence(timeout: 5) { field.tap(); pause(1) }
+        XCUIDevice.shared.orientation = .portrait; pause(2.5)
+        let back = app.buttons["chat.back"].firstMatch
+        print("KB-TURN back exists \(back.exists) hittable \(back.exists ? back.isHittable : false) frame \(back.exists ? back.frame : .zero) keyboard \(app.keyboards.count)")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        shot("kb-turn-portrait")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        pause(2)
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'"))
+        let out = rows.allElementsBoundByIndex.contains { $0.isHittable }
+        print("KB-TURN swipe-back left the chat: \(out) dock \(any("chat.dock").exists)")
+        shot("kb-turn-after-swipe")
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     /// Holds the app in a chat with a draft for HERMES_E2E_HOLD seconds (default 600) while the
     /// Duo's hinge is driven from outside (Device Hub), for screen recordings and stills.
     func testHoldChatWithDraft() throws {
