@@ -40,6 +40,10 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// A page pushed on a tab other than Chats: the title capsule becomes its Back (Matt,
     /// 2026-10-12: "it should morph into the back arrow on all pages and then morph back").
     var pushedTab: AppModel.AppTab?
+    /// The tabs other than Chats with a page pushed, kept by their roots' probes whether or not
+    /// the bar is up: a tab switch, or the bar's return after the window widened and narrowed
+    /// again, finds the right state at once (`showTab`).
+    @ObservationIgnored var pushedTabs: Set<AppModel.AppTab> = []
     /// Away from a root page: a chat or a pushed page is up (or on its way).
     var away: Bool { chat != nil || pushedTab != nil }
     /// 0 = the chat's (or the pushed page's) controls, 1 = the root page's.
@@ -62,6 +66,18 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
         else { withAnimation(.spring(duration: 0.32, bounce: 0)) { t = 0 } }
     }
     private func settleOnRoot() { chat = nil; pushedTab = nil }
+    /// The tab in front changed, or the bar came back: away over that tab's pushed page, at its
+    /// root otherwise. With the capsules' own tab move, not the push's morph: a page pushed on
+    /// Settings left its Back standing over Chats.
+    func showTab(_ tab: AppModel.AppTab) {
+        guard chat == nil, !scrubbing else { return }
+        let pushed = pushedTabs.contains(tab)
+        guard pushedTab != (pushed ? tab : nil) || t != (pushed ? 0 : 1) else { return }
+        withAnimation(.snappy(duration: 0.22)) {
+            pushedTab = pushed ? tab : nil
+            t = pushed ? 0 : 1
+        }
+    }
     func scrub(_ fraction: CGFloat) {
         guard away else { return }
         scrubbing = true
@@ -168,6 +184,8 @@ struct MorphTopBar: View {
             if open, let c = model.visibleChat { state.push(c) }
             else if !open, state.chat != nil, !state.scrubbing, state.t < 1 { state.pop() }
         }
+        // Initial too: the bar is made afresh when a wide window narrows again.
+        .onChange(of: model.selectedTab, initial: true) { _, tab in state.showTab(tab) }
         .onChange(of: model.visibleChat?.storedID) { _, id in
             // The chat lands a beat after the path opens on a fresh push.
             if id != nil, model.chatsPathOpen, state.chat == nil, let c = model.visibleChat { state.push(c) }

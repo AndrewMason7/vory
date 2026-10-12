@@ -401,9 +401,11 @@ struct RootArrivalProbe: UIViewRepresentable {
     let arrived: () -> Void
     func makeUIView(context: Context) -> ArrivalView { let v = ArrivalView(); v.isUserInteractionEnabled = false; v.tab = tab; v.active = active; v.arrived = arrived; return v }
     func updateUIView(_ v: ArrivalView, context: Context) {
+        let widthChanged = v.active != active
         v.arrived = arrived; v.active = active
         if popOne != v.popSeen { v.popSeen = popOne; if popOne > 0 { v.popOnePage() } }
         v.watch()
+        if widthChanged { DispatchQueue.main.async { v.chromeForWidth() } }
     }
     final class ArrivalView: UIView {
         var tab: AppModel.AppTab = .chats
@@ -413,7 +415,12 @@ struct RootArrivalProbe: UIViewRepresentable {
         /// Runs only while a finger has a pop back to the root.
         private var link: CADisplayLink?
         private var fingerHasPop = false
-        private var wasPushed = false
+        /// This tab has a page pushed: kept from the stack's events whether or not the bar is up
+        /// (the bar is off on a wide window), so it is right when the bar comes back.
+        private var wasPushed: Bool {
+            get { MorphState.shared.pushedTabs.contains(tab) }
+            set { if newValue { MorphState.shared.pushedTabs.insert(tab) } else { MorphState.shared.pushedTabs.remove(tab) } }
+        }
         /// The transition being followed: its start is reported twice on a pop (the delegate,
         /// then the root's return to the window).
         private weak var followed: AnyObject?
@@ -453,7 +460,7 @@ struct RootArrivalProbe: UIViewRepresentable {
             if let c = nav.transitionCoordinator { follow(c, in: nav); return }
             // SwiftUI's push asks before UIKit has made the transition's coordinator (a pop has
             // one): a page other than the root is on its way in, which is all the bar needs.
-            guard active, vc !== nav.viewControllers.first else { return }
+            guard vc !== nav.viewControllers.first else { return }
             showPushed(vc)
         }
 
@@ -463,7 +470,6 @@ struct RootArrivalProbe: UIViewRepresentable {
         /// One transition, from its start: which way it goes is read from its ends, not from the
         /// stack's depth (SwiftUI's stack keeps its depth until a pop commits).
         private func follow(_ c: UIViewControllerTransitionCoordinator, in nav: UINavigationController) {
-            guard active else { return }
             if followed === c { if fingerHasPop { startLink() }; return }
             followed = c
             let state = MorphState.shared
@@ -472,7 +478,7 @@ struct RootArrivalProbe: UIViewRepresentable {
             if let to, to !== root {
                 // A push, or back to a page that is not the root: the bar's Back stays.
                 showPushed(to)
-            } else if to === root, from !== root, wasPushed {
+            } else if to === root, from !== root, wasPushed, active {
                 if c.isInteractive {
                     // The finger has it: the bar follows the page's slide frame by frame.
                     fingerHasPop = true
@@ -500,9 +506,11 @@ struct RootArrivalProbe: UIViewRepresentable {
         /// A page other than the root is coming in: its own Back and title go, and the first
         /// one over the root sends the bar away.
         private func showPushed(_ vc: UIViewController) {
-            hideChrome(of: vc)
-            guard !wasPushed else { return }
+            let first = !wasPushed
             wasPushed = true
+            guard active else { return }
+            hideChrome(of: vc)
+            guard first else { return }
             let state = MorphState.shared
             Perf.stamp("root probe \(tab.rawValue): push seen, chat \(state.chat == nil ? "nil" : "set")")
             if state.pushedTab == nil { state.pushPage(tab) }
@@ -516,20 +524,27 @@ struct RootArrivalProbe: UIViewRepresentable {
 
         /// No transition under way: the bar matches the stack as it stands.
         private func settle(_ nav: UINavigationController) {
-            guard active, nav.transitionCoordinator == nil else { return }
+            guard nav.transitionCoordinator == nil else { return }
+            let deep = nav.viewControllers.count > 1, was = wasPushed
+            wasPushed = deep
+            guard active else { return }
             let state = MorphState.shared
-            if nav.viewControllers.count > 1 {
+            if deep {
                 if let top = nav.topViewController, top.navigationItem.hidesBackButton == false { hideChrome(of: top) }
-                if !wasPushed {
-                    // Pushed without a transition (a restored path): the Back at once.
-                    wasPushed = true
-                    if state.pushedTab == nil { state.pushPage(tab) }
-                }
-            } else if wasPushed {
+                // Pushed without a transition (a restored path): the Back at once.
+                if !was, state.pushedTab == nil { state.pushPage(tab) }
+            } else if was, state.pushedTab == tab, !state.scrubbing, state.t < 1 {
                 // The pop is over: back at the root.
-                wasPushed = false
-                if state.pushedTab == tab, !state.scrubbing, state.t < 1 { state.pop() }
+                state.pop()
             }
+        }
+
+        /// The window widened (the bar steps aside: pushed pages get their own Back and title
+        /// back) or narrowed again (the bar's Back takes over). The bar's state comes from
+        /// `MorphState.showTab` as it reappears.
+        func chromeForWidth() {
+            guard tab != .chats, let nav else { return }
+            for vc in nav.viewControllers.dropFirst() { active ? hideChrome(of: vc) : showChrome(of: vc) }
         }
 
         private func startLink() {
@@ -559,6 +574,11 @@ struct RootArrivalProbe: UIViewRepresentable {
         private func hideChrome(of vc: UIViewController) {
             vc.navigationItem.hidesBackButton = true
             vc.navigationItem.titleView = UIView()
+        }
+
+        private func showChrome(of vc: UIViewController) {
+            vc.navigationItem.hidesBackButton = false
+            vc.navigationItem.titleView = nil
         }
 
         func popOnePage() {

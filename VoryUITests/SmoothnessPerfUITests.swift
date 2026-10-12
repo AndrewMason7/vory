@@ -334,6 +334,29 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the pushed page after a cancelled swipe")
         any("page.back").firstMatch.tap(); pause(1.5)
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after Back")
+        // A fast flick from the edge (to 0.9, as testSwipeBackKinds: shorter, XCTest's drag
+        // never popped the page): the system finishes the pop on its speed.
+        openRow()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)), withVelocity: .fast, thenHoldForDuration: 0)
+        pause(1.5); shot("settings-flicked")
+        XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after a flick")
+    }
+
+    /// A page pushed on Settings, then Chats and back: the pushed page's Back belongs to its tab
+    /// (Chats shows its own title and no Back), and it is there again back on Settings.
+    func testPushedPageTabSwitch() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        pause(2)
+        for _ in 0..<3 where !any("page.back").exists && row.exists { row.tap(); _ = any("page.back").waitForExistence(timeout: 5) }
+        XCTAssertTrue(any("page.back").exists, "the pushed page has no Back capsule")
+        any("tab.chats").tap(); pause(1.6); shot("pushed-then-chats")
+        XCTAssertFalse(any("page.back").exists, "Settings' Back stands on Chats")
+        any("tab.settings").tap(); pause(1.6); shot("chats-then-settings")
+        XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "the pushed page lost its Back after a tab switch")
     }
 
     /// Holds the Bots page at rest for HERMES_E2E_HOLD seconds (default 14): the cards' faces
