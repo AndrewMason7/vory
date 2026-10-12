@@ -345,6 +345,24 @@ final class SmoothnessPerfUITests: XCTestCase {
         pause(Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14)
     }
 
+    /// Holds a page pushed on Settings (its first row) at rest for HERMES_E2E_HOLD seconds
+    /// (default 14), for an idle CPU reading from outside: nothing may run per frame under a
+    /// pushed page (the battery rule, #248).
+    func testHoldPushedPage() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        pause(2)
+        let id = row.identifier
+        // A tap that pushed takes the row away with the root: tap again only while it is there.
+        for _ in 0..<3 where !any("page.back").exists && row.exists { row.tap(); _ = any("page.back").waitForExistence(timeout: 5) }
+        XCTAssertTrue(any("page.back").exists, "the pushed page has no Back capsule")
+        let hold = Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14
+        print("HOLD-PUSHED start \(id) \(hold)s")
+        pause(hold)
+    }
+
     /// Holds the Chats list at rest for HERMES_E2E_HOLD seconds (default 14): the recording
     /// shows whether a row's face changes beyond a blink.
     func testHoldList() throws {

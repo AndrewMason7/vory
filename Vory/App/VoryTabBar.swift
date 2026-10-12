@@ -385,10 +385,13 @@ struct TabRoot: ViewModifier {
 /// - tells the root it has arrived (at once on a plain appearance or a Back button's pop, at
 ///   the end of an interactive pop, not at all if the swipe is cancelled), for `tabAtRoot`;
 /// - drives the morph bar for a pushed page (Matt, 2026-10-12: the title capsule morphs into
-///   the Back arrow and back, following the swipe like a chat): a 60 Hz poll of the stack's
-///   depth and transition coordinator while the root is in the window (a few property reads);
+///   the Back arrow and back, following the swipe like a chat);
 /// - hides the pushed page's own back button and title under the bar's Back;
 /// - pops one page when the bar's Back bumps `popOne`.
+/// Event-driven: the stack's delegate (`NavTap`) reports each transition as it starts and each
+/// page once shown, and a display link runs only while a finger has a pop back to the root, for
+/// the scrub. Nothing runs at rest (the battery rule, #248; the 60 Hz poll this replaced cost
+/// 1.3% CPU on a root at rest).
 struct RootArrivalProbe: UIViewRepresentable {
     /// The last decision, for the geometry probe's banner (a UI test's stills).
     nonisolated(unsafe) static var last = "none"
@@ -400,22 +403,25 @@ struct RootArrivalProbe: UIViewRepresentable {
     func updateUIView(_ v: ArrivalView, context: Context) {
         v.arrived = arrived; v.active = active
         if popOne != v.popSeen { v.popSeen = popOne; if popOne > 0 { v.popOnePage() } }
+        v.watch()
     }
     final class ArrivalView: UIView {
         var tab: AppModel.AppTab = .chats
         var active = true
         var arrived: (() -> Void)?
         var popSeen = 0
+        /// Runs only while a finger has a pop back to the root.
         private var link: CADisplayLink?
+        private var fingerHasPop = false
         private var wasPushed = false
-        private var popStarted = false
-        private var watchingInteraction = false
+        /// The transition being followed: its start is reported twice on a pop (the delegate,
+        /// then the root's return to the window).
+        private weak var followed: AnyObject?
         private var nav: UINavigationController? { parentViewController?.navigationController }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            link?.invalidate(); link = nil
-            guard window != nil else { return }
+            guard window != nil else { stopLink(); return }
             let nav = self.nav
             // The root's view re-enters the window as a page is pushed over it: not an arrival.
             if let nav, nav.viewControllers.count > 1, nav.transitionCoordinator?.isInteractive != true {
@@ -431,65 +437,122 @@ struct RootArrivalProbe: UIViewRepresentable {
                 Perf.stamp("root probe: arrived at once (\(why))"); RootArrivalProbe.last = "at once (\(why))"
                 arrived?()
             }
-            guard tab != .chats else { return }
-            let l = CADisplayLink(target: self, selector: #selector(tick))
-            l.add(to: .main, forMode: .common)
-            link = l
-            Perf.stamp("root probe \(tab.rawValue): link started, depth \(nav?.viewControllers.count ?? -1)")
+            guard tab != .chats, let nav else { return }
+            watch(nav)
+            if let c = nav.transitionCoordinator { follow(c, in: nav) } else { settle(nav) }
         }
 
-        @objc private func tick() {
-            guard active, let nav else { return }
+        /// Puts the tap on the stack's delegate (again, if SwiftUI has set its own since).
+        func watch(_ nav: UINavigationController? = nil) {
+            guard tab != .chats, let nav = nav ?? self.nav else { return }
+            NavTap.install(on: nav, for: self)
+        }
+
+        /// A transition starts (the delegate's willShow).
+        fileprivate func willShow(_ vc: UIViewController, in nav: UINavigationController) {
+            if let c = nav.transitionCoordinator { follow(c, in: nav); return }
+            // SwiftUI's push asks before UIKit has made the transition's coordinator (a pop has
+            // one): a page other than the root is on its way in, which is all the bar needs.
+            guard active, vc !== nav.viewControllers.first else { return }
+            showPushed(vc)
+        }
+
+        /// A page is shown (the delegate's didShow).
+        fileprivate func didShow(in nav: UINavigationController) { settleSoon(nav) }
+
+        /// One transition, from its start: which way it goes is read from its ends, not from the
+        /// stack's depth (SwiftUI's stack keeps its depth until a pop commits).
+        private func follow(_ c: UIViewControllerTransitionCoordinator, in nav: UINavigationController) {
+            guard active else { return }
+            if followed === c { if fingerHasPop { startLink() }; return }
+            followed = c
             let state = MorphState.shared
-            let depth = nav.viewControllers.count
             let root = nav.viewControllers.first
-            if let c = nav.transitionCoordinator {
-                // A transition under way: which way it goes is read from its ends, not from
-                // the stack's depth (SwiftUI's stack keeps its depth until a pop commits).
-                let fromRoot = c.viewController(forKey: .from) === root
-                let toRoot = c.viewController(forKey: .to) === root
-                if fromRoot, !wasPushed {
-                    wasPushed = true; popStarted = false
-                    Perf.stamp("root probe \(tab.rawValue): push seen, active \(active), chat \(state.chat == nil ? "nil" : "set")")
-                    if let top = c.viewController(forKey: .to) { hideChrome(of: top) }
-                    if state.pushedTab == nil { state.pushPage(tab) }
-                } else if toRoot, wasPushed {
-                    if c.isInteractive {
-                        // The page's own slide is the progress the eye sees; the coordinator's
-                        // percentComplete lagged it on the phone.
-                        let width = max(1, nav.view.bounds.width)
-                        let slid = (c.viewController(forKey: .from)?.view.frame.minX ?? 0) / width
-                        let progress = min(1, max(0, max(CGFloat(c.percentComplete), slid)))
-                        state.scrub(progress)
-                        if !watchingInteraction {
-                            watchingInteraction = true
-                            c.notifyWhenInteractionChanges { [weak self] ctx in
-                                self?.watchingInteraction = false
-                                let remaining = max(0.12, ctx.transitionDuration * Double(1 - ctx.percentComplete))
-                                MorphState.shared.release(ctx.isCancelled ? 0 : 1, over: remaining)
-                                if ctx.isCancelled { self?.popStarted = false }
-                            }
-                        }
-                    } else if !popStarted {
-                        popStarted = true
-                        Perf.stamp("root probe \(tab.rawValue): pop seen (button)")
-                        state.pop()
+            let from = c.viewController(forKey: .from), to = c.viewController(forKey: .to)
+            if let to, to !== root {
+                // A push, or back to a page that is not the root: the bar's Back stays.
+                showPushed(to)
+            } else if to === root, from !== root, wasPushed {
+                if c.isInteractive {
+                    // The finger has it: the bar follows the page's slide frame by frame.
+                    fingerHasPop = true
+                    startLink()
+                    c.notifyWhenInteractionChanges { [weak self] ctx in
+                        self?.fingerHasPop = false
+                        self?.stopLink()
+                        let remaining = max(0.12, ctx.transitionDuration * Double(1 - ctx.percentComplete))
+                        MorphState.shared.release(ctx.isCancelled ? 0 : 1, over: remaining)
                     }
+                } else {
+                    Perf.stamp("root probe \(tab.rawValue): pop seen (button)")
+                    state.pop()
                 }
-            } else if depth > 1 {
+            }
+            c.animate(alongsideTransition: nil) { [weak self] _ in
+                guard let self else { return }
+                self.fingerHasPop = false
+                self.stopLink()
+                if self.followed === c { self.followed = nil }
+                self.settleSoon(nav)
+            }
+        }
+
+        /// A page other than the root is coming in: its own Back and title go, and the first
+        /// one over the root sends the bar away.
+        private func showPushed(_ vc: UIViewController) {
+            hideChrome(of: vc)
+            guard !wasPushed else { return }
+            wasPushed = true
+            let state = MorphState.shared
+            Perf.stamp("root probe \(tab.rawValue): push seen, chat \(state.chat == nil ? "nil" : "set")")
+            if state.pushedTab == nil { state.pushPage(tab) }
+        }
+
+        /// Once the transition that just ended has let go of the stack (UIKit may still report
+        /// its coordinator from inside its completion and didShow).
+        private func settleSoon(_ nav: UINavigationController) {
+            DispatchQueue.main.async { [weak self, weak nav] in if let self, let nav { self.settle(nav) } }
+        }
+
+        /// No transition under way: the bar matches the stack as it stands.
+        private func settle(_ nav: UINavigationController) {
+            guard active, nav.transitionCoordinator == nil else { return }
+            let state = MorphState.shared
+            if nav.viewControllers.count > 1 {
+                if let top = nav.topViewController, top.navigationItem.hidesBackButton == false { hideChrome(of: top) }
                 if !wasPushed {
                     // Pushed without a transition (a restored path): the Back at once.
                     wasPushed = true
-                    if let top = nav.topViewController { hideChrome(of: top) }
                     if state.pushedTab == nil { state.pushPage(tab) }
                 }
-                popStarted = false
-                if let top = nav.topViewController, top.navigationItem.hidesBackButton == false { hideChrome(of: top) }
             } else if wasPushed {
                 // The pop is over: back at the root.
-                wasPushed = false; popStarted = false
+                wasPushed = false
                 if state.pushedTab == tab, !state.scrubbing, state.t < 1 { state.pop() }
             }
+        }
+
+        private func startLink() {
+            guard link == nil else { return }
+            let l = CADisplayLink(target: self, selector: #selector(tick))
+            l.add(to: .main, forMode: .common)
+            link = l
+            Perf.stamp("root probe \(tab.rawValue): link started")
+        }
+
+        private func stopLink() {
+            guard let link else { return }
+            link.invalidate(); self.link = nil
+            Perf.stamp("root probe \(tab.rawValue): link stopped")
+        }
+
+        /// While a finger has the pop: the page's own slide is the progress the eye sees (the
+        /// coordinator's percentComplete lagged it on the phone).
+        @objc private func tick() {
+            guard active, fingerHasPop, let nav, let c = nav.transitionCoordinator, c.isInteractive else { stopLink(); return }
+            let width = max(1, nav.view.bounds.width)
+            let slid = (c.viewController(forKey: .from)?.view.frame.minX ?? 0) / width
+            MorphState.shared.scrub(min(1, max(0, max(CGFloat(c.percentComplete), slid))))
         }
 
         /// The pushed page keeps its content; its system back button and title are the bar's.
@@ -502,6 +565,43 @@ struct RootArrivalProbe: UIViewRepresentable {
             guard let nav, nav.viewControllers.count > 1 else { return }
             nav.popViewController(animated: true)
         }
+    }
+}
+
+/// The stack's delegate, wrapped: everything goes on to the one SwiftUI set, and the root's probe
+/// hears each transition as it starts (willShow, with the coordinator set) and each page once
+/// shown. Kept on the navigation controller, so SwiftUI's delegate keeps its forwarder for as
+/// long as the stack lives.
+private final class NavTap: NSObject, UINavigationControllerDelegate {
+    private static var key = 0
+    nonisolated(unsafe) weak var inner: UINavigationControllerDelegate?
+    weak var probe: RootArrivalProbe.ArrivalView?
+
+    static func install(on nav: UINavigationController, for probe: RootArrivalProbe.ArrivalView) {
+        if let tap = nav.delegate as? NavTap { tap.probe = probe; return }
+        let tap = objc_getAssociatedObject(nav, &key) as? NavTap ?? NavTap()
+        tap.inner = nav.delegate
+        tap.probe = probe
+        objc_setAssociatedObject(nav, &key, tap, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        // UIKit reads which methods its delegate answers when it is set: `inner` comes first.
+        nav.delegate = tap
+        Perf.stamp("root probe \(probe.tab.rawValue): delegate tapped, inner \(tap.inner.map { String(describing: type(of: $0)) } ?? "nil")")
+    }
+
+    nonisolated override func responds(to sel: Selector!) -> Bool {
+        super.responds(to: sel) || inner?.responds(to: sel) == true
+    }
+    nonisolated override func forwardingTarget(for sel: Selector!) -> Any? {
+        if let inner, inner.responds(to: sel) { return inner }
+        return super.forwardingTarget(for: sel)
+    }
+    func navigationController(_ nav: UINavigationController, willShow vc: UIViewController, animated: Bool) {
+        inner?.navigationController?(nav, willShow: vc, animated: animated)
+        probe?.willShow(vc, in: nav)
+    }
+    func navigationController(_ nav: UINavigationController, didShow vc: UIViewController, animated: Bool) {
+        inner?.navigationController?(nav, didShow: vc, animated: animated)
+        probe?.didShow(in: nav)
     }
 }
 
