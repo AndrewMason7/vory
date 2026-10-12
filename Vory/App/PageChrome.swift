@@ -101,19 +101,21 @@ struct PullRefreshWheel: View {
     var fromBelow: PullRefreshState? = nil
     @Environment(PullRefreshState.self) private var around: PullRefreshState?
     private var pull: PullRefreshState? { fromBelow ?? around }
+    /// Grows with the title's type (the accessibility sizes), as a glyph beside it would.
+    @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
     var body: some View {
         ZStack {
             if let pull {
                 Circle()
                     .trim(from: 0, to: pull.shown)
-                    .stroke(Color.secondary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .stroke(Color.secondary, style: StrokeStyle(lineWidth: max(2, side / 7.5), lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .opacity(Double(min(1, pull.shown * 1.5)))
                 if pull.refreshing { ProgressView().controlSize(.small).transition(.opacity) }
             }
         }
-        .frame(width: pull == nil ? 0 : 15, height: 15)
-        .padding(.leading, pull == nil ? 0 : 6)
+        .frame(width: pull == nil ? 0 : side, height: side)
+        .padding(.leading, pull == nil ? 0 : side * 0.4)
         .animation(.snappy(duration: 0.2), value: pull?.refreshing ?? false)
         .onAppear { if hosting { pull?.hosted = true } }
         .onDisappear { if hosting { pull?.hosted = false } }
