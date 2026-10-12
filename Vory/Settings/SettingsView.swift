@@ -447,7 +447,6 @@ struct BotsSettingsView: View {
     @AppStorage(BotMotionSource.tiltKey) private var tilt = false
     @AppStorage(BotMotionSource.styleKey) private var style = "lively"
     #else
-    @AppStorage(MacBotMotion.enabledKey) private var motion = true
     @AppStorage(MacBotMotion.styleKey) private var style = "lively"
     #endif
     @AppStorage(GatewayRuntime.defaultProfileKey) private var defaultProfile = ""
@@ -494,17 +493,15 @@ struct BotsSettingsView: View {
                 Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. With tilt on, they also lean with \(DeviceWords.the) and, on the Bots page, follow its angle with their eyes.")
             }
             #else
-            // The same switch and styles on the Mac (decision E); the gyroscope lean is the phone's.
+            // The same styles on the Mac (decision E); the gyroscope lean is the phone's. No
+            // on/off switch (Matt, 2026-10-11): the bots always move, Still is the quiet choice.
             Section {
-                Toggle("Motion effects", isOn: $motion)
-                    .onChange(of: motion) { _, _ in MacBotMotion.apply() }
                 Picker("Style", selection: $style) {
                     Text("Lively").tag("lively")
                     Text("Calm").tag("calm")
                     Text("Still").tag("still")
                 }
                 .pickerStyle(.segmented)
-                .disabled(!motion)
                 .onChange(of: style) { _, _ in MacBotMotion.apply() }
             } footer: {
                 Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing.")
@@ -665,7 +662,6 @@ struct AppearanceView: View {
 
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
     #if os(macOS)
-    @AppStorage(BotAmbient.animateKey) private var animateBots = true
     private func tabBinding(_ tab: AppModel.AppTab) -> Binding<Bool> {
         Binding(get: { layout.contains(tab) }, set: { on in var l = layout; l.set(tab, enabled: on); layoutRaw = l.encoded })
     }
@@ -704,12 +700,6 @@ struct AppearanceView: View {
                 Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow \(DeviceWords.isMac ? "System Settings" : "\(DeviceWords.your)'s own settings").")
             }
             #if os(macOS)
-            // Bots cost CPU while they move (#248): a switch to hold them still for good.
-            Section {
-                Toggle("Animate bots", isOn: $animateBots)
-            } footer: {
-                Text("Off, the bots hold still. On, they move while Vory is in front and can be seen, and idle bots blink only while a bot is working; Reduce Motion in System Settings holds them still too.")
-            }
             // The Mac's sidebar holds every page: a switch each, arrows for the order.
             Section {
                 ForEach(layout.tabs, id: \.self) { tab in
