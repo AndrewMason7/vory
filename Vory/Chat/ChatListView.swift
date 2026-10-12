@@ -29,6 +29,8 @@ struct ChatRoute: Hashable, Codable {
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
+    /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
+    @Environment(\.macPageShown) private var pageShown
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
     /// and a click replaces the one showing. On the phone the list owns its own stack and pushes.
     var detailPath: Binding<NavigationPath>? = nil
@@ -218,15 +220,20 @@ struct ChatListView: View {
                     ToolbarItem(placement: .topBarLeading) { Button("Done") { endSelecting() }.accessibilityIdentifier("chats.select.done") }
                     ToolbarItemGroup(placement: .topBarTrailing) { selectionActions }
                 } else {
-                ToolbarItem(placement: .topBarLeading) { if !MorphTopBar.active(model) { profileMenu } }
                 #if os(macOS)
+                // Only while the Chats page is the one on show: the Mac keeps this page mounted
+                // behind the other pages, and its items must not stand in their toolbar.
+                if pageShown {
+                ToolbarItem(placement: .topBarLeading) { profileMenu }
                 // Two buttons, the same size, that fit over the list at its narrowest: a button
                 // each for refresh, new bot, sort and filters ran past the column's edge and sat
                 // over the chat beside it, and moved about as the window was resized.
                 ToolbarItem(placement: .primaryAction) { viewMenu }
                 ToolbarItem(placement: .primaryAction) { voiceMenu }
                 ToolbarItem(placement: .primaryAction) { composeMenu }
+                }
                 #else
+                ToolbarItem(placement: .topBarLeading) { if !MorphTopBar.active(model) { profileMenu } }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if !MorphTopBar.active(model) {
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")

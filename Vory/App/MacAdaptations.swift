@@ -145,3 +145,11 @@ extension View {
         #endif
     }
 }
+
+/// Whether the Mac page a view sits in is the one on show. The Mac keeps the Chats page mounted
+/// behind the other pages (MainSplitView); a page that is mounted but hidden declares no window
+/// toolbar items while this is false, or its items would stand in the bar beside the shown
+/// page's. Always true where nothing sets it: the iPhone, sheets, the page on show.
+extension EnvironmentValues {
+    @Entry var macPageShown: Bool = true
+}

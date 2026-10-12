@@ -134,23 +134,41 @@ private struct MainSplitView: View {
     /// The pages in the rail, less the ones the gateway cannot show (the Board without its plugin).
     private var tabs: [AppModel.AppTab] { TabLayout.parse(tabLayoutRaw).visible(hiding: model.hiddenTabs) }
 
+    /// The window's own liveness (visible and in front), to combine with the page's.
+    @Environment(\.botsLive) private var windowLive
+
     var body: some View {
-        Group {
-            if model.selectedTab == .chats {
-                NavigationSplitView(columnVisibility: $columns) {
-                    Sidebar(tabs: tabs)
-                } content: {
-                    ChatListView(detailPath: $chatPath)
-                        // A renamed bot's open chat is stale (#315): back to the placeholder;
-                        // the list has the chat again under the new name.
-                        .onReceive(NotificationCenter.default.publisher(for: .hermesBotRenamed)) { _ in chatPath = NavigationPath() }
-                        .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 560)
-                } detail: {
-                    // The chat beside the list (`ChatNavigation`): shared with the iPad and the
-                    // open Duo in 1.5; no back chevron, the list is the way between chats.
-                    ChatDetailStack(path: $chatPath) { NoChatView() }
-                }
-            } else {
+        let chats = model.selectedTab == .chats
+        ZStack {
+            // The Chats page (rail, list, chat) stays mounted while another page shows, as the
+            // iPhone keeps every tab page alive (RootView): tearing it down cost ~250 ms of the
+            // switch away and building it again ~450 ms of the switch back (the aligned hitch
+            // tables of 2026-10-11/12, clean-click drive). Hidden, it is not drawn, not hit-
+            // testable, not read by accessibility, and its faces hold still (`botsLive`), the
+            // same four rules the iPhone applies. The other pages are cheap to build (Settings
+            // from Bots: ~80 ms) and keep mounting on demand.
+            NavigationSplitView(columnVisibility: $columns) {
+                Sidebar(tabs: tabs)
+            } content: {
+                ChatListView(detailPath: $chatPath)
+                    // A renamed bot's open chat is stale (#315): back to the placeholder;
+                    // the list has the chat again under the new name.
+                    .onReceive(NotificationCenter.default.publisher(for: .hermesBotRenamed)) { _ in chatPath = NavigationPath() }
+                    .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 560)
+            } detail: {
+                // The chat beside the list (`ChatNavigation`): shared with the iPad and the
+                // open Duo in 1.5; no back chevron, the list is the way between chats.
+                ChatDetailStack(path: $chatPath) { NoChatView() }
+            }
+            .opacity(chats ? 1 : 0)
+            .allowsHitTesting(chats)
+            .accessibilityHidden(!chats)
+            .environment(\.botsLive, windowLive && chats)
+            // The Mac's window toolbar items are declared by the pages (the list's menus, the
+            // chat's pill and buttons); the hidden Chats page must not keep its items in the
+            // bar beside the shown page's, so they read this flag.
+            .environment(\.macPageShown, chats)
+            if !chats {
                 NavigationSplitView(columnVisibility: $columns) {
                     Sidebar(tabs: tabs)
                 } detail: {
@@ -398,6 +416,7 @@ private struct RailMore: View {
 
 /// The detail column before a chat is chosen.
 private struct NoChatView: View {
+    @Environment(\.macPageShown) private var shown
     var body: some View {
         VStack(spacing: 12) {
             // The guide plays only while something is working; idle, it holds still (#248).
@@ -410,8 +429,10 @@ private struct NoChatView: View {
         // list's buttons slid from over the list to the far end of the window, and came back
         // when a chat was opened.
         .toolbar {
-            ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
-                .sharedBackgroundVisibility(.hidden)
+            if shown {
+                ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
+                    .sharedBackgroundVisibility(.hidden)
+            }
         }
         // The placeholder must not bring a toolbar strip with it: in dark mode it showed as a
         // lighter band across the top of the empty column.

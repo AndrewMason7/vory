@@ -42,6 +42,8 @@ struct ConversationView: View {
     @State private var headerBottom: CGFloat = 0
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
+    /// The Mac keeps the Chats page mounted behind the others (`macPageShown`, MainSplitView).
+    @Environment(\.macPageShown) private var pageShown
     @Environment(\.wideLayout) private var wide
     /// The keyboard's height above the home-indicator area. Tracked by hand for the dock as the
     /// transcript does for itself: SwiftUI's own avoidance hands the inset to any scroll view in
@@ -150,6 +152,9 @@ struct ConversationView: View {
             // toolbar's own background spread down over that gap as a lighter band.
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .toolbar {
+                // Only while the Chats page is on show (the Mac keeps it mounted behind the
+                // other pages, see MainSplitView): its items must not stand in their toolbar.
+                if pageShown {
                 // The bot, in the middle over its thread; a click opens its profile.
                 ToolbarItem(placement: .principal) {
                     Button { showProfile = true } label: {
@@ -182,6 +187,7 @@ struct ConversationView: View {
                     .menuIndicator(.hidden)
                     .help("Chat options")
                     .accessibilityIdentifier("chat.more")
+                }
                 }
             }
         #else
