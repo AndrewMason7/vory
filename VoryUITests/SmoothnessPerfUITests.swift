@@ -125,6 +125,52 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// A "Background process finished" note opened and closed (the mock's nightly-export chat).
+    func testInjectedNote() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        // The list re-sorts as the sessions load; a row tapped before it settles is tapped where
+        // it was (its reported frame lags). Let it settle, then find the row afresh.
+        pause(2.5)
+        // Two buttons carry this title (a hidden page's row is in the tree too, lower down);
+        // the one on screen is the list's.
+        let rows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Rewrite the nightly export job'"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 20), "no nightly export chat")
+        let row = rows.allElementsBoundByIndex.min { $0.frame.minY < $1.frame.minY }!
+        row.tap()
+        XCTAssertTrue(any("chat.dock").waitForExistence(timeout: 20), "the chat did not open")
+        pause(1.5)
+        // The note sits above the end of the thread; scroll up until it is on screen.
+        var note = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Background process'")).firstMatch
+        for _ in 0..<6 where !note.exists { app.swipeDown(velocity: .slow); pause(0.8); note = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Background process'")).firstMatch }
+        XCTAssertTrue(note.waitForExistence(timeout: 5), "no background process note")
+        pause(1)
+        // The swipes leave the pill up under the bar, where a tap lands on the bar and the open
+        // note's title ends up off screen: drag the thread down until the pill sits mid-screen.
+        func findNote() -> XCUIElement { app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Background process'")).firstMatch }
+        func settle() {
+            for _ in 0..<4 where note.frame.minY < 160 {
+                let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+                from.press(forDuration: 0.1, thenDragTo: from.withOffset(CGVector(dx: 0, dy: 250)), withVelocity: .slow, thenHoldForDuration: 0.2)
+                pause(0.8); note = findNote()
+            }
+        }
+        settle()
+        XCTAssertGreaterThan(note.frame.minY, 100, "the note stayed under the bar")
+        // When and where each tap landed, for a frame check of a screen recording.
+        func mark(_ what: String) { try? "\(Date().timeIntervalSince1970) \(what) \(note.frame)\n".appendLine(to: "/tmp/vory-note-taps.txt") }
+        measure(metrics: [smooth("touch")], options: options) {
+            settle()
+            // The open note's element is the whole row: tap its title, 15 pt under the top edge.
+            func tapTitle() { note.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 15)).tap() }
+            mark("open"); tapTitle(); pause(1.2)
+            note = findNote()
+            mark("close"); tapTitle(); pause(1.2)
+            stopMeasuring()
+        }
+    }
+
     /// The + panel out of the + button and back.
     func testPlusPanel() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
@@ -376,5 +422,13 @@ final class SmoothnessPerfUITests: XCTestCase {
             pause(2)
             stopMeasuring()
         }
+    }
+}
+
+private extension String {
+    /// Appends the line to a file (made if missing); the frame checks read it.
+    func appendLine(to path: String) throws {
+        if let h = FileHandle(forWritingAtPath: path) { h.seekToEndOfFile(); h.write(Data(utf8)); h.closeFile() }
+        else { try write(toFile: path, atomically: true, encoding: .utf8) }
     }
 }

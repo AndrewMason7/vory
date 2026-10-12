@@ -1406,31 +1406,79 @@ struct SubagentRow: View {
 struct InjectedNoteRow: View {
     var note: InjectedNote
     @State private var open = false
+    /// The pill's own width and the row's: the glass animates between the two.
+    @State private var pillWidth: CGFloat = 0
+    @State private var rowWidth: CGFloat = 0
     var body: some View {
-        VStack(spacing: 6) {
-            Button { withAnimation(.snappy) { open.toggle() } } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : note.title.hasPrefix("Subagent") ? "person.2" : "gearshape.2")
-                    Text(note.title).font(.caption)
-                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold))
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
-            if open {
-                Text(note.body).font(.caption.monospaced()).textSelection(.enabled)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+        // One piece of glass that grows out from its centre both ways and folds back the same
+        // way. The title never moves: it stays centred, and the details are laid out at the
+        // row's full width underneath from the start, so the widening glass reveals them
+        // (Matt, 2026-10-11: "stay centered and it expands on both sides to reveal the text").
+        let open = open
+        let title = HStack(spacing: 6) {
+            Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : note.title.hasPrefix("Subagent") ? "person.2" : "gearshape.2")
+            Text(note.title).font(.caption)
+            Image(systemName: "chevron.down").font(.caption2.weight(.bold)).rotationEffect(.degrees(open ? 180 : 0))
         }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .fixedSize()
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pillWidth = $0 }
+        VStack(spacing: 0) {
+            Button { withAnimation(.snappy(duration: 0.32)) { self.open.toggle() } } label: { title.contentShape(.rect) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
+            Text(note.body).font(.caption.monospaced()).textSelection(.enabled)
+                .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
+                .frame(width: max(rowWidth, pillWidth), alignment: .leading)
+                // Revealed by the glass, not faded or moved: it is already in place.
+                .folded(open: open)
+        }
+        .frame(width: pillWidth > 0 ? (open ? max(rowWidth, pillWidth) : pillWidth) : nil)
+        .clipShape(.rect(cornerRadius: open ? 14 : 20))
+        // Plain glass, not interactive: the button inside takes the tap, and interactive glass
+        // on the wrapper hid that button from accessibility (and the UI test).
+        .glassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
         .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
         .padding(.vertical, 2)
     }
+}
+
+/// The folded part of a note, a tool card or a reasoning fold: laid out at its full size from
+/// the first frame and still there through the close, so the container's moving edge reveals
+/// it and covers it again. A plain `if open` with an identity transition pulled it out on the
+/// close's first frame, and an empty box collapsed (seen frame by frame on the phone).
+struct Folded: ViewModifier {
+    var open: Bool
+    /// The parent stack's spacing: a zero-height child would still get it, so it is taken back.
+    var spacing: CGFloat = 0
+    /// Mounted while open and for the close animation after; not before the first open.
+    @State private var shown = false
+    /// Bumped on every change, so a close's delayed unmount stands down when it reopened since.
+    @State private var gen = 0
+    func body(content: Content) -> some View {
+        VStack(spacing: 0) {
+            // No transition of its own, and its natural height whatever the fold proposes: it is
+            // in place at full size and the edge does the rest (a Text offered the shrinking
+            // height re-wrapped to fewer lines mid-close).
+            if open || shown { content.fixedSize(horizontal: false, vertical: true).transition(.identity) }
+        }
+        .frame(height: open ? nil : 0, alignment: .top)
+        .clipped()
+        .padding(.top, open ? 0 : -spacing)
+        .onChange(of: open, initial: true) { _, now in
+            gen += 1
+            if now { shown = true } else {
+                let g = gen
+                Task { try? await Task.sleep(for: .milliseconds(650)); if gen == g { shown = false } }
+            }
+        }
+    }
+}
+
+extension View {
+    func folded(open: Bool, spacing: CGFloat = 0) -> some View { modifier(Folded(open: open, spacing: spacing)) }
 }
 
 /// The whole tool call on its own page: the command or arguments and the output, as text you
@@ -1524,10 +1572,10 @@ struct ReasoningDisclosure: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(open ? "Hide reasoning" : "Show reasoning")
-            if open {
-                // Models think in markdown (headings, lists, tables): render it, small and quiet.
-                MarkdownView(text: text, style: .reasoning, inlineSelection: false).equatable()
-            }
+            // Models think in markdown (headings, lists, tables): render it, small and quiet.
+            // In place from the start; the fold's moving edge reveals and covers it (nothing slides).
+            MarkdownView(text: text, style: .reasoning, inlineSelection: false).equatable()
+                .folded(open: open, spacing: 4)
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
             if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
@@ -1965,33 +2013,38 @@ struct ToolCardView: View {
             if todos == nil, let s = activity.summary, !s.isEmpty, !expanded, !compact {
                 Text(s).font(.caption).lineLimit(2)
             }
-            if expanded {
-                if compact, todos == nil, let s = activity.summary, !s.isEmpty { Text(s).font(.caption).lineLimit(3) }
-                // The whole call: the args when the gateway sent them, else the context line in
-                // full (a tester opened a card and got a few more characters of a cut preview).
-                if todos == nil, let a = fullCall, !a.isEmpty {
-                    Text(activity.name == "terminal" || activity.name == "bash" ? "Command" : "Arguments").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    CodeBlock(text: a, lineCap: 40)
-                }
-                if showOutput, let r = activity.resultText, !r.isEmpty {
-                    Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    CodeBlock(text: r, lineCap: 30)
-                    // A tool that made or found pictures (a screenshot, a render): shown, not just named.
-                    let shots = MediaScan.imagePaths(inToolOutput: r)
-                    if !shots.isEmpty { MediaThumbStrip(refs: shots, profile: nil, side: 110) }
-                }
-                Button { showFull = true } label: {
-                    Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))
-                }
-                .buttonStyle(.borderless)
-                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+                    if compact, todos == nil, let s = activity.summary, !s.isEmpty { Text(s).font(.caption).lineLimit(3) }
+                    // The whole call: the args when the gateway sent them, else the context line in
+                    // full (a tester opened a card and got a few more characters of a cut preview).
+                    if todos == nil, let a = fullCall, !a.isEmpty {
+                        Text(activity.name == "terminal" || activity.name == "bash" ? "Command" : "Arguments").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        CodeBlock(text: a, lineCap: 40)
+                    }
+                    if showOutput, let r = activity.resultText, !r.isEmpty {
+                        Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        CodeBlock(text: r, lineCap: 30)
+                        // A tool that made or found pictures (a screenshot, a render): shown, not just named.
+                        let shots = MediaScan.imagePaths(inToolOutput: r)
+                        if !shots.isEmpty { MediaThumbStrip(refs: shots, profile: nil, side: 110) }
+                    }
+                    Button { showFull = true } label: {
+                        Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.top, 2)
             }
+            // In place from the start; the card's moving edge reveals and covers it (nothing slides).
+            .folded(open: expanded, spacing: compact ? 4 : 6)
         }
         .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall).sheetFrame(.wide).withAppModel() }
         .padding(compact ? 8 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A painted card, not glass: a thread can hold dozens of these, and each live glass
         // layer is composited every frame while the thread scrolls (the stutter on device).
+        // The opened part is revealed by the card growing, inside the card (Matt, 2026-10-11:
+        // tool expands need a proper animation; it faded in before).
+        .clipShape(.rect(cornerRadius: compact ? 10 : 14))
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: compact ? 10 : 14))
         .overlay(RoundedRectangle(cornerRadius: compact ? 10 : 14, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         .contentShape(.rect)

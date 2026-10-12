@@ -13,6 +13,9 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
     func didReceive(_ notification: UNNotification) {
         let content = notification.request.content
         let hermes = content.userInfo["hermes"] as? [String: Any] ?? [:]
+        // The reply card's face is a live one: the 1.5 motion, as in the app (only the app set
+        // this, so the extension still ran the 1.4 drawing with its turn).
+        BotFace.motionEngine = true
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         let looks = BotLooks.load()
         let profile = hermes["profile"] as? String ?? ""
