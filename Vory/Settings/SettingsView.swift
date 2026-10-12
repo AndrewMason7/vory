@@ -1143,13 +1143,23 @@ struct BotColorRow: View {
     var label: String
     @AppStorage(BotColors.storageKey) private var raw = ""
     @State private var color: Color = .accentColor
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ColorPicker(selection: $color, supportsOpacity: false) {
-            HStack(spacing: 10) { BotAvatar(profile: profile, size: 26); Text(label) }
+            // A picture, never a live face: a row per bot, each blinking live now and then,
+            // made this page scroll in jerks (Matt, 2026-10-11: "not animate at all in this pane").
+            HStack(spacing: 10) {
+                Image(uiImage: BotAvatarImage.cached(profile: profile, size: 26, scheme: colorScheme)).resizable().frame(width: 26, height: 26)
+                Text(label)
+            }
         }
         .onAppear { color = BotColors.color(for: profile) }
         .onChange(of: color) { _, c in
+            // Only a real change: the colour set on appear tripped this too, and each of those
+            // writes re-rendered the whole page and every row (the first scroll down to the bots
+            // stalled, Matt, 2026-10-11).
+            guard c.hexString.uppercased() != BotColors.hex(for: profile).uppercased() else { return }
             BotColors.set(c, for: profile)
             raw = String(data: (try? JSONEncoder().encode(BotColors.stored())) ?? Data(), encoding: .utf8) ?? raw
         }
