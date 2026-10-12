@@ -76,12 +76,20 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     private func settleOnRoot() { chat = nil; pushedTab = nil }
     /// The tab in front changed, or the bar came back: away over that tab's pushed page, at its
     /// root otherwise. With the capsules' own tab move, not the push's morph: a page pushed on
-    /// Settings left its Back standing over Chats.
-    func showTab(_ tab: AppModel.AppTab) {
-        guard chat == nil, !scrubbing else { return }
+    /// Settings left its Back standing over Chats. A chat belongs to Chats (`open`, the chat up
+    /// there): on another tab the bar is that tab's, even while a chat is still closing (a chat
+    /// composed from a pushed page closes back onto it), and back on Chats the chat's returns.
+    func showTab(_ tab: AppModel.AppTab, chat open: ChatSession?) {
+        guard !scrubbing else { return }
+        if let open {
+            if chat !== open { push(open) }
+            else if t != 0 || pushedTab != nil { pushedTab = nil; withAnimation(.snappy(duration: 0.22)) { t = 0 } }
+            return
+        }
         let pushed = pushedTabs.contains(tab)
-        guard pushedTab != (pushed ? tab : nil) || t != (pushed ? 0 : 1) else { return }
+        guard chat != nil || pushedTab != (pushed ? tab : nil) || t != (pushed ? 0 : 1) else { return }
         withAnimation(.snappy(duration: 0.22)) {
+            chat = nil
             pushedTab = pushed ? tab : nil
             t = pushed ? 0 : 1
         }
@@ -108,7 +116,9 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
         // cancelled swipe did nothing on the phone).
         DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) {
             self.scrubbing = false
-            if end >= 1 { if self.t >= 1 { self.settleOnRoot() } } else { self.t = 0 }
+            // Back to the chat or the page only while one is still up: a tab switch in the
+            // meantime (showTab) has already put the bar where it belongs.
+            if end >= 1 { if self.t >= 1 { self.settleOnRoot() } } else if self.away { self.t = 0 }
         }
     }
     /// What the bar is doing, for a diagnostic.
@@ -201,7 +211,9 @@ struct MorphTopBar: View {
             else if !open, state.chat != nil, !state.scrubbing, state.t < 1 { state.pop() }
         }
         // Initial too: the bar is made afresh when a wide window narrows again.
-        .onChange(of: model.selectedTab, initial: true) { _, tab in state.showTab(tab) }
+        .onChange(of: model.selectedTab, initial: true) { _, tab in
+            state.showTab(tab, chat: tab == .chats && model.chatsPathOpen ? model.visibleChat : nil)
+        }
         .onChange(of: model.visibleChat?.storedID) { _, id in
             // The chat lands a beat after the path opens on a fresh push.
             if id != nil, model.chatsPathOpen, state.chat == nil, let c = model.visibleChat { state.push(c) }

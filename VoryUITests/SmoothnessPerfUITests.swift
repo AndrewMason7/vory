@@ -422,6 +422,29 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// A chat composed from a page pushed on Settings, then closed: the app goes back to Settings
+    /// with the page still pushed, and the bar is that page's (its Back), not Settings' title
+    /// capsule (the bar kept the closing chat's state through the switch back).
+    func testComposeFromPushedPage() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        pause(2)
+        for _ in 0..<3 where !any("page.back").exists && row.exists { row.tap(); _ = any("page.back").waitForExistence(timeout: 5) }
+        XCTAssertTrue(any("page.back").exists, "the pushed page has no Back capsule")
+        let compose = any("chats.new")
+        XCTAssertTrue(compose.waitForExistence(timeout: 5), "no compose button")
+        compose.tap(); pause(2); shot("composed")
+        let chatBack = any("chat.back")
+        XCTAssertTrue(chatBack.waitForExistence(timeout: 8), "the new chat did not open")
+        chatBack.tap(); pause(2); shot("returned")
+        XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "back on Settings, the pushed page has no Back capsule")
+        XCTAssertFalse(any("morph.title").exists && any("morph.title").isHittable, "Settings' title capsule stands over the pushed page")
+        XCTAssertFalse(any("chat.back").exists, "the chat's Back stayed after the chat closed")
+    }
+
     /// A page pushed on Settings, then Chats and back: the pushed page's Back belongs to its tab
     /// (Chats shows its own title and no Back), and it is there again back on Settings.
     func testPushedPageTabSwitch() throws {
