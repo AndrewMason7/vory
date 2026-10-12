@@ -985,6 +985,9 @@ public final class BotAmbient {
     /// their blinks until it settles, since a blink mid-fling cannot be seen and each one wakes a
     /// row's timeline. The working face keeps animating.
     public var scrolling = false
+    /// A finger is down on the chat's thread (tracking or dragging, not the deceleration after):
+    /// the chat holds the dock's measured top meanwhile (an interactive keyboard dismiss).
+    public var threadDragging = false
     /// The display is asleep or the screen is locked (Mac): every face holds still. Drawing
     /// into a window nobody can see made each frame wait on the render server.
     public var displayAsleep = false

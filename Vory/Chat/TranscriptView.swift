@@ -303,6 +303,10 @@ struct TranscriptView: View {
                 let touching = phase == .tracking || phase == .interacting || phase == .decelerating
                 if touching, !metrics.userScrolling { metrics.touchStartDistance = metrics.distanceFromBottom }
                 metrics.userScrolling = touching
+                // Shared with the lists: idle faces hold their blink while the thread moves; the
+                // chat holds the dock's measured top while a finger is down (see ConversationView).
+                BotAmbient.shared.scrolling = touching
+                BotAmbient.shared.threadDragging = phase == .tracking || phase == .interacting
                 if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
