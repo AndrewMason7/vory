@@ -528,6 +528,8 @@ struct ChatHeader: View {
     /// Read here so a name saved on the bot's card (#315) redraws the header.
     @AppStorage(BotNames.storageKey) private var namesRaw = ""
     private var botLabel: String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
+    /// Read here so a shape changed on the bot's card re-seats the face on its pill.
+    @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
     private var headline: String { headerShowsTitle ? chat.title : botLabel }
     private var idleLine: String { headerShowsTitle ? chat.subtitle : (chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title) }
 
@@ -553,7 +555,7 @@ struct ChatHeader: View {
             } label: {
                 // Seated on the pill by its base; while it asks (the "!"), it lifts clear so the
                 // dot does not cover the name.
-                VStack(spacing: chat.botState == .awaitingApproval ? 2 : -(9 + 52 * BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName).spec(hex: "").shape))) {
+                VStack(spacing: chat.botState == .awaitingApproval ? 2 : -(9 + 52 * BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape))) {
                     // The bot sits on the pill, its base a few points over the top edge (measured from
                     // the shape, not the frame), like a contact photo in Messages; it springs in from
                     // small on the first appearance.

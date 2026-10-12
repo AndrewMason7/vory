@@ -147,8 +147,11 @@ struct BotCard: View {
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
     /// Every shape ends at a different height (a pill well above the frame, a blob near its
     /// bottom); the overlap is measured from the shape's real base so each bot sits the same.
+    /// From the stored looks this view reads, so a changed shape re-seats it: read from the store
+    /// directly, the card kept the old shape's seat (a cloud changed to a circle sat 10 pt low,
+    /// over its own name; Matt on 1.5 (17): "it now broke the look").
     private var overlap: CGFloat {
-        let shape = BotAvatarStore.choice(for: profile.name).spec(hex: "").shape
+        let shape = BotAvatarStore.choice(for: profile.name, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape
         return 10 + 78 * BotFace.seatDrop(shape)
     }
 

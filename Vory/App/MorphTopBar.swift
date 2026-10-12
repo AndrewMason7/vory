@@ -141,6 +141,8 @@ struct MorphTopBar: View {
     /// swap", 2026-10-12); `-vory-morph-fade` keeps the old cross-fade for a comparison.
     static var cutsPages: Bool { on && !ProcessInfo.processInfo.arguments.contains("-vory-morph-fade") }
     private var state: MorphState { MorphState.shared }
+    /// The bots' stored looks, read so the seated face follows a shape change.
+    @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
     /// The list's title capsule: one height on every tab, scaled with the headline.
     @ScaledMetric(relativeTo: .headline) private var titleHeight: CGFloat = 38
     /// The two end states' capsule frames, measured from invisible copies laid out underneath.
@@ -263,7 +265,8 @@ struct MorphTopBar: View {
     }
 
     private func face(_ chat: ChatSession, over mid: CGRect) -> some View {
-        let drop = BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName).spec(hex: "").shape)
+        // From the looks read here, so a shape changed on the bot's card re-seats the face.
+        let drop = BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape)
         return BotAvatar(profile: chat.profileName, size: 44, active: chat.isRunning,
                          mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
             .scaleEffect(reduceMotion ? 1 : 0.6 + 0.4 * (1 - t))
