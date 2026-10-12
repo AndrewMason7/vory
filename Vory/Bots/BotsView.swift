@@ -51,7 +51,7 @@ struct BotsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
+                    if !MorphTopBar.active(model) { Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot") }
                 }
             }
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame().withAppModel() } }
@@ -62,6 +62,10 @@ struct BotsView: View {
             .navigationDestination(for: ChatRoute.self) { ConversationView(route: $0) }
             .reloadable { await load() }
             .task(id: model.runtime?.connection.id) { await load() }
+            .onChange(of: model.pageRequest) { _, r in
+                guard let r, r.kind == .botsNewBot else { return }
+                model.pageRequest = nil; showNewBot = true
+            }
         }
     }
 

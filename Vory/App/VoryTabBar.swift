@@ -348,7 +348,16 @@ struct TabRoot: ViewModifier {
         content
             // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
             // refresh wheel sits beside it on the pages that can refresh.
-            .pageHeading(tab.title, on: !model.wideLayout)
+            .pageHeading(tab.title, on: !model.wideLayout && !MorphTopBar.on)
+            // The page's pull-to-refresh state, for the morph prototype's bar to host its wheel.
+            .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[tab] = r.state } }
+            // Under the morph prototype the bar draws the title: the stack's own (large by
+            // default on a root) goes, as it does on Chats, so no root shows two.
+            .navigationBarTitleDisplayMode(MorphTopBar.active(model) ? .inline : .automatic)
+            .toolbar(removing: MorphTopBar.active(model) ? .title : nil)
+            // An empty bar collapses (on the Duo the search drawer rode up under the capsules):
+            // an invisible item keeps the bar at its height under the prototype.
+            .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
             .onAppear { model.tabAtRoot[tab] = true }
             .onDisappear { model.tabAtRoot[tab] = false }
             .background(PopToRootProbe(tab: tab))

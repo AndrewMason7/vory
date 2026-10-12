@@ -219,6 +219,25 @@ final class AppModel {
     /// hidden for that chat, it slides in by this much, so it tracks the finger like the
     /// system's bars and goes back out when the swipe is cancelled (Matt, 2026-10-11).
     var popProgress: CGFloat = 0
+    /// The morph prototype's bar (drawn outside the stacks) asks the open chat for one of its
+    /// actions, or the Chats list for one of its own; each carries an id so repeats are seen.
+    struct ChatRequest: Equatable { enum Kind { case back, profile, rename, context, newChat, close }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
+    var chatRequest: ChatRequest?
+    struct ChatListRequest: Equatable { enum Kind { case newBot, manageProjects, selectChats }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
+    var chatListRequest: ChatListRequest?
+    /// The other root pages' bar actions, asked for by the morph prototype's bar; each page
+    /// answers its own.
+    struct PageRequest: Equatable {
+        enum Kind { case botsNewBot, filesHome, filesToggleHidden, filesUpload, projectsNew, tasksAdd, boardNew, sessionsAdvanced }
+        let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind }
+    }
+    var pageRequest: PageRequest?
+    /// Files' hidden-files switch, mirrored for the bar's icon.
+    var filesShowHidden = false
+    #if os(iOS)
+    /// Each root page's pull-to-refresh state, for the bar's title capsule to host the wheel.
+    var pullStates: [AppTab: PullRefreshState] = [:]
+    #endif
     /// …and while any view marked `hidesTabBar()` is on screen on that tab. Counted per tab: a
     /// tap on the bar as it slides away switches tabs, and the new tab must show it again while
     /// the old one keeps its chat open.

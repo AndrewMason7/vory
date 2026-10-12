@@ -266,7 +266,11 @@ struct EnvView: View {
             }
         }
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } }
+        .toolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } } }
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .tasksAdd else { return }
+            model.pageRequest = nil; showAdd = true
+        }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
@@ -911,11 +915,17 @@ struct SessionsView: View {
         .onChange(of: search) { _, _ in Task { await load() } }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .sessionsAdvanced else { return }
+            model.pageRequest = nil; showAdvanced = true
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                if !MorphTopBar.active(model) {
                 Menu {
                     Button { showAdvanced = true } label: { Label("Advanced", systemImage: "internaldrive") }
                 } label: { Label("Options", systemImage: "gearshape") }
+                }
             }
         }
         .sheet(isPresented: $showAdvanced) { SessionStoreSheet(stats: stats).sheetFrame().withAppModel() }

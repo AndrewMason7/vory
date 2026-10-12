@@ -231,6 +231,8 @@ struct MainTabView: View {
                 ForEach(tabs, id: \.self) { tab in
                     content(for: tab)
                         .opacity(model.selectedTab == tab ? 1 : 0)
+                        // The morph prototype's "cut" variant: the page swap is not animated.
+                        .transaction { if MorphTopBar.cutsPages { $0.animation = nil } }
                         .allowsHitTesting(model.selectedTab == tab)
                         .accessibilityHidden(model.selectedTab != tab)
                         // A hidden page's faces hold still: at opacity 0 they kept their
@@ -238,6 +240,8 @@ struct MainTabView: View {
                         .environment(\.botsLive, model.selectedTab == tab)
                 }
             }
+            // The morph prototype's top controls, over every page and outside the stacks.
+            .overlay(alignment: .top) { if MorphTopBar.active(model) { MorphTopBar() } }
             // Reserves the bar's height (or width) so lists end before it; the bar itself is
             // hidden (slid off its edge) inside a chat and the setup wizard, and the pages then
             // use the full height. The bar is never removed from the tree: an insert/remove
@@ -316,12 +320,16 @@ struct MainTabView: View {
                 if ended {
                     Perf.stamp("pop: progress ended fraction=\(fraction) over \(duration)")
                     withAnimation(.easeOut(duration: duration)) { model.popProgress = fraction }
+                    // The morph prototype's controls finish with the bar, over the same remainder.
+                    if MorphTopBar.on { MorphState.shared.release(fraction, over: duration) }
                     // After the transition the path has changed and the bar is shown by its own
                     // state again; the progress goes back to zero for the next chat, unanimated.
                     DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { model.popProgress = 0 } }
                 } else {
                     var t = Transaction(); t.disablesAnimations = true
                     withTransaction(t) { model.popProgress = fraction }
+                    // The morph prototype's controls follow the finger (Matt, 2026-10-12).
+                    if MorphTopBar.on { MorphState.shared.scrub(fraction) }
                 }
             }
         }
