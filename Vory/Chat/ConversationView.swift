@@ -17,8 +17,6 @@ struct ConversationView: View {
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
-    /// The dock's top measured while a finger drags the thread, applied when it lifts.
-    @State private var heldDockTop: CGFloat?
     @State private var dockBottom: CGFloat = 0
     #if os(iOS)
     /// The tab bar's height under the chat, when it is there and runs along the bottom.
@@ -296,17 +294,11 @@ struct ConversationView: View {
             // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
             // The dock's top edge on screen, keyboard included: the thread measures its
-            // own bottom edge the same way and keeps its last line above this. Not while a
-            // finger drags the thread: an interactive keyboard dismiss moves the dock on every
-            // tracked frame, and each new top re-ran the thread and rebuilt its visible rows
-            // (60 to 79 ms a frame in Matt's hand trace, 2026-10-11); the thread takes the
-            // dock's new place once the finger lifts.
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                if BotAmbient.shared.threadDragging, dockTop > 0 { heldDockTop = top } else { dockTop = top; heldDockTop = nil }
-            }
-            .onChange(of: BotAmbient.shared.threadDragging) { _, dragging in
-                if !dragging, let top = heldDockTop { dockTop = top; heldDockTop = nil }
-            }
+            // own bottom edge the same way and keeps its last line above this. It follows
+            // every frame of an interactive keyboard dismiss too: the thread's rows no longer
+            // rebuild for it (TranscriptRow takes its open states as values), so the thread
+            // rides with the keyboard instead of holding and jumping (Matt, 2026-10-11).
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
             // The dock's frame for the UI tests (its own container: an identifier on a plain
             // view goes to every child, and the composer lost its name).
             .accessibilityElement(children: .contain)
