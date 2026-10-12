@@ -64,7 +64,8 @@ struct SettingsView: View {
                     Section {
                         NavigationLink { CompanionView() } label: {
                             HStack(spacing: 12) {
-                                BotFaceView(spec: AboutView.voryBot, size: 46, active: true)
+                                // A picture that blinks: the live face kept the page redrawing at rest (#248).
+                                BotStill(spec: AboutView.voryBot, size: 46)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Unlock Vory's full potential").font(.headline)
                                     Text("Install the Companion for \(DeviceWords.companionBrings).").font(.caption).foregroundStyle(.secondary)

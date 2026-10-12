@@ -61,14 +61,17 @@ enum BotAvatarImage {
         return img
     }
 
-    /// A look that is not a bot's own (the Look tab's shape and eye tiles): memoised by its spec.
-    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme) -> UIImage {
-        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")" as NSString
+    /// A look that is not a bot's own (the Look tab's shape and eye tiles, the Companion card's
+    /// bot): memoised by its spec. `closed`: mid-blink, for the blink by picture swap.
+    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool = false) -> UIImage {
+        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")" as NSString
         if let hit = cache.object(forKey: key) { return hit }
+        BotFace.stillBlink = closed ? 1 : 0
         let r = ImageRenderer(content: BotFaceView(spec: spec, size: size, active: false, drawn: true).environment(\.colorScheme, scheme))
         r.scale = 3
         r.isOpaque = false
         let img = (r.uiImage ?? UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in }).withRenderingMode(.alwaysOriginal)
+        BotFace.stillBlink = 0
         cache.setObject(img, forKey: key)
         return img
     }

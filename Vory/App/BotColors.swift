@@ -110,19 +110,11 @@ struct BotAvatar: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.botsLive) private var pageLive
     /// A small idle face blinks by picture: the eyes-shut still for a moment, then the open one.
     /// The live view is mounted only for a finish spin or a tap, see `restsAsImage` (mounted
     /// around each blink, it drew a shade brighter than the still: Matt, 2026-10-12, "randomly
     /// loading the bot colors ... it should just load it once and keep it").
     @State private var eyesShut = false
-    private static var reduceMotionOn: Bool {
-        #if os(iOS)
-        UIAccessibility.isReduceMotionEnabled
-        #else
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        #endif
-    }
 
     /// A small idle face in a list draws as a picture: one cached image per look, no Canvas, no
     /// shadow filter pass on every scrolled frame (the phone's list fling spent its frames on
@@ -170,24 +162,61 @@ struct BotAvatar: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
-        // Between blinks the open picture; at each blink the shut one for 120 ms (one wakeup
-        // per blink), unless the list is moving (then the blink is skipped). Only on the page in
-        // front: the loop starts again as its page comes forward or goes (a face mounted behind
-        // another tab never blinked, and one that started in front kept waking behind a hidden
-        // tab, #248). The Mac stays still at rest (Matt, 2026-10-12: "Stay still on the Mac"):
-        // its faces blink only while a bot is working, as its live faces do.
-        .task(id: "\(profile)|\(size)|\(active)|\(mood.state == .idle)|\(pageLive)|\(BotAmbient.shared.decorativeActive)") {
-            guard pageLive, BotAmbient.shared.decorativeActive, !active, !drawn, !mood.followsTilt, mood.state == .idle else { return }
+        .modifier(StillBlink(shut: $eyesShut, seed: blinkSeed, key: "\(profile)|\(size)|\(active)|\(mood.state == .idle)",
+                             on: !active && !drawn && !mood.followsTilt && mood.state == .idle))
+    }
+}
+
+/// A fixed look's face at rest, not a bot's own (the Companion card's Vory bot): a cached
+/// picture that blinks by swapping to its eyes-shut twin, as a list row's face does. The live
+/// glass face redrew the whole Settings page on every frame at rest (18% CPU on the simulator).
+struct BotStill: View {
+    let spec: BotLookSpec
+    let size: CGFloat
+    @State private var shut = false
+    @Environment(\.colorScheme) private var colorScheme
+    var body: some View {
+        Image(uiImage: BotAvatarImage.cached(spec: spec, size: size, scheme: colorScheme, closed: shut))
+            .resizable().frame(width: size, height: size)
+            .accessibilityHidden(true)
+            .modifier(StillBlink(shut: $shut, seed: (spec.shape + spec.eyes).utf8.reduce(0) { $0 &* 31 &+ Int($1) } & 0xFFFFF,
+                                 key: "\(spec.shape)|\(spec.eyes)|\(size)", on: true))
+    }
+}
+
+/// The picture blink: between blinks the open picture, at each blink the shut one for 120 ms
+/// (one wakeup per blink), skipped while a list is moving. Only on the page in front: the loop
+/// starts again as its page comes forward or goes (a face mounted behind another tab never
+/// blinked, and one that started in front kept waking behind a hidden tab, #248). The Mac stays
+/// still at rest (Matt, 2026-10-12: "Stay still on the Mac"): its faces blink only while a bot
+/// is working, as its live faces do.
+private struct StillBlink: ViewModifier {
+    @Binding var shut: Bool
+    let seed: Int
+    /// What the face is (a change starts the loop again).
+    let key: String
+    let on: Bool
+    @Environment(\.botsLive) private var pageLive
+    private static var reduceMotionOn: Bool {
+        #if os(iOS)
+        UIAccessibility.isReduceMotionEnabled
+        #else
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #endif
+    }
+    func body(content: Content) -> some View {
+        content.task(id: "\(key)|\(on)|\(pageLive)|\(BotAmbient.shared.decorativeActive)") {
+            guard on, pageLive, BotAmbient.shared.decorativeActive else { return }
             while !Task.isCancelled {
                 let now = Date().timeIntervalSinceReferenceDate
-                let next = BotMotionModel.nextBlink(after: now + 0.1, seed: blinkSeed)
+                let next = BotMotionModel.nextBlink(after: now + 0.1, seed: seed)
                 try? await Task.sleep(for: .seconds(max(0.05, next - now)))
                 if Task.isCancelled { return }
                 // Reduce Motion holds the eyes open on the live face too (no blink).
                 if BotAmbient.shared.scrolling || !BotAmbient.shared.enabled || Self.reduceMotionOn { continue }
-                eyesShut = true
+                shut = true
                 try? await Task.sleep(for: .milliseconds(120))
-                eyesShut = false
+                shut = false
             }
         }
     }
