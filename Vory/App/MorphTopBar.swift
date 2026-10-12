@@ -89,15 +89,16 @@ struct MorphTopBar: View {
     /// Content Viewer instead, so the pill's long-press menu steps aside (its items are in …).
     @Environment(\.dynamicTypeSize) private var typeSize
     private var axSize: Bool { typeSize.isAccessibilitySize }
-    static var on: Bool { ProcessInfo.processInfo.arguments.contains("-vory-morph-root") }
+    /// On by default (Matt, 2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
+    /// shipped chrome back for a comparison.
+    static var on: Bool { !ProcessInfo.processInfo.arguments.contains("-vory-morph-off") }
     /// The bar runs where a chat pushes over the list (a phone, the closed Duo's strip): that is
     /// the only place a morph exists. On a wide window (iPad, the open Duo) the list and the
     /// chat stand in their own columns with the shipped chrome, each over its column.
     static func active(_ model: AppModel) -> Bool { on && !model.wideLayout }
-    /// A variant for comparison: the pages swap at once on a tab switch while the bar morphs,
-    /// instead of cross-fading under it (the old page's search field showed under the new
-    /// title for a few frames).
-    static var cutsPages: Bool { on && ProcessInfo.processInfo.arguments.contains("-vory-morph-cut") }
+    /// The pages swap at once on a tab switch while the bar morphs (Matt's pick, "Instant
+    /// swap", 2026-10-12); `-vory-morph-fade` keeps the old cross-fade for a comparison.
+    static var cutsPages: Bool { on && !ProcessInfo.processInfo.arguments.contains("-vory-morph-fade") }
     private var state: MorphState { MorphState.shared }
     /// The two end states' capsule frames, measured from invisible copies laid out underneath.
     @State private var chatFrames: [MorphSlot: CGRect] = [:]
@@ -151,7 +152,10 @@ struct MorphTopBar: View {
         // the measured frames (a slot that went away left a faint empty capsule on Settings).
         let chrome = tabChrome(model.selectedTab)
         let pageHas = slot == .mid || (slot == .lead ? chrome.lead != nil : chrome.trail != nil)
-        let present = state.chat != nil ? (shown < 0.5 || pageHas) : pageHas
+        // Over a page pushed on another tab, or a group chat on Chats, the bar steps aside:
+        // those pages keep the system's own bar (their title and Back).
+        let pushedAway = model.selectedTab == .chats ? (model.chatsPathOpen && state.chat == nil) : (model.tabAtRoot[model.selectedTab] == false)
+        let present = !pushedAway && (state.chat != nil ? (shown < 0.5 || pageHas) : pageHas)
         if let b = listFrames[slot] ?? lastListFrames[slot] ?? chatFrames[slot] {
             let f = chatFrames[slot].map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
             ZStack {

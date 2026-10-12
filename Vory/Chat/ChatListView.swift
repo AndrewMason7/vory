@@ -300,7 +300,10 @@ struct ChatListView: View {
             #else
             // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
             // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
-            .pullRefresh { await load() }
+            .pullRefresh(ownWheel: true) { await load() }
+            // The list's pull state, for the morph bar's title capsule to host the wheel (the
+            // other roots publish theirs from TabRoot; the Chats page has no TabRoot).
+            .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[.chats] = r.state } }
             #endif
             .task(id: runtime?.connection.id) { await load() }
             .task(id: runtime?.selectedProfile) { await load() }

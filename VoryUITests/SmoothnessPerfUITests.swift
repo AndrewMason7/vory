@@ -16,9 +16,9 @@ final class SmoothnessPerfUITests: XCTestCase {
         return (u, t)
     }
 
-    private func launch(url: String, token: String, tab: String = "chats") {
+    private func launch(url: String, token: String, tab: String = "chats", extra: [String] = []) {
         // HERMES_E2E_ARGS: extra launch arguments, space-separated (the measurement switches).
-        let args = ["-companionPromptShown", "YES", "-launchTab", tab, "-colorSchemePreference", "light", "-chat.showBots", "YES", "-chats.allBots", "YES"]
+        let args = ["-companionPromptShown", "YES", "-launchTab", tab, "-colorSchemePreference", "light", "-chat.showBots", "YES", "-chats.allBots", "YES"] + extra
             + (ProcessInfo.processInfo.environment["HERMES_E2E_ARGS"] ?? "").split(separator: " ").map(String.init)
         if let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
             app = XCUIApplication(bundleIdentifier: bundle)
@@ -178,10 +178,46 @@ final class SmoothnessPerfUITests: XCTestCase {
             shot("\(tab)-rest")
             let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
             top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)), withVelocity: .slow, thenHoldForDuration: 0.1)
-            pause(0.25)
+            // The wheel's spinner is the one accessible part of the pull ("Refreshing"): its
+            // presence after the release is the page's verdict, not a screenshot's timing.
+            let spinning = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Refreshing'")).firstMatch.waitForExistence(timeout: 1.5)
+            print("PULL-WHEEL \(tab) \(spinning ? "spinning" : "none")")
             shot("\(tab)-refreshing")
             pause(1.5)
         }
+    }
+
+    /// The pull-to-refresh wheel on every root that can refresh (Matt, 2026-10-12: "the pull to
+    /// refresh wheel doesn't appear on some of the pages"): the bar is relaunched with each group
+    /// of four tabs, every page pulled, and the wheel's "Refreshing" looked for after the release.
+    func testPullWheelEveryRoot() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        // Four slots on the bar, Chats and Settings always among them: two pages per launch.
+        let groups = [["dashboard", "bots"], ["files", "projects"], ["kanban", "sessions"], ["cron", "status"], ["approvals", "system", "settings"]]
+        let canRefresh: Set<String> = ["chats", "dashboard", "bots", "files", "projects", "kanban", "sessions", "cron", "status"]
+        var missing: [String] = []
+        for group in groups {
+            // The once-per-phone Home-first write would replace the layout: mark it done.
+            launch(url: url, token: token, extra: ["-tabLayout", (["chats"] + group).joined(separator: ","), "-tabLayout.homeFirstApplied", "YES"])
+            waitForList()
+            for tab in group + ["chats"] {
+                let slot = app.descendants(matching: .any).matching(identifier: "tab.\(tab)").firstMatch
+                // A page the gateway cannot show (the Board without its plugin) has no slot.
+                guard slot.waitForExistence(timeout: 5) else { print("PULL-WHEEL \(tab) no-slot"); continue }
+                slot.tap(); pause(1.5)
+                let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)), withVelocity: .slow, thenHoldForDuration: 0.1)
+                let wheel = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Refreshing'")).firstMatch
+                let spinning = wheel.waitForExistence(timeout: 1.5)
+                print("PULL-WHEEL \(tab) \(spinning ? "spinning at \(wheel.frame.origin)" : "none")")
+                shot("\(tab)-refreshing")
+                if canRefresh.contains(tab), !spinning { missing.append(tab) }
+                pause(1.5)
+            }
+            app.terminate()
+        }
+        XCTAssertTrue(missing.isEmpty, "no pull wheel on: \(missing.joined(separator: ", "))")
     }
 
     /// Every way back out of a chat, for a clip and a hitch trace: a slow swipe let go past the
@@ -402,6 +438,21 @@ final class SmoothnessPerfUITests: XCTestCase {
         state("upright")
         XCUIDevice.shared.orientation = .landscapeLeft; pause(2.5); state("landscape")
         XCUIDevice.shared.orientation = .portrait; pause(2.5); state("upright-again")
+    }
+
+    /// A page pushed on another tab (Settings → a row) with the morph bar on: the bar steps aside
+    /// and the pushed page keeps the system's title and Back; then Back to the root.
+    func testMorphPushedPage() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        pause(2); shot("settings-root")
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        row.tap(); pause(1.5); shot("settings-pushed")
+        let back = app.navigationBars.buttons.firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "the pushed page has no Back")
+        back.tap(); pause(1.5); shot("settings-root-again")
     }
 
     /// The "/" list out of the field and back (type "/", then delete it).

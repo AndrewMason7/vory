@@ -343,14 +343,22 @@ struct HidesTabBar: ViewModifier {
 /// while deeper pops the stack the way a swipe back would, animated.
 struct TabRoot: ViewModifier {
     @Environment(AppModel.self) private var model
+    /// The page's pull-to-refresh state when its `.reloadable` is applied outside this marker
+    /// (Bots, Files): by environment then, by preference when it sits inside (Home, Projects,
+    /// the Board, Status, Sessions, Tasks). The bar's title capsule hosts the wheel either way;
+    /// Bots and Files had no wheel (Matt, 2026-10-12).
+    @Environment(PullRefreshState.self) private var pullAround: PullRefreshState?
+    @State private var pullBelow: PullRefreshState?
     var tab: AppModel.AppTab
+    private func publishPull() { model.pullStates[tab] = pullBelow ?? pullAround }
     func body(content: Content) -> some View {
         content
             // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
             // refresh wheel sits beside it on the pages that can refresh.
             .pageHeading(tab.title, on: !model.wideLayout && !MorphTopBar.on)
-            // The page's pull-to-refresh state, for the morph prototype's bar to host its wheel.
-            .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[tab] = r.state } }
+            // The page's pull-to-refresh state, for the bar's title capsule to host its wheel.
+            .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in pullBelow = r.state; publishPull() } }
+            .onChange(of: pullAround.map(ObjectIdentifier.init), initial: true) { _, _ in publishPull() }
             // Under the morph prototype the bar draws the title: the stack's own (large by
             // default on a root) goes, as it does on Chats, so no root shows two.
             .navigationBarTitleDisplayMode(MorphTopBar.active(model) ? .inline : .automatic)

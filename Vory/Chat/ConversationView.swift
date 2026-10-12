@@ -63,18 +63,7 @@ struct ConversationView: View {
                 framed(chat)
                     .handsOff(chat)
                     .navigationTitle(chat.title)
-                    #if os(iOS)
-                    // Morph prototype (BRIEF-1.5-MORPH option A, `-vory-morph-header`): the header's
-                    // controls as real toolbar items, so the system carries their glass across the
-                    // push and the pop from the list's heading and buttons; the overlay header
-                    // stays otherwise. `-vory-morph-style system` is a plain principal button on the
-                    // system's glass; `own` is Vory's seated-face pill on its own glass.
-                    .toolbar(morphHeader ? .visible : .hidden, for: .navigationBar)
-                    .toolbar { if morphHeader { morphToolbar(chat) } }
-                    .onAppear { if morphHeader { headerHeight = 44 } }
-                    #else
                     .toolbar(.hidden, for: .navigationBar)
-                    #endif
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
@@ -220,7 +209,9 @@ struct ConversationView: View {
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
             dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
         }
-            .overlay(alignment: .top) { if !morphHeader && !MorphTopBar.active(model) { header(chat) } }
+            // On a one-column layout the morph bar (MorphTopBar) draws the chat's controls; on a
+            // wide window this header does, over the detail column.
+            .overlay(alignment: .top) { if !MorphTopBar.active(model) { header(chat) } }
             // Voice mode runs out of sight under its pill, and in front on its own screen.
             .overlay(alignment: .top) {
                 if HandsFreeSession.shared.isActive(for: chat), HandsFreeSession.shared.minimized {
@@ -330,42 +321,6 @@ struct ConversationView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat.dock")
     }
-    #if os(iOS)
-    private var morphHeader: Bool { ProcessInfo.processInfo.arguments.contains("-vory-morph-header") }
-    private var morphStyle: String {
-        let a = ProcessInfo.processInfo.arguments
-        if let i = a.firstIndex(of: "-vory-morph-style"), i + 1 < a.count { return a[i + 1] }
-        return "system"
-    }
-    @ToolbarContentBuilder private func morphToolbar(_ chat: ChatSession) -> some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            if morphStyle == "own" {
-                ChatTitlePill(chat: chat, onProfile: { showProfile = true }, onRename: { renaming = true })
-            } else {
-                Button {
-                    BotAmbient.shared.tap(profile: chat.profileName)
-                    showProfile = true
-                } label: {
-                    HStack(spacing: 6) {
-                        BotAvatar(profile: chat.profileName, size: 22, active: chat.isRunning, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
-                        Text(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName).font(.headline).lineLimit(1)
-                    }
-                    .padding(.horizontal, 2)
-                }
-                .accessibilityIdentifier("chat.titlePill")
-            }
-        }
-        .sharedBackgroundVisibility(morphStyle == "own" ? .hidden : .visible)
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
-                              onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
-            } label: { Image(systemName: "ellipsis") }
-            .accessibilityIdentifier("chat.more")
-        }
-    }
-    #endif
-
     private func header(_ chat: ChatSession) -> some View {
         // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
         FoldReader { fold in
@@ -676,61 +631,6 @@ struct ChatHeader: View {
         }
     }
 }
-
-#if os(iOS)
-/// The header's bot pill on its own (the morph prototype's principal toolbar item): the bot
-/// seated on a capsule with the name and the step. A copy of `ChatHeader`'s pill without the
-/// fold avoidance; folded back into the header if the prototype wins.
-struct ChatTitlePill: View {
-    @Bindable var chat: ChatSession
-    var onProfile: () -> Void
-    var onRename: () -> Void
-    @State private var popped = false
-    @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
-    @AppStorage(BotNames.storageKey) private var namesRaw = ""
-    private var botLabel: String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
-    private var headline: String { headerShowsTitle ? chat.title : botLabel }
-    private var idleLine: String { headerShowsTitle ? chat.subtitle : (chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title) }
-    var body: some View {
-        Button {
-            BotAmbient.shared.tap(profile: chat.profileName)
-            onProfile()
-        } label: {
-            VStack(spacing: chat.botState == .awaitingApproval ? 2 : -(9 + 52 * BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName).spec(hex: "").shape))) {
-                BotAvatar(profile: chat.profileName, size: 52, active: chat.isRunning, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
-                    .opacity(popped ? 1 : 0)
-                    .zIndex(1)
-                    .allowsHitTesting(false)
-                VStack(spacing: 1) {
-                    HStack(spacing: 3) {
-                        Text(headline.count > 26 ? String(headline.prefix(25)) + "…" : headline).font(.caption.weight(.semibold)).lineLimit(1)
-                        Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
-                    }
-                    let goal = chat.isRunning ? ChatGoals.shared.goal(for: chat.storedID) : nil
-                    let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : idleLine)
-                    Text(status.count > 42 ? String(status.prefix(41)).trimmingCharacters(in: .whitespaces) + "…" : status)
-                        .font(.caption2).lineLimit(1).foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-                        .animation(.snappy, value: chat.statusLine)
-                }
-                .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 6)
-                .fixedSize(horizontal: false, vertical: true)
-                .glassEffect(.regular.interactive(), in: .capsule)
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onAppear { withAnimation(.easeOut(duration: 0.25).delay(0.05)) { popped = true } }
-        .contextMenu {
-            Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
-            Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
-        }
-        .accessibilityLabel("Chat info: \(chat.title), \(chat.subtitle)")
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityIdentifier("chat.titlePill")
-    }
-}
-#endif
 
 /// The … menu's items, shared by the iOS header's glass circle and the Mac toolbar's button.
 struct ChatMenuItems: View {

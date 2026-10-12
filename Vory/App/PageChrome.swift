@@ -1,6 +1,10 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import os
+
+/// The pull's steps in the perf log (DEBUG), so a UI test run can say where a pull stopped.
+private let pullLog = Logger(subsystem: "Vory", category: "perf")
 
 // The phone's page chrome: the leading title every tab root shares (the Chats look, Matt
 // 2026-10-12: "add the heading style of the chats page to all the other pages") and Vory's own
@@ -65,6 +69,9 @@ struct PullRefresh: ViewModifier {
                 if state.progress >= 1, state.dragging, !state.armed {
                     state.armed = true
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    #if DEBUG
+                    pullLog.notice("pull armed over=\(Int(over)) hosted=\(state.hosted)")
+                    #endif
                 }
             }
             .accessibilityAction(named: "Refresh") { if !state.refreshing { refresh() } }
@@ -79,6 +86,9 @@ struct PullRefresh: ViewModifier {
     }
 
     private func refresh() {
+        #if DEBUG
+        pullLog.notice("pull fired hosted=\(state.hosted)")
+        #endif
         state.refreshing = true
         Task {
             async let settle: Void = Task.sleep(for: .milliseconds(600))
@@ -101,6 +111,7 @@ struct PullRefreshWheel: View {
     var fromBelow: PullRefreshState? = nil
     @Environment(PullRefreshState.self) private var around: PullRefreshState?
     private var pull: PullRefreshState? { fromBelow ?? around }
+    @State private var claimed: PullRefreshState?
     /// Grows with the title's type (the accessibility sizes), as a glyph beside it would.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
     var body: some View {
@@ -117,8 +128,13 @@ struct PullRefreshWheel: View {
         .frame(width: pull == nil ? 0 : side, height: side)
         .padding(.leading, pull == nil ? 0 : side * 0.4)
         .animation(.snappy(duration: 0.2), value: pull?.refreshing ?? false)
-        .onAppear { if hosting { pull?.hosted = true } }
-        .onDisappear { if hosting { pull?.hosted = false } }
+        // The claim follows the state: the bar's one wheel is handed each tab's state in turn
+        // (onAppear ran once, so the second tab's pull added its own wheel as well).
+        .onChange(of: pull.map(ObjectIdentifier.init), initial: true) { _, _ in
+            guard hosting else { return }
+            if claimed !== pull { claimed?.hosted = false; claimed = pull; pull?.hosted = true }
+        }
+        .onDisappear { if hosting { claimed?.hosted = false; claimed = nil } }
         // VoiceOver hears the refresh, not the pull: the arc is decoration, the spinner says so.
         .accessibilityHidden(!(pull?.refreshing ?? false))
         .accessibilityLabel("Refreshing")
