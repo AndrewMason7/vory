@@ -46,7 +46,7 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
         chat = c
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = 0 } }
         // Quick, as the system's own glass morphs are (Matt, 2026-10-12: "too slow").
-        else { withAnimation(.snappy(duration: 0.22)) { t = 0 } }
+        else { withAnimation(.spring(duration: 0.26, bounce: 0)) { t = 0 } }
     }
     func scrub(_ fraction: CGFloat) {
         guard chat != nil else { return }
@@ -59,9 +59,11 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     func release(_ fraction: CGFloat, over duration: Double) {
         guard chat != nil else { return }
         scrubbing = false
-        let d = max(0.15, duration)
+        // Quick either way: the system's remainder can be half a second, the morph takes
+        // at most a quarter (the Claude app's pace, Matt 2026-10-12).
+        let d = min(0.25, max(0.12, duration))
         let end: CGFloat = fraction >= 1 ? 1 : 0
-        withAnimation(.easeOut(duration: d)) { t = end }
+        withAnimation(.spring(duration: d, bounce: 0)) { t = end }
         // Settled for certain once the transition is over: a trailing event from the second
         // recognizer (the edge gesture and the full-screen pan both drive the pop) could leave
         // `t` or `scrubbing` part-way, which switched the bar's hit testing off (Back after a
@@ -76,8 +78,8 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// A pop that was not a swipe (the Back button): the timed morph.
     func pop() {
         guard chat != nil, !scrubbing else { return }
-        let d = 0.22
-        withAnimation(.snappy(duration: d)) { t = 1 }
+        let d = 0.26
+        withAnimation(.spring(duration: d, bounce: 0)) { t = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) { if self.t >= 1 { self.chat = nil } }
     }
 }
@@ -165,9 +167,13 @@ struct MorphTopBar: View {
             ZStack {
                 // Only the state that is showing takes taps: the other sits in the stack at
                 // opacity 0 and would otherwise cover it (the Back tap went nowhere).
-                if let chat = state.chat { chatContent(slot, chat).opacity(Double(1 - shown)).allowsHitTesting(shown < 0.5) }
+                // Each set is seen alone: the outgoing one is gone by a third of the way and the
+                // incoming one arrives past the half, so the capsule carries one control at a
+                // time instead of two half-faded over each other (Matt, 2026-10-12, against the
+                // Claude app's morph: crisp, each element fading in place).
+                if let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
                 // Keyed by tab, so a tab switch cross-fades one page's control into the next's.
-                listContent(slot).id(model.selectedTab).transition(.opacity).opacity(Double(shown)).allowsHitTesting(shown >= 0.5 && pageHas)
+                listContent(slot).id(model.selectedTab).transition(.opacity).opacity(Double(max(0, (shown - 0.5) * 2.4))).allowsHitTesting(shown >= 0.5 && pageHas)
             }
             // An absent slot shrinks to nothing where it was: a view's opacity does not fade
             // glass (the + panel taught that), so the capsule also drops its glass there, in
@@ -186,8 +192,9 @@ struct MorphTopBar: View {
         let drop = BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName).spec(hex: "").shape)
         return BotAvatar(profile: chat.profileName, size: 52, active: chat.isRunning,
                          mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
-            .scaleEffect(reduceMotion ? 1 : 0.5 + 0.5 * (1 - t))
-            .opacity(Double(1 - shown))
+            .scaleEffect(reduceMotion ? 1 : 0.6 + 0.4 * (1 - t))
+            // The face lands last: it is seen only once the pill is nearly in place.
+            .opacity(Double(max(0, 1 - shown * 2.4)))
             // Seated on the pill by its base, as ChatHeader seats it: 9 pt over the top edge
             // plus the shape's own seat.
             .position(x: mid.midX, y: mid.minY + 9 - 26 + 52 * drop)

@@ -762,15 +762,21 @@ struct ChatListView: View {
             var all: [StoredSession] = []
             if prefs.allBots {
                 let profiles = runtime.profiles.map(\.name)
-                try await withThrowingTaskGroup(of: [StoredSession].self) { group in
+                // Each bot's rows in the bots' own order, whichever answered first: a chat the
+                // gateway lists under several bots kept whichever listing arrived first, so its
+                // bot and avatar flipped between loads (Matt, 2026-10-12: "the bots and chats
+                // glitch out").
+                var byProfile: [String: [StoredSession]] = [:]
+                try await withThrowingTaskGroup(of: (String, [StoredSession]).self) { group in
                     for p in profiles {
                         group.addTask {
                             let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "50")], profile: p)
-                            return r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s }
+                            return (p, r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
                         }
                     }
-                    for try await part in group { all += part }
+                    for try await (p, part) in group { byProfile[p] = part }
                 }
+                for p in profiles { all += byProfile[p] ?? [] }
                 // One row per chat: a gateway whose bots share a store (and the mock) lists the
                 // same chat under every bot, and All bots showed each one twice.
                 var seen = Set<String>()
@@ -811,7 +817,11 @@ struct ChatListView: View {
                 guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
                 var kept = s; kept.lastActive = was; return kept
             }
-            sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            // Placed without animation: rows whose words changed cross-faded over themselves.
+            var tx = Transaction(); tx.disablesAnimations = true
+            withTransaction(tx) {
+                sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            }
             // What Siri can name without the app on screen: the bots and the recent chats' titles (#310).
             SiriCatalog.rememberBots(runtime.profiles)
             SiriCatalog.rememberChats(sessions)

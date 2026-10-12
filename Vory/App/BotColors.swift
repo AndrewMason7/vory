@@ -147,6 +147,14 @@ struct BotAvatar: View {
             } else if restsAsImage {
                 Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme))
                     .resizable().frame(width: size, height: size)
+            } else if size <= 40, !drawn, override == nil {
+                // A row's face: the cached still stays underneath while the live view mounts
+                // (for a blink, or when the app comes forward), so the row never draws empty
+                // for a frame (Matt, 2026-10-12, after an app switch).
+                ZStack {
+                    Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme)).resizable().frame(width: size, height: size)
+                    BotFaceView(spec: choice.spec(hex: hex), size: size, active: active, drawn: drawn, mood: effectiveMood)
+                }
             } else {
                 BotFaceView(spec: choice.spec(hex: hex), size: size, active: active, drawn: drawn, mood: effectiveMood)
             }
