@@ -819,6 +819,28 @@ final class SmoothnessPerfUITests: XCTestCase {
         onTab("chats") {}
     }
 
+    /// A long reply streamed at the usual pace (the mock's `long`), the chat open over the list:
+    /// what each token costs while a reply streams, for the hitch and Time Profiler recordings
+    /// and the DEBUG body counters (`HERMES_E2E_ROW` sets the seconds, 30 by default).
+    func testStreamLongReply() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        let secs = Int(ProcessInfo.processInfo.environment["HERMES_E2E_ROW"] ?? "") ?? 30
+        launch(url: url, token: token)
+        waitForList(); clearSystemAlert()
+        openFirstChat(); pause(1.5)
+        let composer = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 10), "no composer")
+        composer.tap(); pause(0.5)
+        composer.typeText("long \(secs)")
+        let send = app.buttons.matching(identifier: "composer.send").firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "no send button")
+        send.tap()
+        if app.keyboards.buttons["Hide keyboard"].firstMatch.waitForExistence(timeout: 1) { app.keyboards.buttons["Hide keyboard"].firstMatch.tap() }
+        print("STREAM-AT start")
+        pause(Double(secs) + 4)
+        print("STREAM-AT end")
+    }
+
     /// Tab switches by a tap, Chats → Bots → Files → Settings → Chats, for a frame check of the
     /// morph prototype's bar morphing one page's set into the next.
     func testTabTapSwitch() throws {

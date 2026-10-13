@@ -1885,6 +1885,23 @@ class Gateway:
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)
             return
+        if prompt.strip().lower().startswith("long"):
+            # A long answer streamed at the usual pace, for what each token costs the app while a
+            # reply streams: `long 40` streams for about 40 s (30 when no number is given).
+            m = re.search(r"\d+", prompt)
+            secs = max(5, min(600, int(m.group()) if m else 30))
+            await self.event("message.start", s.sid)
+            para = ("The nightly export now writes to the backups disk in batches of a thousand rows, "
+                    "and each batch is checked against its source before the next one starts. ")
+            text, n = "", 0
+            while len(text) < secs * 240:   # about 240 characters a second at the 35 ms pace
+                n += 1
+                text += f"**Step {n}.** {para}" + ("\n\n" if n % 3 == 0 else "")
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
         if prompt.strip().lower().startswith("files"):
             # Files handed back by a reply (#309): a PDF on a MEDIA line, a CSV with a space in
             # its name as a markdown link, and a path that only looks like one.

@@ -182,6 +182,7 @@ struct MorphTopBar: View {
     private var shown: CGFloat { reduceMotion ? (t < 0.5 ? 0 : 1) : t }
 
     var body: some View {
+        let _ = Perf.tick("morphbar-body")
         GlassEffectContainer(spacing: 10) {
             ZStack(alignment: .topLeading) {
                 // The end states, for their frames only.

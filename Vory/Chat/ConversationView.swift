@@ -60,6 +60,7 @@ struct ConversationView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        let _ = Perf.tick("conversation-body")
         Group {
             if let chat {
                 framed(chat)

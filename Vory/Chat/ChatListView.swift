@@ -1146,6 +1146,7 @@ struct SessionRow: View {
     var summary: ChatSummarizer.Summary? = nil
 
     var body: some View {
+        let _ = Perf.tick("list-row")
         HStack(spacing: 12) {
             // In the list: the eyes and the held pose (a squint, the pebble), no routines.
             if showBot { BotAvatar(profile: session.profile ?? botProfile ?? "?", size: 34, active: live, mood: BotFaceView.Mood(session: session.id, state: live ? state : .idle)) }
