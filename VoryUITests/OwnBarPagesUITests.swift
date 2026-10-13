@@ -56,9 +56,8 @@ final class OwnBarPagesUITests: XCTestCase {
         let bar = any("morph.bar")
         print("OWN-BAR \(page) morph.bar exists=\(bar.exists) type \(bar.exists ? bar.elementType.rawValue : 0) frame \(bar.exists ? bar.frame : .zero)")
         dumpBar(page)
-        // What a touch on the page's items would reach instead: the bar's hittable elements. (The
-        // bar's measuring copy of the root title, at opacity 0 and not hittable, shows in the tree
-        // on every pushed page; a finding of its own, not this test's.)
+        assertTitleCopies(page, 0)
+        // What a touch on the page's items would reach instead: the bar's hittable elements.
         let barControls = bar.exists ? bar.descendants(matching: .any).allElementsBoundByIndex.filter { $0.exists && $0.frame.width > 0 && $0.isHittable } : []
         for name in items {
             let item = app.navigationBars.buttons[name].firstMatch
@@ -69,6 +68,16 @@ final class OwnBarPagesUITests: XCTestCase {
             print("OWN-BAR \(page) \(name) at \(item.frame) bar controls over it: \(over)")
             XCTAssertTrue(over.isEmpty, "\(page): the bar's \(over) lie over its \(name)")
         }
+    }
+
+    /// How many "Settings" texts the bar holds: the seen title on Settings itself, none on a page
+    /// pushed from it. The bar's measuring copy of the title (laid out for its frame, never seen)
+    /// read as a second "Settings" on Settings and stayed in the tree on every pushed page.
+    private func assertTitleCopies(_ page: String, _ expected: Int) {
+        let bar = any("morph.bar")
+        guard bar.exists else { return }
+        let copies = bar.staticTexts.matching(NSPredicate(format: "label == 'Settings'")).count
+        XCTAssertEqual(copies, expected, "\(page): the bar holds \(copies) 'Settings' texts")
     }
 
     /// Everything the bar holds in the accessibility tree, with whether a tap would reach it.
@@ -88,10 +97,11 @@ final class OwnBarPagesUITests: XCTestCase {
         let gateway = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Workshop'")).firstMatch
         XCTAssertTrue(gateway.waitForExistence(timeout: 15), "no gateway row on Settings")
         pause(2)
+        dumpBar("Settings"); assertTitleCopies("Settings", 1)
         print("OWN-BAR-AT push gateways"); gateway.tap(); pause(1.5)
         XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "Gateways has no bar Back")
         XCTAssertTrue(pushRecord.contains("push animated=true coordinator=true depth=2 ownbar=false"), "Gateways: \(pushRecord)")
-        shot("gateways"); dumpBar("Gateways")
+        shot("gateways"); dumpBar("Gateways"); assertTitleCopies("Gateways", 0)
         // The row's edit link is the chevron at its trailing end.
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Workshop'")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5), "no gateway row on Gateways")
@@ -104,6 +114,7 @@ final class OwnBarPagesUITests: XCTestCase {
         print("OWN-BAR-AT pop gateways"); any("page.back").tap(); pause(1.5)
         XCTAssertFalse(any("page.back").exists, "Back did not reach Settings")
         XCTAssertTrue(any("morph.title").exists, "the bar's title is not back on Settings")
+        assertTitleCopies("Settings again", 1)
     }
 
     /// Settings › Status › Sign-in (Edit Gateway again, from another way in), Cancel back to Status.

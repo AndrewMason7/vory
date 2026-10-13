@@ -497,8 +497,10 @@ struct MorphTopBar: View {
         return HStack(spacing: 10) {
             if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
             // The title alone: the pull's wheel widens the seen capsule itself (CapsuleFrame), so
-            // a pull never changes what is measured here.
-            Text(model.selectedTab.title).font(.headline).fixedSize()
+            // a pull never changes what is measured here. Hidden, not only unseen: at opacity 0 under
+            // accessibilityHidden it stayed in the tree as a second title, a "Settings" text over a
+            // pushed page's Back.
+            Text(model.selectedTab.title).font(.headline).fixedSize().hidden()
             // A set height, not the text's measured one: measured afresh on each tab switch it
             // came out a few points taller for a moment and the capsule breathed (Matt,
             // 2026-10-12: "the height of the bubble from bot to settings seems to change").
