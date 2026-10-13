@@ -74,6 +74,16 @@ struct MarkdownTableLayout: Layout {
         var typeSize: DynamicTypeSize
         var bold: Bool
         var scale: CGFloat
+        /// The names an "@" in a cell can mean: a known one is drawn semibold, wider than the
+        /// table's font, and the names arrive or change after the table may have been measured.
+        /// Nil for a table with no "@", which they cannot change.
+        var names: Mentions.Names?
+
+        static func names(for table: MarkdownTable, _ names: Mentions.Names) -> Mentions.Names? {
+            let at = UInt8(ascii: "@")
+            let any = table.header.contains { $0.utf8.contains(at) } || table.rows.contains { $0.contains { $0.utf8.contains(at) } }
+            return any ? names : nil
+        }
     }
 
     struct Cache {
@@ -187,7 +197,8 @@ struct MarkdownTableGrid: View {
     var body: some View {
         let n = table.header.count
         let sizes = MarkdownTableLayout.SizeKey(table: table, font: font, lineLimit: lineLimit, headerInset: headerInset,
-                                                typeSize: typeSize, bold: legibility == .bold, scale: scale)
+                                                typeSize: typeSize, bold: legibility == .bold, scale: scale,
+                                                names: MarkdownTableLayout.SizeKey.names(for: table, Mentions.names))
         MarkdownTableLayout(columns: n, maxColumn: maxColumn, fillWidth: fillWidth, sizes: sizes) {
             ForEach(0..<n, id: \.self) { c in headerCell(c) }
             ForEach(0..<table.rows.count, id: \.self) { r in

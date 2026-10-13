@@ -125,6 +125,27 @@ import Testing
         #expect(L.SizeStore.shared.cache(for: other).natural == nil)
         #expect(L.SizeStore.shared.cache(for: nil).key == nil)
     }
+
+    @Test func aTableWithAMentionIsMeasuredAgainWhenTheNamesChange() throws {
+        typealias L = MarkdownTableLayout
+        // The bots' names arrive after the table was first measured: "@work" is then drawn
+        // semibold, wider, so the sizes measured without the names do not stand.
+        let t = try #require(onlyTable("| Owner | Task |\n|---|---|\n| @work | the deploy |\n"))
+        let before = Mentions.Names(), after = Mentions.Names(bots: ["work"], person: nil)
+        #expect(L.SizeKey.names(for: t, before) == before)
+        let key = L.SizeKey(table: t, font: .footnote, lineLimit: 3, headerInset: 22, typeSize: .large, bold: false, scale: 2,
+                            names: L.SizeKey.names(for: t, before))
+        var kept = L.Cache(key: key)
+        kept.natural = [64, 80]
+        L.SizeStore.shared.keep(kept)
+        var named = key
+        named.names = L.SizeKey.names(for: t, after)
+        #expect(L.SizeStore.shared.cache(for: key).natural == [64, 80])
+        #expect(L.SizeStore.shared.cache(for: named).natural == nil)
+        // A table with no "@" keeps its sizes whatever the names: they cannot change it.
+        let plain = try #require(onlyTable(Self.wide))
+        #expect(L.SizeKey.names(for: plain, after) == nil)
+    }
 }
 
 /// The Reasoning card's markdown style: the reply's look is untouched, html stays code.

@@ -7,7 +7,7 @@ import VoryCore
 /// blocks; an unknown @name stays plain text. A bot's mention is a link that opens its card
 /// (`vory://bot/<name>`, taken by the conversation's openURL) (#302).
 enum Mentions {
-    struct Names: Equatable, Sendable {
+    struct Names: Hashable, Sendable {
         /// Bot names and labels, as typed after the "@" (compared without case).
         var bots: [String] = []
         /// The person's own name from Settings; "you" always counts.
