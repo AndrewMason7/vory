@@ -1049,6 +1049,26 @@ public final class BotAmbient {
         if let session, !session.isEmpty { return tappedSessions[session] }
         return profile.flatMap { tapped[$0] }
     }
+
+    /// A tap whose face is covered at once by what it opens (a Bots card's push, Bot info over
+    /// the chat on the iPhone): the bot's face on the page that arrives plays the reaction, once,
+    /// as that page lands (judgement call #16). Used up when it plays; three seconds at most.
+    @ObservationIgnored public private(set) var pendingArrival: (profile: String, at: Date)?
+    /// A judgement call made while Matt was out: `-vory-tap-arrival-off` leaves the arriving face
+    /// still (the tapped face still reacts).
+    public static let arrivalOff = ProcessInfo.processInfo.arguments.contains("-vory-tap-arrival-off")
+    public func markArrival(profile: String) {
+        guard !Self.arrivalOff else { return }
+        pendingArrival = (profile, Date())
+    }
+    /// The page for `profile` has landed: its face reacts if a tap is waiting for it. Returns
+    /// whether one did.
+    @discardableResult public func arrive(profile: String, now: Date = Date()) -> Bool {
+        guard let p = pendingArrival, p.profile == profile, now.timeIntervalSince(p.at) < 3 else { return false }
+        pendingArrival = nil
+        tapped[profile] = now
+        return true
+    }
 }
 
 /// The bot's body as a Shape, so the app can give it real Liquid Glass.

@@ -203,6 +203,24 @@ import Testing
         #expect(minEye > 0.99 && sy.lo == 1 && sy.hi == 1)
     }
 
+    /// Judgement call #16: a tap whose face is covered (a card's push, Bot info) leaves one
+    /// arrival for the page that lands; it plays once there and is used up, so a pop back to the
+    /// page, a remount or Bot info shown again without a new tap plays nothing. A stale one (the
+    /// page never landed) is dropped.
+    @MainActor @Test func anArrivalPlaysOnceAndIsUsedUp() {
+        let a = BotAmbient.shared
+        let bot = "arrival-test-bot"
+        defer { a.tapped[bot] = nil }
+        a.markArrival(profile: bot)
+        let now = Date()
+        #expect(!a.arrive(profile: "another-bot", now: now), "another bot's page took the arrival")
+        #expect(a.arrive(profile: bot, now: now))
+        #expect(a.tapped[bot] == now, "the arriving face is not told")
+        #expect(!a.arrive(profile: bot, now: now.addingTimeInterval(0.5)), "the arrival played twice")
+        a.markArrival(profile: bot)
+        #expect(!a.arrive(profile: bot, now: Date().addingTimeInterval(4)), "a stale arrival played")
+    }
+
     @Test func snappingIsAStillFrameOfTheState() {
         let m = BotMotionModel(seed: 1)
         m.snap(to: .targets(for: .awaitingApproval), at: 0)

@@ -577,6 +577,10 @@ struct ChatHeader: View {
             Button {
                 // The bot on the pill reacts to the tap as it does elsewhere, and the plate opens.
                 BotAmbient.shared.tap(profile: chat.profileName, session: chat.storedID)
+                #if os(iOS)
+                // Bot info covers the face at once: its own face plays the reaction as it lands.
+                BotAmbient.shared.markArrival(profile: chat.profileName)
+                #endif
                 onProfile()
             } label: {
                 // Seated on the pill by its base; while it asks (the "!"), it lifts clear so the

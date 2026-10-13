@@ -319,6 +319,8 @@ struct MorphTopBar: View {
     /// The pill's action: the face reacts and Bot info opens.
     private func openBotInfo(_ chat: ChatSession) {
         BotAmbient.shared.tap(profile: chat.profileName, session: chat.storedID)
+        // Bot info covers the face at once: its own face plays the reaction as it lands.
+        BotAmbient.shared.markArrival(profile: chat.profileName)
         model.chatRequest = .init(.profile)
     }
 

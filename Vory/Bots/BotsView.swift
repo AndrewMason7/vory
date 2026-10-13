@@ -92,6 +92,8 @@ struct BotsView: View {
                     // tap on the card's glass pill.
                     Button {
                         BotAmbient.shared.tap(profile: p.name)
+                        // The push covers the card at once: the bot page's face plays it as it lands.
+                        BotAmbient.shared.markArrival(profile: p.name)
                         path.append(p)
                     } label: {
                         BotCard(profile: p, isActive: rt.selectedProfile == p.name,
@@ -486,6 +488,8 @@ struct BotDetailView: View {
         }
         .navigationTitle(profile.label)
         .navigationBarTitleDisplayMode(.inline)
+        // Landed from a card's tap: the bot's face here plays the reaction the push covered.
+        .background(ArrivalProbe(profile: profile.name))
         .onAppear { model.composeProfile = profile.name }
         .onDisappear { if model.composeProfile == profile.name { model.composeProfile = nil } }
         // The compose circle in the tab bar, while this bot's page is in front: a chat with it.

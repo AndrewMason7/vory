@@ -51,7 +51,13 @@ final class FaceTapUITests: XCTestCase {
         print("FACE-TAP card \(f)")
         at(f.midX, f.minY + 39).tap(); pause(1.5); shot("card-face-tap")
         XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "a tap on the card's face did not open the bot")
-        any("page.back").tap(); pause(1.5)
+        // Deeper and back (the bot page lands again with no new tap: nothing replays there).
+        let profile = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Profile'")).firstMatch
+        if profile.waitForExistence(timeout: 5) {
+            print("FACE-TAP-AT profile push"); profile.tap(); pause(1.5)
+            print("FACE-TAP-AT profile pop"); any("page.back").tap(); pause(2)
+        }
+        print("FACE-TAP-AT bot page pop"); any("page.back").tap(); pause(1.5)
         // The card's name still opens it too. (Read again: back on Bots the search field may have
         // folded away and the cards moved up.)
         let g = card.frame
@@ -80,6 +86,8 @@ final class FaceTapUITests: XCTestCase {
             at(p.midX, y).tap(); pause(1.5); shot("tap-\(name)")
             print("FACE-TAP \(name) at (\(Int(p.midX)), \(Int(y))) pill \(p): Bot info \(app.buttons["Close"].exists)")
             XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 3), "a tap on the chat's \(name) did not open Bot info")
+            // Closed again (the chat's face has nothing left to replay).
+            print("FACE-TAP-AT close \(name)"); app.buttons["Close"].tap(); pause(1.5)
         }
     }
 }

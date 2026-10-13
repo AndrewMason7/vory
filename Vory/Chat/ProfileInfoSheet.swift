@@ -27,6 +27,8 @@ struct ProfileInfoSheet: View {
         }
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
+        // Up from the chat's face or pill: the face here plays the reaction the sheet covered.
+        .background(ArrivalProbe(profile: profileName))
     }
 }
 

@@ -273,3 +273,39 @@ enum BotLooksMirror {
         return small.jpegData(compressionQuality: 0.75)
     }
 }
+
+/// Tells BotAmbient that the page it sits in has landed: its controller's viewDidAppear, after the
+/// push or the sheet has finished, so a waiting arrival (`BotAmbient.markArrival`) plays in full on
+/// a still page (judgement call #16). Nothing waits on a pop back or a sheet shown again.
+struct ArrivalProbe: View {
+    let profile: String
+    var body: some View { Probe(profile: profile).frame(width: 0, height: 0).accessibilityHidden(true) }
+
+    #if os(iOS)
+    private struct Probe: UIViewControllerRepresentable {
+        let profile: String
+        func makeUIViewController(context: Context) -> Controller { Controller(profile: profile) }
+        func updateUIViewController(_ c: Controller, context: Context) { c.profile = profile }
+        final class Controller: UIViewController {
+            var profile: String
+            init(profile: String) { self.profile = profile; super.init(nibName: nil, bundle: nil) }
+            required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+            override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.isHidden = true; view = v }
+            override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); BotAmbient.shared.arrive(profile: profile) }
+        }
+    }
+    #else
+    private struct Probe: NSViewControllerRepresentable {
+        let profile: String
+        func makeNSViewController(context: Context) -> Controller { Controller(profile: profile) }
+        func updateNSViewController(_ c: Controller, context: Context) { c.profile = profile }
+        final class Controller: NSViewController {
+            var profile: String
+            init(profile: String) { self.profile = profile; super.init(nibName: nil, bundle: nil) }
+            required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+            override func loadView() { let v = NSView(); v.isHidden = true; view = v }
+            override func viewDidAppear() { super.viewDidAppear(); BotAmbient.shared.arrive(profile: profile) }
+        }
+    }
+    #endif
+}
