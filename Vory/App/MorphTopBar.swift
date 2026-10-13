@@ -82,8 +82,16 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     func showTab(_ tab: AppModel.AppTab, chat open: ChatSession?) {
         guard !scrubbing else { return }
         if let open {
-            if chat !== open { push(open) }
-            else if t != 0 || pushedTab != nil { pushedTab = nil; withAnimation(.snappy(duration: 0.22)) { t = 0 } }
+            // The tab move (0.22 s) like any other tab switch, not the push's 0.32 s morph; on the
+            // next turn, so a chat set just now has its end state measured first (push's reason).
+            pushedTab = nil
+            if chat !== open { chat = open }
+            guard t != 0 else { return }
+            Perf.stamp("bar: Chats with a chat up, the tab move")
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.chat === open, !self.scrubbing, self.t != 0 else { return }
+                withAnimation(.snappy(duration: 0.22)) { self.t = 0 }
+            }
             return
         }
         let pushed = pushedTabs.contains(tab)
