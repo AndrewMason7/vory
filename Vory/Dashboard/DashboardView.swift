@@ -83,11 +83,13 @@ struct DashboardView: View {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
         .reloadable { await Task { await load() }.value }
-        // Loads while the page is live; a change made while it was hidden (another bot, the range)
-        // loads on its way back, and on the Mac so does each new visit (the page stays mounted).
-        // The rows and numbers are replaced in place, so a return shows no reload.
+        // The first load runs at once, live or not (on the phone Home mounts behind the tab in front
+        // at launch, and that load also refreshes the Overview widget's numbers). After it, loads run
+        // while the page is live: a change made while it was hidden (another bot, the range) loads on
+        // its way back, and on the Mac so does each new visit (the page stays mounted). The rows and
+        // numbers are replaced in place, so a return shows no reload.
         .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)|\(pageLive)") {
-            guard pageLive else { return }
+            guard pageLive || loadedKey.isEmpty else { return }
             let key = "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)"
             guard key != loadedKey else { return }
             await load()
