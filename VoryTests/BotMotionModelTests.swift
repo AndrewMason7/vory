@@ -221,6 +221,9 @@ import Testing
         #expect(a.tapped[bot] == now, "the arriving face is not told")
         #expect(!a.arrive(profile: bot, now: now.addingTimeInterval(0.5)), "the arrival played twice")
         a.markArrival(profile: bot)
+        #expect(!a.arrivalWaits(profile: bot, now: Date().addingTimeInterval(4)), "a stale arrival held a face back")
+        #expect(!a.arrivalWaits(profile: bot), "a stale arrival was not dropped")
+        a.markArrival(profile: bot)
         #expect(!a.arrive(profile: bot, now: Date().addingTimeInterval(4)), "a stale arrival played")
     }
 

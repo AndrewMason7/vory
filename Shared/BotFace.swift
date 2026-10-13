@@ -1063,15 +1063,20 @@ public final class BotAmbient {
     }
     /// Whether a face mounting now holds its reaction for the landing: an arrival is waiting for
     /// its bot, so the page it sits on is still coming in (it plays at `arrive`, not mid-slide).
-    public func arrivalWaits(profile: String?) -> Bool {
+    public func arrivalWaits(profile: String?, now: Date = Date()) -> Bool {
         guard let profile, let p = pendingArrival else { return false }
+        // One that never landed (a push or a sheet that did not finish) holds nothing back.
+        guard now.timeIntervalSince(p.at) < Self.arrivalWindow else { pendingArrival = nil; return false }
         return p.profile == profile
     }
+    /// How long a tap's arrival waits for its page.
+    static let arrivalWindow: TimeInterval = 3
 
     /// The page for `profile` has landed: its face reacts if a tap is waiting for it. Returns
     /// whether one did.
     @discardableResult public func arrive(profile: String, now: Date = Date()) -> Bool {
-        guard let p = pendingArrival, p.profile == profile, now.timeIntervalSince(p.at) < 3 else { return false }
+        guard let p = pendingArrival, now.timeIntervalSince(p.at) < Self.arrivalWindow else { pendingArrival = nil; return false }
+        guard p.profile == profile else { return false }
         pendingArrival = nil
         tapped[profile] = now
         return true
