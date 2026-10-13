@@ -1329,7 +1329,18 @@ def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tu
     return None
 
 
-def process_request(connection, request):
+# Test only: /api/profiles answers this much later, as a real gateway over the network can (the
+# app's socket then opens before the bots are known: the cold-launch Chats check, 1.5 (21)).
+PROFILES_DELAY = [0.0]
+
+
+async def process_request(connection, request):
+    if PROFILES_DELAY[0] > 0 and request.path.split("?")[0] == "/api/profiles":
+        await asyncio.sleep(PROFILES_DELAY[0])
+    return _process_request(connection, request)
+
+
+def _process_request(connection, request):
     path = request.path
     if path.split("?")[0] in ("/api/ws", "/api/plugins/kanban/events", "/api/audio/speak-stream"):
         return None  # let the WebSocket handshake proceed
@@ -2501,6 +2512,7 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9119)
     ap.add_argument("--port2", type=int, default=None, help="the same gateway (one process, one state) on a second port, for #283's two addresses")
+    ap.add_argument("--profiles-delay", type=float, default=0.0, metavar="S", help="/api/profiles answers S seconds late (test only)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="mock-token")
     # Read at import time (VOICE_LIVE, NEUTRAL_MODELS); declared so the parser accepts them.
@@ -2512,6 +2524,7 @@ async def main() -> None:
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
     ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
     args = ap.parse_args()
+    PROFILES_DELAY[0] = args.profiles_delay
     titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
     def extra_session(i: int, profile: str) -> dict:
         return {"id": f"2026100{i % 9}_1200{i % 100:02d}_{profile[:6]}{i:04x}", "title": titles[i % len(titles)],
