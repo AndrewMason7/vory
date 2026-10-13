@@ -493,6 +493,29 @@ final class SmoothnessPerfUITests: XCTestCase {
         pause(hold)
     }
 
+    /// A turn running while the list shows: the first chat is sent "tools" (the mock's long turn
+    /// of tool calls, no approval), then the list holds for HERMES_E2E_HOLD seconds (default 18)
+    /// while that row's face works and then spins as it finishes. For a recording: a small row
+    /// face keeps its cached still under the live view, and the still's outline must never show
+    /// behind the moving face (the Mac's question; its row faces don't move).
+    func testRowFaceDuringTurn() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList()
+        openFirstChat(); pause(1.5)
+        let composer = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 10), "no composer")
+        composer.tap(); pause(0.5)
+        composer.typeText("tools")
+        let send = app.buttons.matching(identifier: "composer.send").firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "no send button")
+        send.tap(); pause(1.5)
+        back(); pause(1)
+        let hold = Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "18") ?? 18
+        print("ROW-FACE hold \(hold)s")
+        pause(hold)
+    }
+
     /// Holds the Chats list at rest for HERMES_E2E_HOLD seconds (default 14): the recording
     /// shows whether a row's face changes beyond a blink.
     func testHoldList() throws {
