@@ -98,8 +98,14 @@ struct PullRefresh: ViewModifier {
         pullLog.notice("pull fired hosted=\(state.hosted)")
         #endif
         state.refreshing = true
+        // At least a breath of spinner; a UI test can hold it longer (`-vory-refresh-hold <s>`, DEBUG).
+        #if DEBUG
+        let hold = max(600, Int(UserDefaults.standard.double(forKey: "vory-refresh-hold") * 1000))
+        #else
+        let hold = 600
+        #endif
         Task {
-            async let settle: Void = Task.sleep(for: .milliseconds(600))
+            async let settle: Void = Task.sleep(for: .milliseconds(hold))
             await action()
             try? await settle
             withAnimation(.snappy(duration: 0.2)) { state.refreshing = false }

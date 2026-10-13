@@ -889,6 +889,39 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
+    /// A page pushed while a pull's refresh still runs (held 3 s by `-vory-refresh-hold`): the
+    /// page's Back stays a 44 pt circle. The wheel's room in the title capsule went over to the
+    /// Back and stretched it into an oval until the refresh ended. (Chats takes its pull away as
+    /// a chat opens, so a page on Settings is the case.)
+    func testRefreshThenPushPage() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings", extra: ["-vory-refresh-hold", "3"])
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        pause(2)
+        let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        let spinner = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Refreshing'")).firstMatch
+        XCTAssertTrue(spinner.waitForExistence(timeout: 1.5), "the pull did not start a refresh")
+        // Past the usual 0.6 s: the hold is in force, so the refresh is still running as the page comes in.
+        pause(1.0)
+        print("REFRESH-HOLD spinner after 1 s: \(spinner.exists)")
+        XCTAssertTrue(spinner.exists, "the refresh did not hold (-vory-refresh-hold)")
+        for _ in 0..<3 where !any("page.back").exists && row.exists { row.tap(); _ = any("page.back").waitForExistence(timeout: 3) }
+        pause(0.6)
+        let back = any("page.back")
+        XCTAssertTrue(back.exists, "the pushed page has no Back capsule")
+        let during = back.frame
+        shot("back-refreshing")
+        pause(3)
+        let after = back.frame
+        shot("back-after")
+        print("REFRESH-BACK during \(during) after \(after)")
+        XCTAssertEqual(during.width, 44, accuracy: 1, "the Back circle was stretched while the refresh ran")
+        XCTAssertEqual(after.width, 44, accuracy: 1, "the Back circle is not 44 pt")
+    }
+
     /// The "/" list out of the field and back (type "/", then delete it).
     func testSlashMenu() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
