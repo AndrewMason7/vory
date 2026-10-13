@@ -106,6 +106,11 @@ struct SettingsView: View {
                             }
                             // The menu's icons are rendered images; a new identity redraws them when a look changes.
                             .id("profile-picker|\(botColorsRaw)|\(botAvatarsRaw)|\(glassAll)|\(colorScheme == .light)")
+                            #if os(macOS)
+                            // The Mac's form shows "Profile" beside the pop-up as separate text: the
+                            // pop-up itself had no name.
+                            .accessibilityLabel("Profile")
+                            #endif
                         }
                     } header: { Text("Gateway") }
                 }
