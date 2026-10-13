@@ -313,11 +313,13 @@ struct ChatListView: View {
             }
             .onChange(of: searchText) { _, q in Task { await search(q) } }
             #if os(macOS)
-            .refreshable { await load() }
+            .refreshable { await refresh() }
+            // Chat › Refresh Chats (⌘R).
+            .onReceive(NotificationCenter.default.publisher(for: .refreshChats)) { _ in Task { await refresh() } }
             #else
             // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
             // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
-            .pullRefresh(ownWheel: true) { await load() }
+            .pullRefresh(ownWheel: true) { await refresh() }
             // The list's pull state, for the morph bar's title capsule to host the wheel (the
             // other roots publish theirs from TabRoot; the Chats page has no TabRoot).
             .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[.chats] = r.state } }
@@ -416,7 +418,7 @@ struct ChatListView: View {
     /// Refresh, sort, filters and Select in one menu.
     private var viewMenu: some View {
         Menu {
-            Button { Task { await load() } } label: { MenuLabel("Refresh", systemImage: "arrow.clockwise") }
+            Button { Task { await refresh() } } label: { MenuLabel("Refresh", systemImage: "arrow.clockwise") }
             Menu { sortItems.pickerStyle(.inline).labelsHidden() } label: { MenuLabel("Sort By", systemImage: "arrow.up.arrow.down") }
             filterItems
         } label: {
@@ -770,6 +772,15 @@ struct ChatListView: View {
             let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/sessions/\(s.id)", profile: s.profile ?? runtime.selectedProfile, body: EmptyBody())
         }
         sessions.removeAll { s in list.contains { $0.id == s.id } }
+        await load()
+    }
+
+    /// A pull, or Refresh on the Mac. When the gateway has not answered for its bots yet (the
+    /// first answer failed and the socket stayed up, so no reconnect asks again), ask for them
+    /// first: with All bots the list cannot load without them. Only here, not in `load()`,
+    /// which every trigger calls.
+    private func refresh() async {
+        if let runtime, !runtime.profilesLoaded { await runtime.loadProfiles() }
         await load()
     }
 
@@ -1454,4 +1465,10 @@ struct ChatListProfileItems: View {
         case .idle: return "circle"
         }
     }
+}
+
+extension Notification.Name {
+    /// The Mac's Chats › Refresh Chats (⌘R): the Chats list's own refresh, which also asks for
+    /// the bots when their first answer failed.
+    static let refreshChats = Notification.Name("vory.refreshChats")
 }
