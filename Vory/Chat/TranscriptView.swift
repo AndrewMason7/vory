@@ -353,13 +353,10 @@ struct TranscriptView: View {
             #endif
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
-            // Whole item, not just `.kind`: the tokens/sec footer lands after the text does and
-            // must pull the bottom back into view too.
-            // Streaming text follows unanimated (tokens arrive faster than an animated scroll
-            // settles); a new message fades in where it belongs and the thread eases up to it.
-            .onChange(of: chat.items.last) { _, _ in
-                if mayFollow() { scrollPosition.scrollTo(edge: .bottom) }
-            }
+            // Streaming text, and the tokens/sec footer landing after it, follow by the anchor for
+            // size changes (`.defaultScrollAnchor(.bottom)` above), with no scroll asked per token:
+            // that write ran the transcript's body a second time on every token. A new message
+            // fades in where it belongs and the thread eases up to it (`followRows`).
             .onChange(of: visibleItems.count) { old, new in followRows(from: old, to: new) }
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [visibleItems.count, chat.isRunning ? 1 : 0]) { await settleTail() }
