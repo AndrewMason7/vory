@@ -546,12 +546,22 @@ struct ChatListView: View {
                 .focused($searchFocused)
                 .onExitCommand { searchText = ""; searchFocused = false }
             if !searchText.isEmpty {
-                Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+                Button { searchText = "" } label: {
+                    // A 28 pt target around the 13 pt glyph; the negative padding keeps its place
+                    // and the field's width as they were.
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28).contentShape(.rect)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Clear search")
+                .padding(.horizontal, -7.5).padding(.vertical, -6)
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(Color.primary.opacity(0.06), in: .capsule)
+        // The whole capsule is the field: a click beside the 16 pt line of text (the glass, the
+        // padding) went nowhere. The text field and the clear button keep their own clicks.
+        .contentShape(.capsule)
+        .onTapGesture { searchFocused = true }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
     }
     #endif
