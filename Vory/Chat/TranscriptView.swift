@@ -1725,9 +1725,14 @@ struct MarkdownView: View, Equatable {
         return Mentions.mark(a, names: Mentions.names)
     }
     /// The inline text as a view, bot mentions drawn as chips (#321).
-    @MainActor static func inlineText(_ text: String) -> some View {
-        let a = inline(text)
-        return (text.utf8.contains(UInt8(ascii: "@")) ? Mentions.text(a) : Text(a)).textRenderer(MentionChipRenderer())
+    @MainActor @ViewBuilder static func inlineText(_ text: String) -> some View {
+        // The chip renderer only where there is a mention: on every paragraph it sized and drew
+        // each line itself, a cost in every long reply's layout with nothing to show for it (1.5 (24)).
+        if text.utf8.contains(UInt8(ascii: "@")) {
+            Mentions.text(inline(text)).textRenderer(MentionChipRenderer())
+        } else {
+            Text(inline(text))
+        }
     }
     static func inlineCached(_ text: String) -> AttributedString {
         let key = text as NSString
