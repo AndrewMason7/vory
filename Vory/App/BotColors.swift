@@ -115,6 +115,8 @@ struct BotAvatar: View {
     /// around each blink, it drew a shade brighter than the still: Matt, 2026-10-12, "randomly
     /// loading the bot colors ... it should just load it once and keep it").
     @State private var eyesShut = false
+    /// The live view under a row's face has drawn: its cached still can go.
+    @State private var liveDrawn = false
 
     /// A small idle face in a list draws as a picture: one cached image per look, no Canvas, no
     /// shadow filter pass on every scrolled frame (the phone's list fling spent its frames on
@@ -150,11 +152,17 @@ struct BotAvatar: View {
                     .resizable().frame(width: size, height: size)
             } else if size <= 40, !drawn, override == nil {
                 // A row's face: the cached still stays underneath while the live view mounts
-                // (for a blink, or when the app comes forward), so the row never draws empty
-                // for a frame (Matt, 2026-10-12, after an app switch).
+                // (a finish spin, a tap, or when the app comes forward), so the row never draws
+                // empty for a frame (Matt, 2026-10-12, after an app switch), and only then: left
+                // under a working face, its idle outline and eyes showed around and through the
+                // moving pose (the toolbox read as a blob with two pairs of eyes, on the phone).
                 ZStack {
-                    Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme)).resizable().frame(width: size, height: size)
+                    if !liveDrawn {
+                        Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme)).resizable().frame(width: size, height: size)
+                    }
                     BotFaceView(spec: choice.spec(hex: hex), size: size, active: active, drawn: drawn, mood: effectiveMood)
+                        .task { try? await Task.sleep(for: .milliseconds(100)); if !Task.isCancelled { liveDrawn = true } }
+                        .onDisappear { liveDrawn = false }
                 }
             } else {
                 BotFaceView(spec: choice.spec(hex: hex), size: size, active: active, drawn: drawn, mood: effectiveMood)
