@@ -96,6 +96,9 @@ struct TranscriptView: View {
     @State private var tailFrom: Int?
     @State private var revealTask: Task<Void, Never>?
     @State private var overscrollTask: Task<Void, Never>?
+    /// When the keyboard last moved: its own spring carries a stuck thread to the end, so a
+    /// small overshoot is not landed against it.
+    @State private var keyboardMovedAt = Date.distantPast
     /// How much of the scroll view the keyboard covers (beyond the home-indicator safe area). The
     /// thread moves up with the keyboard and, when it was at the bottom, stays there.
     @State private var keyboardInset: CGFloat = 0
@@ -285,10 +288,15 @@ struct TranscriptView: View {
                 g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
             } action: { was, distance in
                 metrics.distanceFromBottom = distance
-                // Past the end with no finger on it: a scroll-to-bottom that used the lazy stack's
-                // estimated height lands beyond the real content and the thread shows nothing
-                // until a drag bounces it back ("chats open blank until you scroll"). Land it.
-                if distance < -60, !metrics.userScrolling { scheduleOverscrollFix() }
+                // Past the end with no finger on it, by any amount: a scroll-to-bottom that used the
+                // lazy stack's estimated height lands beyond the real content and the thread shows
+                // nothing until a drag bounces it back ("chats open blank until you scroll"), and
+                // content that shrinks under a thread at rest (a chat's stored rows landing shorter
+                // than its first layout) leaves an empty band over the composer that the first
+                // touch snapped away (Matt on 1.5 (21): "a weird jump"). Land it. The scroll that
+                // followed every change of the last row hid the small ones until it went with the
+                // per-token scroll.
+                if distance < -1, !metrics.userScrolling { landPastTheEnd(distance) }
                 let away = distance > 120
                 if away != awayFromBottom { withAnimation(.snappy) { awayFromBottom = away } }
                 // Content growing under a locked thread also reads as "away" for a frame; only a
@@ -545,6 +553,7 @@ extension TranscriptView {
     /// The keyboard moves on UIKit's own spring; this spring tracks it closely, so the thread and
     /// the composer arrive together instead of the composer overlapping.
     private func keyboardMoved(to inset: CGFloat) {
+        keyboardMovedAt = Date()
         withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
             keyboardInset = inset
             if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
@@ -588,14 +597,39 @@ extension TranscriptView {
         if moves { scrollPosition.scrollTo(edge: .bottom) }
     }
 
+    /// The thread came to rest past its end with no finger on it (not tracking, dragging or
+    /// decelerating). A small overshoot (rows that landed shorter, a status row gone) is landed
+    /// in the same update, so the last row stays where it was against the dock with no frame of
+    /// gap; a large one (the lazy stack's estimate) after a moment, once its rows have laid out,
+    /// eased; either waits while the keyboard's spring is carrying the thread.
+    private func landPastTheEnd(_ distance: CGFloat) {
+        guard distance >= -60, Date().timeIntervalSince(keyboardMovedAt) > 0.6 else { scheduleOverscrollFix(); return }
+        Perf.tick("overscrollLand")
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+    }
+
     private func scheduleOverscrollFix() {
         guard overscrollTask == nil else { return }
         overscrollTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(120))
             defer { overscrollTask = nil }
-            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -8 else { return }
+            // Past the keyboard's spring too (up to a second and a half), rechecked each time.
+            for _ in 0..<12 {
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
+                if Date().timeIntervalSince(keyboardMovedAt) > 0.6 { break }
+            }
+            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
             Perf.tick("overscrollFix")
-            scrollPosition.scrollTo(edge: .bottom)
+            // Eased, so it reads as the thread settling rather than a jump of its own; from more
+            // than a screen past (a thread showing nothing) at once, as an animated scroll through
+            // rows still being laid out glitched them (`jumpToBottom`).
+            if -metrics.distanceFromBottom < metrics.containerHeight {
+                withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) }
+            } else {
+                scrollPosition.scrollTo(edge: .bottom)
+            }
         }
     }
 
