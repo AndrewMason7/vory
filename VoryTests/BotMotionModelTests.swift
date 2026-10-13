@@ -213,8 +213,11 @@ import Testing
         defer { a.tapped[bot] = nil }
         a.markArrival(profile: bot)
         let now = Date()
+        // A face mounting on the arriving page holds its reaction until the landing.
+        #expect(a.arrivalWaits(profile: bot) && !a.arrivalWaits(profile: "another-bot") && !a.arrivalWaits(profile: nil))
         #expect(!a.arrive(profile: "another-bot", now: now), "another bot's page took the arrival")
         #expect(a.arrive(profile: bot, now: now))
+        #expect(!a.arrivalWaits(profile: bot), "a used-up arrival still holds a face back")
         #expect(a.tapped[bot] == now, "the arriving face is not told")
         #expect(!a.arrive(profile: bot, now: now.addingTimeInterval(0.5)), "the arrival played twice")
         a.markArrival(profile: bot)

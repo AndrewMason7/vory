@@ -1061,6 +1061,13 @@ public final class BotAmbient {
         guard !Self.arrivalOff else { return }
         pendingArrival = (profile, Date())
     }
+    /// Whether a face mounting now holds its reaction for the landing: an arrival is waiting for
+    /// its bot, so the page it sits on is still coming in (it plays at `arrive`, not mid-slide).
+    public func arrivalWaits(profile: String?) -> Bool {
+        guard let profile, let p = pendingArrival else { return false }
+        return p.profile == profile
+    }
+
     /// The page for `profile` has landed: its face reacts if a tap is waiting for it. Returns
     /// whether one did.
     @discardableResult public func arrive(profile: String, now: Date = Date()) -> Bool {
@@ -1585,7 +1592,10 @@ public struct BotFaceView: View {
         // swapped for the live view) starts it on its first frame. Not held, not under Reduce
         // Motion (the model is snapped to its still every frame there), not with the bots still
         // (Settings › Bots › Style) or the switch off.
-        .onChange(of: lastTap, initial: true) { _, d in
+        .onChange(of: lastTap, initial: true) { old, d in
+            // Mounting on a page an arrival waits for: the reaction plays at the landing, not as
+            // the page slides in (it played twice, mid-slide and again on landing).
+            if old == d, ambient.arrivalWaits(profile: mood.profile) { return }
             guard engine, let d, BotMotionModel.Reaction.plays, Date().timeIntervalSince(d) < BotMotionModel.Reaction.length else { return }
             model.react(at: d.timeIntervalSinceReferenceDate)
             spinTick += 1
