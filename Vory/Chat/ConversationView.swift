@@ -730,6 +730,37 @@ struct InteractivePopEnabler: UIViewControllerRepresentable {
     }
 }
 
+/// Marks a pushed page whose own Cancel is the only way back (`.cancelIsTheWayBack()`): neither
+/// the edge swipe nor the full-screen pan pops it. A hidden child of the page's controller, read
+/// by FullScreenPop. A judgement call made while Matt was out: `-vory-form-swipe-on` lets the
+/// swipe pop these pages again.
+struct NoSwipeBackMarker: UIViewControllerRepresentable {
+    static let off = ProcessInfo.processInfo.arguments.contains("-vory-form-swipe-on")
+    final class Controller: UIViewController {
+        override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.isHidden = true; view = v }
+    }
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ c: Controller, context: Context) {}
+    /// This page, or a controller inside it, carries the marker.
+    static func marks(_ vc: UIViewController) -> Bool {
+        var queue = [vc], seen = 0
+        while let c = queue.popLast(), seen < 64 {
+            seen += 1
+            if c is Controller { return true }
+            queue += c.children
+        }
+        return false
+    }
+}
+
+extension View {
+    /// A pushed page whose own Cancel is the way back: no system back arrow beside it, and no
+    /// back swipe, which would drop what it holds unasked.
+    func cancelIsTheWayBack() -> some View {
+        navigationBarBackButtonHidden(true).background(NoSwipeBackMarker().frame(width: 0, height: 0).accessibilityHidden(true))
+    }
+}
+
 /// The one full-screen back pan of a navigation stack and the delegate for both it and the
 /// system's edge gesture; kept alive on the navigation controller itself.
 final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
@@ -815,6 +846,9 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard let nav, nav.viewControllers.count > 1 else { return false }
+        // A page whose own Cancel is the way back (a gateway form) is not swiped away, by the
+        // edge or anywhere: the swipe dropped its edits unasked.
+        if !NoSwipeBackMarker.off, let top = nav.topViewController, NoSwipeBackMarker.marks(top) { return false }
         guard let pan = g as? UIPanGestureRecognizer, g === self.pan else { return true }
         // A row of a list keeps its own swipe (the Board's Done and Unblock are a leading swipe,
         // which this pan ate on a Board pushed from Settings); the edge gesture still goes back there.

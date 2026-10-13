@@ -175,9 +175,10 @@ struct GatewayFormView: View {
         .navigationBarTitleDisplayMode(.inline)
         #if os(iOS)
         // Pushed, the form's own Cancel is the way out: no system back arrow beside it, wherever
-        // it is pushed from (judgement call #11). It also turns off the edge swipe here, which
-        // would drop the edits unasked. The Mac's toolbar Back does not answer to this.
-        .navigationBarBackButtonHidden(true)
+        // it is pushed from (judgement call #11), and no back swipe, which would drop the edits
+        // unasked (hiding the back arrow alone left the swipe on: the stack's own pan pops any
+        // page). The Mac's toolbar Back does not answer to this.
+        .cancelIsTheWayBack()
         #endif
         .pageToolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
