@@ -103,6 +103,7 @@ struct BotsView: View {
                     .accessibilityIdentifier("bots.card.\(p.name)")
                     // Press and hold (a right-click on the Mac): the bot's menu. The … that also
                     // opened it is gone (Matt on 1.5 (21): "just press and hold").
+                    .modifier(BotCardLift(profile: p.name))
                     .contextMenu { botActions(p, rt) }
                 }
             }
@@ -192,9 +193,9 @@ struct BotCard: View {
     /// directly, the card kept the old shape's seat (a cloud changed to a circle sat 10 pt low,
     /// over its own name; Matt on 1.5 (17): "it now broke the look").
     private var overlap: CGFloat {
-        let shape = BotAvatarStore.choice(for: profile.name, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape
-        return 10 + 78 * BotFace.seatDrop(shape)
+        Self.overlap(shape: BotAvatarStore.choice(for: profile.name, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape)
     }
+    static func overlap(shape: String) -> CGFloat { 10 + 78 * BotFace.seatDrop(shape) }
 
     var body: some View {
         VStack(spacing: -overlap) {
@@ -220,6 +221,37 @@ struct BotCard: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(profile.label), \(profile.model ?? "no model")\(isActive ? ", active" : "")\(working ? ", working" : "")")
+    }
+}
+
+/// A bot card's outline: the bot's own silhouette over its name pill. Its press and hold lifts
+/// just the bot and its name; the card's rectangle lifted on a light platter read as a window
+/// behind it (Matt on 1.5 (21)).
+struct BotCardOutline: Shape {
+    /// The body at rest; nil for a photo, a circle.
+    var head: BotBodyShape?
+    var overlap: CGFloat
+    func path(in rect: CGRect) -> Path {
+        let face = CGRect(x: rect.midX - 39, y: rect.minY, width: 78, height: 78)
+        let pill = CGRect(x: rect.minX, y: face.maxY - overlap, width: rect.width, height: rect.maxY - (face.maxY - overlap))
+        return (head?.path(in: face) ?? Path(ellipseIn: face)).union(Path(roundedRect: pill, cornerRadius: pill.height / 2))
+    }
+}
+
+/// The card's press-and-hold preview in its own outline (the phone; the Mac's right-click has no
+/// preview).
+private struct BotCardLift: ViewModifier {
+    let profile: String
+    @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        let choice = BotAvatarStore.choice(for: profile, overrides: BotLookMaps.map(avatarsRaw))
+        let spec = choice.spec(hex: "")
+        content.contentShape(.contextMenuPreview, BotCardOutline(head: choice == .photo ? nil : BotBodyShape(spec: spec, time: 0, active: false),
+                                                                  overlap: BotCard.overlap(shape: spec.shape)))
+        #else
+        content
+        #endif
     }
 }
 
