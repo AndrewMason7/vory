@@ -50,6 +50,15 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     var t: CGFloat = 1
     /// The finger has the pop: `t` follows it and nothing is tappable.
     var scrubbing = false
+    /// The tabs whose page in front keeps its own bar: a form with its own Cancel, Done or Save
+    /// (`.pushedPage(keepsOwnBar: true)`), or a page pushed from one. The bar steps aside there,
+    /// as it does over a group chat on Chats: the morph Back stood over Edit Gateway's Cancel
+    /// (Matt on 1.5 (18): "the formatting is off in the add a gateway"). Kept by the tabs' root
+    /// probes; the bar's own state under it is left as it was, so it comes back as it went.
+    var ownBarTabs: Set<AppModel.AppTab> = []
+    /// A judgement call made while Matt was out: `-vory-ownbar-off` puts the bar's Back over
+    /// those pages again, as in (18) and (19).
+    static let ownBarOff = ProcessInfo.processInfo.arguments.contains("-vory-ownbar-off")
 
     func push(_ c: ChatSession) {
         chat = c; pushedTab = nil
@@ -243,7 +252,8 @@ struct MorphTopBar: View {
         // Inside the glass container neither a capsule's opacity nor a transition is
         // honoured, so there is no capsule at all there. A page pushed on another tab is an
         // "away" state like a chat: the title capsule becomes its Back and the others go.
-        let pushedAway = model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil
+        // So does it over a page that keeps its own bar (a form with its Cancel and Save).
+        let pushedAway = (model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil) || state.ownBarTabs.contains(model.selectedTab)
         let awayHas = state.chat != nil ? true : (state.pushedTab != nil ? slot == .mid : pageHas)
         let present = !pushedAway && (shown < 0.5 ? awayHas : pageHas)
         // Going away (a page pushed on another tab), a slot the away state does not have goes at

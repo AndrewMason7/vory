@@ -179,13 +179,17 @@ private struct PageToolbar<Items: ToolbarContent>: ViewModifier {
 extension View {
     /// A page pushed on a page's stack. On the Mac its Back stands in the window's toolbar only
     /// while its page is on show: visited pages stay mounted with what was pushed on them (as the
-    /// phone's tabs do), and a hidden page's Back stood over the page in front. Nothing on the
-    /// phone, where the morph bar owns Back.
-    @ViewBuilder func pushedPage() -> some View {
+    /// phone's tabs do), and a hidden page's Back stood over the page in front. On the phone the
+    /// morph bar owns Back, except on a page that `keepsOwnBar`: one with its own Cancel, Done or
+    /// Save (a form) keeps the system bar, its items, title and back, and the morph bar steps
+    /// aside while it is up (the root's probe reads the marker). The Mac ignores it.
+    @ViewBuilder func pushedPage(keepsOwnBar: Bool = false) -> some View {
         #if os(macOS)
         modifier(MacPushedPage())
         #else
-        self
+        // One structure whether or not it is set, so a page whose answer changes (the Board, once
+        // it knows it has several boards) keeps its state.
+        background { if keepsOwnBar { OwnBarMarker().frame(width: 0, height: 0).accessibilityHidden(true) } }
         #endif
     }
 }

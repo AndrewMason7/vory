@@ -36,7 +36,7 @@ struct StatusView: View {
                     let s = rt.socketState
                     row("Gateway", light: s.isOpen ? .good : (isFailed(s) ? .bad : .warn),
                         detail: s.isOpen ? "Connected to \(rt.connection.name)" : gatewayDetail(s, rt)) { GatewaysView() }
-                    row("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)) { GatewayFormView(existing: rt.connection) }
+                    row("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)) { GatewayFormView(existing: rt.connection).pushedPage(keepsOwnBar: true) }
                 } else {
                     row("Gateway", light: .off, detail: model.activationError ?? "No gateway connected") { GatewaysView() }
                 }

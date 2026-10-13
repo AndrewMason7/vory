@@ -485,6 +485,20 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
         /// appearance, then its return to the window).
         private weak var followed: AnyObject?
         private var nav: UINavigationController? { parentViewController?.navigationController }
+        /// The pages whose back button and title this probe took for the bar, so only those are
+        /// given back (a page's own `navigationBarBackButtonHidden` is its own).
+        private let chromeTaken = NSHashTable<UIViewController>.weakObjects()
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            NotificationCenter.default.addObserver(self, selector: #selector(markerChanged), name: OwnBarMarker.changed, object: nil)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        /// A page's own-bar marker came or went: it can arrive with the page's first layout, after
+        /// the push started, or with its content (the Board's chooser comes with its boards).
+        @objc private func markerChanged() {
+            guard tab != .chats, let nav else { return }
+            settleSoon(nav)
+        }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -520,7 +534,8 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             let pages = nav.viewControllers
             if let page, let from = pages.firstIndex(of: page), pages.count > from + 1,
                c == nil || (c?.viewController(forKey: .to)).flatMap({ pages.firstIndex(of: $0) }).map({ $0 > from }) == true {
-                RootArrivalProbe.last = "push animated=\(animated) coordinator=\(c != nil) depth=\(pages.count)"
+                let ownBar = (c?.viewController(forKey: .to)).map { ownsBar($0, in: nav) } ?? false
+                RootArrivalProbe.last = "push animated=\(animated) coordinator=\(c != nil) depth=\(pages.count) ownbar=\(ownBar)"
                 Perf.stamp("root probe \(tab.rawValue): \(RootArrivalProbe.last)")
             }
             if let c, inStack { follow(c, in: nav) } else { settleSoon(nav) }
@@ -562,6 +577,15 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             let state = MorphState.shared
             let root = nav.viewControllers.first
             let from = c.viewController(forKey: .from), to = c.viewController(forKey: .to)
+            // A page that keeps its own bar (or one pushed from it) coming in: the bar steps aside.
+            // Leaving for one that doesn't brings it back as it was: at once for a button's pop,
+            // once the finger lets go for a swipe (a cancelled swipe leaves it aside).
+            if let to, to !== root, ownsBar(to, in: nav) {
+                setAside(true)
+            } else if MorphState.shared.ownBarTabs.contains(tab) {
+                if c.isInteractive { c.notifyWhenInteractionChanges { [weak self] ctx in if !ctx.isCancelled { self?.setAside(false) } } }
+                else { setAside(false) }
+            }
             if let to, to !== root {
                 // A push, or back to a page that is not the root: the bar's Back stays.
                 showPushed(to)
@@ -598,7 +622,10 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             watchPage(vc)
             let first = !wasPushed
             wasPushed = true
-            guard active else { return }
+            guard active, let nav else { return }
+            // A page that keeps its own bar keeps its back and title, and the bar's state under it
+            // stays as it was (the root's, or the Back of the page it came from).
+            if ownsBar(vc, in: nav) { return }
             hideChrome(of: vc)
             guard first else { return }
             Perf.stamp("root probe \(tab.rawValue): push seen")
@@ -621,12 +648,16 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             let deep = nav.viewControllers.count > 1, was = wasPushed
             wasPushed = deep
             for page in nav.viewControllers.dropFirst() { watchPage(page) }
+            // The page in front keeps its own bar, or doesn't (a marker that came late lands here).
+            let aside = deep && nav.topViewController.map { ownsBar($0, in: nav) } == true
+            setAside(aside)
             guard active else { return }
             let state = MorphState.shared
             if deep {
-                if let top = nav.topViewController { hideChrome(of: top) }
-                // Pushed without a transition (a restored path): the Back at once.
-                if !was, state.pushedTab == nil { state.pushPage(tab) }
+                if let top = nav.topViewController { aside ? showChrome(of: top) : hideChrome(of: top) }
+                // Pushed without a transition (a restored path): the Back at once, unless the first
+                // page keeps its own bar (the bar's state under it is the root's).
+                if !was, state.pushedTab == nil, !OwnBarMarker.marks(nav.viewControllers[1]) { state.pushPage(tab) }
             } else if was, state.pushedTab == tab, !state.scrubbing, state.t < 1 {
                 // The pop is over: back at the root.
                 state.pop()
@@ -638,7 +669,7 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
         /// `MorphState.showTab` as it reappears.
         func chromeForWidth() {
             guard tab != .chats, let nav else { return }
-            for vc in nav.viewControllers.dropFirst() { active ? hideChrome(of: vc) : showChrome(of: vc) }
+            for vc in nav.viewControllers.dropFirst() { active && !ownsBar(vc, in: nav) ? hideChrome(of: vc) : showChrome(of: vc) }
         }
 
         private func startLink() {
@@ -675,6 +706,7 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
         /// its bar had nothing in it, and an empty bar collapses (a Settings page's content rose
         /// under the Back circle after a cancelled swipe). Again once its title is known.
         private func hideChrome(of vc: UIViewController) {
+            chromeTaken.add(vc)
             let item = vc.navigationItem
             item.hidesBackButton = true
             let titled = keepsTitle && !(item.title ?? "").isEmpty
@@ -685,14 +717,66 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
         private final class BarHolder: UIView {}
 
         private func showChrome(of vc: UIViewController) {
+            guard chromeTaken.contains(vc) else { return }
+            chromeTaken.remove(vc)
             vc.navigationItem.hidesBackButton = false
             if vc.navigationItem.titleView is BarHolder { vc.navigationItem.titleView = nil }
+        }
+
+        /// This page keeps its own bar: it, or a page under it other than the root, carries the
+        /// marker (`.pushedPage(keepsOwnBar: true)`). Off with `-vory-ownbar-off`.
+        private func ownsBar(_ vc: UIViewController, in nav: UINavigationController) -> Bool {
+            guard !MorphState.ownBarOff else { return false }
+            let pages = nav.viewControllers
+            guard vc !== pages.first else { return false }
+            let upTo = pages.firstIndex(of: vc).map { pages[1...$0] } ?? pages.dropFirst()
+            return OwnBarMarker.marks(vc) || upTo.contains { OwnBarMarker.marks($0) }
+        }
+
+        /// The bar steps aside on this tab, or comes back; next turn, as the bar's other changes
+        /// from inside a transition's start are.
+        private func setAside(_ on: Bool) {
+            let tab = self.tab
+            DispatchQueue.main.async {
+                let state = MorphState.shared
+                guard state.ownBarTabs.contains(tab) != on else { return }
+                Perf.stamp("root probe \(tab.rawValue): bar \(on ? "steps aside (own bar)" : "back")")
+                if on { state.ownBarTabs.insert(tab) } else { state.ownBarTabs.remove(tab) }
+            }
         }
 
         func popOnePage() {
             guard let nav, nav.viewControllers.count > 1 else { return }
             nav.popViewController(animated: true)
         }
+    }
+}
+
+/// Marks a pushed page that keeps its own bar (`.pushedPage(keepsOwnBar: true)`): a form with its
+/// own Cancel, Done or Save keeps the system bar, its items, title and back, and the morph bar
+/// steps aside while it, or a page pushed from it, is in front. A child of the page's controller,
+/// read by the root's probe; its arrival and departure are announced, since a page's first layout
+/// can come after its push has started.
+struct OwnBarMarker: UIViewControllerRepresentable {
+    static let changed = Notification.Name("vory.ownBarMarkerChanged")
+    final class Controller: UIViewController {
+        override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.isHidden = true; view = v }
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            NotificationCenter.default.post(name: OwnBarMarker.changed, object: nil)
+        }
+    }
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ c: Controller, context: Context) {}
+    /// This page, or a controller inside it, carries the marker.
+    static func marks(_ vc: UIViewController) -> Bool {
+        var queue = [vc], seen = 0
+        while let c = queue.popLast(), seen < 64 {
+            seen += 1
+            if c is Controller { return true }
+            queue += c.children
+        }
+        return false
     }
 }
 

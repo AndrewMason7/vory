@@ -36,6 +36,11 @@ struct KanbanView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar { toolbar }
+        #if os(iOS)
+        // Pushed from Settings with more than one board, its chooser stands where the bar's Back
+        // would: the page keeps its own bar then, as the forms do.
+        .pushedPage(keepsOwnBar: embedded && (store?.boards.count ?? 0) > 1)
+        #endif
         .onAppear { appeared = true }
         .onDisappear { appeared = false }
         .task(id: active) { await follow() }

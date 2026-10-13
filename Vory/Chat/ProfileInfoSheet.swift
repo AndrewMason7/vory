@@ -164,7 +164,7 @@ struct ProfileCardView: View {
     /// Instructions: the SOUL.md page, and the description.
     @ViewBuilder private var instructionsSections: some View {
         Section {
-            NavigationLink { SoulEditorView(profileName: profileName).pushedPage() } label: {
+            NavigationLink { SoulEditorView(profileName: profileName).pushedPage(keepsOwnBar: true) } label: {
                 Label("Instructions (SOUL.md)", systemImage: "doc.text")
             }
         } footer: { Text("The bot's standing instructions. Edits are written to the gateway when you \(DeviceWords.tap) the check mark.") }
