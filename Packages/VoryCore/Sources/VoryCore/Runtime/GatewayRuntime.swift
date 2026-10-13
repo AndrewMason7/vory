@@ -18,6 +18,8 @@ public final class GatewayRuntime {
     /// The chosen address's index and identity, kept once the socket has opened with it.
     private var chosenAddress: AddressChooser.Choice?
     private var pathWatch: Task<Void, Never>?
+    /// The status probe's session: one for the runtime's life, invalidated in `stop()`.
+    private var probeSession: URLSession?
     public private(set) var secrets: GatewaySecrets
     public let api: HermesAPI
     public private(set) var socket: GatewaySocket!
@@ -222,7 +224,7 @@ public final class GatewayRuntime {
     private func chooseAddress() async -> GatewayURL {
         let addresses = connection.addresses
         guard addresses.count > 1 else { return address }
-        let probe = addressProbe ?? AddressChooser.statusProbe(accessHeaders: connection.hasAccessHeaders ? secrets.access.headers : [:])
+        let probe = addressProbe ?? statusProbe()
         let choice = await AddressChooser.choose(addresses: addresses, lastGood: addressMemory.lastGood(for: connection.id),
                                                  known: addressMemory.identity(for: connection.id), probe: probe)
         chosenAddress = choice
@@ -232,6 +234,12 @@ public final class GatewayRuntime {
             log.info("address: \(AddressChooser.label(for: self.address), privacy: .public)")
         }
         return address
+    }
+
+    private func statusProbe() -> AddressChooser.Probe {
+        let session = probeSession ?? URLSession(configuration: AddressChooser.probeConfiguration())
+        probeSession = session
+        return AddressChooser.statusProbe(accessHeaders: connection.hasAccessHeaders ? secrets.access.headers : [:], session: session)
     }
 
     /// The socket opened, signed in, at `address`: it is this gateway. Remembered on this
@@ -246,7 +254,7 @@ public final class GatewayRuntime {
             addressMemory.setIdentity(chosen.identity, for: connection.id)
             return
         }
-        let probe = addressProbe ?? AddressChooser.statusProbe(accessHeaders: connection.hasAccessHeaders ? secrets.access.headers : [:])
+        let probe = addressProbe ?? statusProbe()
         let id = connection.id, at = address
         Task { [weak self] in
             guard let identity = await probe(at), let self, self.address == at else { return }
@@ -291,6 +299,7 @@ public final class GatewayRuntime {
 
     public func stop() async {
         pathWatch?.cancel(); pathWatch = nil
+        probeSession?.invalidateAndCancel(); probeSession = nil
         globalEventTask?.cancel()
         kanban.stopEvents()
         await socket.disconnect()

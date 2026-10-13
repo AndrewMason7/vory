@@ -118,7 +118,13 @@ public enum AddressChooser {
     /// follows no redirect and sends no credentials; Cloudflare Access headers only to a public
     /// https host.
     public static func statusProbe(accessHeaders: [String: String], configuration: URLSessionConfiguration = probeConfiguration()) -> Probe {
-        let session = URLSession(configuration: configuration)
+        statusProbe(accessHeaders: accessHeaders, session: URLSession(configuration: configuration))
+    }
+
+    /// The probe on a session the caller keeps (one per runtime, invalidated when it stops: a
+    /// session made per choice would be kept alive by URLSession until invalidated, and a long
+    /// outage asks again every few seconds).
+    public static func statusProbe(accessHeaders: [String: String], session: URLSession) -> Probe {
         return { address in
             var request = URLRequest(url: address.api("/api/status"), timeoutInterval: timeout)
             request.setValue("application/json", forHTTPHeaderField: "Accept")
