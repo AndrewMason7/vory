@@ -334,6 +334,39 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the pushed page after a cancelled swipe")
         any("page.back").firstMatch.tap(); pause(1.5)
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after Back")
+        // A fast flick from the edge (to 0.9, as testSwipeBackKinds; a shorter one never popped
+        // the page). The system decides whether it pops (on the phone it sometimes cancels a
+        // synthesized flick from 80% across), and the bar must match what it chose: the root's
+        // row on screen again means it popped.
+        openRow()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)), withVelocity: .fast, thenHoldForDuration: 0)
+        pause(1.5); shot("settings-flicked")
+        let popped = row.exists && row.isHittable
+        print("FLICK \(popped ? "popped" : "cancelled")")
+        if popped {
+            XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after a flick")
+            XCTAssertFalse(any("page.back").exists, "the Back circle stayed after a flick popped the page")
+        } else {
+            XCTAssertTrue(any("page.back").exists, "a cancelled flick lost the Back circle")
+            XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the page after a cancelled flick")
+        }
+    }
+
+    /// A page pushed on Settings, then Chats and back: the pushed page's Back belongs to its tab
+    /// (Chats shows its own title and no Back), and it is there again back on Settings.
+    func testPushedPageTabSwitch() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        pause(2)
+        for _ in 0..<3 where !any("page.back").exists && row.exists { row.tap(); _ = any("page.back").waitForExistence(timeout: 5) }
+        XCTAssertTrue(any("page.back").exists, "the pushed page has no Back capsule")
+        any("tab.chats").tap(); pause(1.6); shot("pushed-then-chats")
+        XCTAssertFalse(any("page.back").exists, "Settings' Back stands on Chats")
+        any("tab.settings").tap(); pause(1.6); shot("chats-then-settings")
+        XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "the pushed page lost its Back after a tab switch")
     }
 
     /// Holds the Bots page at rest for HERMES_E2E_HOLD seconds (default 14): the cards' faces
@@ -343,6 +376,24 @@ final class SmoothnessPerfUITests: XCTestCase {
         launch(url: url, token: token, tab: "bots")
         pause(3)
         pause(Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14)
+    }
+
+    /// Holds a page pushed on Settings (its first row) at rest for HERMES_E2E_HOLD seconds
+    /// (default 14), for an idle CPU reading from outside: nothing may run per frame under a
+    /// pushed page (the battery rule, #248).
+    func testHoldPushedPage() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "settings")
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
+        pause(2)
+        let id = row.identifier
+        // A tap that pushed takes the row away with the root: tap again only while it is there.
+        for _ in 0..<3 where !any("page.back").exists && row.exists { row.tap(); _ = any("page.back").waitForExistence(timeout: 5) }
+        XCTAssertTrue(any("page.back").exists, "the pushed page has no Back capsule")
+        let hold = Double(ProcessInfo.processInfo.environment["HERMES_E2E_HOLD"] ?? "14") ?? 14
+        print("HOLD-PUSHED start \(id) \(hold)s")
+        pause(hold)
     }
 
     /// Holds the Chats list at rest for HERMES_E2E_HOLD seconds (default 14): the recording
