@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import Observation
 @testable import Vory
 
 /// #248: on the Mac the bots move only while something is working. The 1.4 "Animate bots" switch
@@ -52,6 +53,28 @@ import Testing
         #expect(ambient.anyWorking)
         board.remove(id)
         #expect(ambient.anyWorking == !board.turns.isEmpty)
+    }
+
+    /// The menu bar item reads the counts; a running turn's row rewritten (about once a second
+    /// while a reply streams) must not tell it anything changed, or the whole app scene updates.
+    @Test func aRewrittenRowLeavesTheMenuBarCountsAlone() {
+        let board = TurnBoard.shared
+        let id = "test-\(UUID().uuidString)"
+        defer { board.remove(id) }
+        let running = board.running, attention = board.attention
+        board.upsert(TurnBoard.Turn(id: id, title: "T", bot: "B", profile: "default", detail: "Thinking…", attention: false, startedAt: Date()))
+        #expect(board.running == running + 1 && board.attention == attention)
+        final class Told: @unchecked Sendable { var value = false }
+        let told = Told()
+        withObservationTracking { _ = board.running; _ = board.attention } onChange: { told.value = true }
+        board.upsert(TurnBoard.Turn(id: id, title: "T", bot: "B", profile: "default", detail: "Writing…", attention: false, startedAt: Date()))
+        #expect(!told.value)
+        // Needing you moves it from one count to the other, and that is news.
+        board.upsert(TurnBoard.Turn(id: id, title: "T", bot: "B", profile: "default", detail: "Needs you", attention: true, startedAt: Date()))
+        #expect(told.value)
+        #expect(board.running == running && board.attention == attention + 1)
+        board.remove(id)
+        #expect(board.running == running && board.attention == attention)
     }
 }
 #endif

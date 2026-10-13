@@ -22,9 +22,19 @@ final class TurnBoard {
         var state: BotFace.State = .working
     }
 
-    private(set) var turns: [Turn] = []
-    var running: Int { turns.filter { !$0.attention }.count }
-    var attention: Int { turns.filter(\.attention).count }
+    private(set) var turns: [Turn] = [] { didSet { recount() } }
+    /// The menu bar item's counts, kept and set only when they change. The item, and with it the
+    /// whole app scene (the main menu, the window's root), reads these, not `turns`: a running
+    /// turn's row is rewritten about once a second while a reply streams, and each rewrite used
+    /// to update the whole scene (about 10 ms a time).
+    private(set) var running = 0
+    private(set) var attention = 0
+
+    private func recount() {
+        let needs = turns.filter(\.attention).count
+        if needs != attention { attention = needs }
+        if turns.count - needs != running { running = turns.count - needs }
+    }
 
     func upsert(_ t: Turn) {
         if let i = turns.firstIndex(where: { $0.id == t.id }) { turns[i] = t } else { turns.append(t) }
