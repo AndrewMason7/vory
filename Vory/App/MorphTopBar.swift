@@ -274,7 +274,7 @@ struct MorphTopBar: View {
             // the one modifier so its identity holds.
             // Absent on this page: shrunk to nothing where it was (a view's opacity does not
             // fade glass, so the capsule also drops its glass there, in the one modifier).
-            .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil))
+            .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown))
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
             .animation(goesAtOnce ? nil : .snappy(duration: 0.22), value: present)
@@ -571,11 +571,15 @@ private struct CapsuleFrame: ViewModifier {
     let frame: CGRect
     let present: Bool
     var pull: PullRefreshState?
+    /// How far the bar is toward the page's own state (1 at the root, 0 over a chat or a pushed
+    /// page): the wheel's room goes with the morph. Given in full, a refresh still running as a
+    /// chat opened widened its pill to the right, off its words, until the refresh ended.
+    var widen: CGFloat = 1
     /// The wheel's side, as PullRefreshWheel's: it grows with the title's type.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
     func body(content: Content) -> some View {
         let open = pull.map { $0.refreshing || $0.shown > 0 } ?? false
-        let width = present ? frame.width + (open ? side * 1.4 : 0) : 0
+        let width = present ? frame.width + (open ? side * 1.4 * widen : 0) : 0
         content
             .frame(width: width, height: present ? frame.height : 0)
             .clipShape(.capsule)
