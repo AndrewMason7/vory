@@ -98,7 +98,7 @@ struct ModelMenuContent: View {
                         if let w = p.warning, !w.isEmpty { Text(w) }
                         ForEach(p.featuredModels ?? p.models ?? [], id: \.self) { m in
                             Button { select(provider: p.slug, model: m) } label: {
-                                if chat.modelName == m { Label(m, systemImage: "checkmark") } else { Text(m) }
+                                if chat.modelName == m { MenuLabel(m, systemImage: "checkmark") } else { Text(m) }
                             }
                         }
                         if let more = p.models, let featured = p.featuredModels, more.count > featured.count {
@@ -119,7 +119,7 @@ struct ModelMenuContent: View {
                 Toggle("Fast mode", isOn: Binding(get: { chat.info?.fast ?? false }, set: { v in Task { try? await chat.setFast(v) } }))
             }
             Toggle("YOLO (skip approvals, this session)", isOn: Binding(get: { chat.info?.yolo ?? false }, set: { v in Task { try? await chat.setYolo(v) } }))
-            Button { Task { await load(refresh: true) } } label: { Label("Refresh models", systemImage: "arrow.clockwise") }
+            Button { Task { await load(refresh: true) } } label: { MenuLabel("Refresh models", systemImage: "arrow.clockwise") }
         }
         .task { if options == nil { await load(refresh: false) } }
     }
@@ -213,11 +213,11 @@ struct ReasoningEffortMenu: View {
                             do { try await chat.setReasoning(level) } catch { chat.banner = error.localizedDescription }
                         }
                     } label: {
-                        if chat.info?.reasoningEffort == level { Label(ReasoningEffort.name(of: level), systemImage: "checkmark") } else { Text(ReasoningEffort.name(of: level)) }
+                        if chat.info?.reasoningEffort == level { MenuLabel(ReasoningEffort.name(of: level), systemImage: "checkmark") } else { Text(ReasoningEffort.name(of: level)) }
                     }
                 }
             } label: {
-                Label(ReasoningEffort.title(current: chat.info?.reasoningEffort), systemImage: "brain")
+                MenuLabel(ReasoningEffort.title(current: chat.info?.reasoningEffort), systemImage: "brain")
             }
             .accessibilityIdentifier("chat.reasoning")
             .task {

@@ -242,3 +242,49 @@ private struct MacPageSearchable: ViewModifier {
 extension EnvironmentValues {
     @Entry var macPageShown: Bool = true
 }
+
+/// A menu item's label with a system symbol. On the iPhone it is `Label(title, systemImage:)`.
+/// On the Mac the symbol comes from `SymbolImages`, drawn once per name: SwiftUI looked every
+/// menu item's symbol up in the asset catalog again each time a toolbar's menus were rebuilt,
+/// some 30 of them each time Chats came back (judgement call #5).
+struct MenuLabel: View {
+    private enum Title { case key(LocalizedStringKey), string(String) }
+    private let title: Title
+    private let systemImage: String
+
+    init(_ key: LocalizedStringKey, systemImage: String) { title = .key(key); self.systemImage = systemImage }
+    @_disfavoredOverload init<S: StringProtocol>(_ string: S, systemImage: String) { title = .string(String(string)); self.systemImage = systemImage }
+
+    var body: some View {
+        #if os(macOS)
+        if SymbolImages.cached {
+            Label { text } icon: { Image(nsImage: SymbolImages.image(systemImage)) }
+        } else {
+            plain
+        }
+        #else
+        plain
+        #endif
+    }
+
+    private var text: Text { switch title { case .key(let k): Text(k); case .string(let s): Text(s) } }
+    private var plain: Label<Text, Image> {
+        switch title { case .key(let k): Label(k, systemImage: systemImage); case .string(let s): Label(s, systemImage: systemImage) }
+    }
+}
+
+#if os(macOS)
+/// The menus' symbols as images, each drawn once. `defaults write <app id> mac.symbolCache.off
+/// -bool YES` goes back to SwiftUI's own lookup (judgement call #5's way back).
+@MainActor enum SymbolImages {
+    static let cached = !UserDefaults.standard.bool(forKey: "mac.symbolCache.off")
+    private static var images: [String: NSImage] = [:]
+
+    static func image(_ name: String) -> NSImage {
+        if let image = images[name] { return image }
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage()
+        images[name] = image
+        return image
+    }
+}
+#endif

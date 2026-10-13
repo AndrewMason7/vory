@@ -679,12 +679,12 @@ struct ChatMenuItems: View {
         let _ = Perf.tick("chat-menu-items")
         Menu {
             ModelMenuContent(chat: chat)
-        } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
+        } label: { MenuLabel("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         ReasoningEffortMenu(chat: chat)
-        Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
-        Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
-        Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
-        Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
+        Button(action: onContext) { MenuLabel("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
+        Button(action: onProfile) { MenuLabel("Bot info", systemImage: "person.text.rectangle") }
+        Button(action: onRename) { MenuLabel("Rename chat", systemImage: "pencil") }
+        Button { HandsFreeSession.shared.start(chat: chat) } label: { MenuLabel("Voice mode", systemImage: "waveform.badge.mic") }
         #if os(iOS)
         // The newest finished reply read aloud, as the Mac's Chat menu has it; again stops it.
         if let last = VoiceCoordinator.lastReply(in: chat.items) {
@@ -696,10 +696,10 @@ struct ChatMenuItems: View {
         #endif
         ChatProjectMenu(chat: chat)
         Divider()
-        Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }
-        Button { Task { await chat.loadUsage() } } label: { Label("Refresh usage", systemImage: "arrow.clockwise") }
+        Button(action: onNewChat) { MenuLabel("New Chat", systemImage: "square.and.pencil") }
+        Button { Task { await chat.loadUsage() } } label: { MenuLabel("Refresh usage", systemImage: "arrow.clockwise") }
         Divider()
-        Button(role: .destructive, action: onClose) { Label("Close session", systemImage: "xmark.circle") }
+        Button(role: .destructive, action: onClose) { MenuLabel("Close session", systemImage: "xmark.circle") }
     }
 }
 

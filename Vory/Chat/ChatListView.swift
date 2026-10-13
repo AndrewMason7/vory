@@ -413,8 +413,8 @@ struct ChatListView: View {
     /// Refresh, sort, filters and Select in one menu.
     private var viewMenu: some View {
         Menu {
-            Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-            Menu { sortItems.pickerStyle(.inline).labelsHidden() } label: { Label("Sort By", systemImage: "arrow.up.arrow.down") }
+            Button { Task { await load() } } label: { MenuLabel("Refresh", systemImage: "arrow.clockwise") }
+            Menu { sortItems.pickerStyle(.inline).labelsHidden() } label: { MenuLabel("Sort By", systemImage: "arrow.up.arrow.down") }
             filterItems
         } label: {
             Label(filtering ? "View options (filters on)" : "View options", systemImage: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
@@ -428,8 +428,8 @@ struct ChatListView: View {
     /// sheet with bots, a project and a first message.
     private var composeMenu: some View {
         Menu {
-            Button { model.newChatRequest = UUID() } label: { Label("New Chat", systemImage: "square.and.pencil") }
-            Button { model.newChatSheetRequest = UUID() } label: { Label("New Chat With…", systemImage: "person.2") }
+            Button { model.newChatRequest = UUID() } label: { MenuLabel("New Chat", systemImage: "square.and.pencil") }
+            Button { model.newChatSheetRequest = UUID() } label: { MenuLabel("New Chat With…", systemImage: "person.2") }
         } label: {
             Label("New Chat", systemImage: "square.and.pencil")
         } primaryAction: {
@@ -448,7 +448,7 @@ struct ChatListView: View {
     private var voiceMenu: some View {
         Menu {
             ForEach(model.runtime?.profiles ?? []) { p in
-                Button { model.voiceChatRequest = .init(profile: p.name) } label: { Label(p.label, systemImage: "person.fill") }
+                Button { model.voiceChatRequest = .init(profile: p.name) } label: { MenuLabel(p.label, systemImage: "person.fill") }
             }
         } label: {
             Label("Voice Chat", systemImage: "mic.fill")
@@ -1344,10 +1344,10 @@ struct ChatListSortItems: View {
     private var runtime: GatewayRuntime? { model.runtime }
     @ViewBuilder var body: some View {
         Picker("Sort by", selection: Bindable(prefs).sortKey) {
-            Label("Recent", systemImage: "clock").tag("recent")
-            Label("Title", systemImage: "textformat").tag("title")
-            Label("Bot", systemImage: "person").tag("bot")
-            Label("Model", systemImage: "cpu").tag("model")
+            MenuLabel("Recent", systemImage: "clock").tag("recent")
+            MenuLabel("Title", systemImage: "textformat").tag("title")
+            MenuLabel("Bot", systemImage: "person").tag("bot")
+            MenuLabel("Model", systemImage: "cpu").tag("model")
         }
         }
 }
@@ -1360,16 +1360,16 @@ struct ChatListFilterItems: View {
     private var filtering: Bool { prefs.pinnedOnly || prefs.needsYouOnly || prefs.liveOnly || prefs.groupsOnly || !prefs.showArchived || !prefs.projectFilter.isEmpty }
     @ViewBuilder var body: some View {
             Section("Show") {
-                Toggle(isOn: Bindable(prefs).pinnedOnly) { Label("Pinned only", systemImage: "pin") }
-                Toggle(isOn: Bindable(prefs).needsYouOnly) { Label("Needs you", systemImage: "exclamationmark.bubble") }
-                Toggle(isOn: Bindable(prefs).liveOnly) { Label("Working now", systemImage: "bolt") }
-                Toggle(isOn: Bindable(prefs).showArchived) { Label("Archived", systemImage: "archivebox") }
-                Toggle(isOn: Bindable(prefs).groupsOnly) { Label("Group chats", systemImage: "person.3") }
+                Toggle(isOn: Bindable(prefs).pinnedOnly) { MenuLabel("Pinned only", systemImage: "pin") }
+                Toggle(isOn: Bindable(prefs).needsYouOnly) { MenuLabel("Needs you", systemImage: "exclamationmark.bubble") }
+                Toggle(isOn: Bindable(prefs).liveOnly) { MenuLabel("Working now", systemImage: "bolt") }
+                Toggle(isOn: Bindable(prefs).showArchived) { MenuLabel("Archived", systemImage: "archivebox") }
+                Toggle(isOn: Bindable(prefs).groupsOnly) { MenuLabel("Group chats", systemImage: "person.3") }
             }
             if let runtime, runtime.projects.available == true {
                 Section("Project") {
                     Picker("Project", selection: Bindable(prefs).projectFilter) {
-                        Label("All projects", systemImage: "folder").tag("")
+                        MenuLabel("All projects", systemImage: "folder").tag("")
                         ForEach(runtime.projects.open) { p in Label(p.name, systemImage: "folder.fill").tag(p.id) }
                         Label("No project", systemImage: "folder.badge.questionmark").tag("__none__")
                     }
