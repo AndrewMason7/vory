@@ -7,6 +7,17 @@ import OSLog
 @Observable
 public final class GatewayRuntime {
     public let connection: GatewayConnection
+    /// The address in use: the gateway's own, or for a gateway with a backup address (#283) the
+    /// one that answered when the socket last connected.
+    public private(set) var address: GatewayURL
+    /// The address in use in words, for where the gateway is named; nil with only one address.
+    public var addressLabel: String? { connection.alternate == nil ? nil : AddressChooser.label(for: address) }
+    /// Tests stand in for the status probe here; nil asks the addresses themselves.
+    public var addressProbe: AddressChooser.Probe?
+    private let addressMemory = AddressMemory()
+    /// The chosen address's index and identity, kept once the socket has opened with it.
+    private var chosenAddress: AddressChooser.Choice?
+    private var pathWatch: Task<Void, Never>?
     public private(set) var secrets: GatewaySecrets
     public let api: HermesAPI
     public private(set) var socket: GatewaySocket!
@@ -76,7 +87,10 @@ public final class GatewayRuntime {
         let loadedSecrets = store.secrets(for: connection.id)
         self.secrets = loadedSecrets
         self.selectedProfile = connection.lastProfile
-        self.api = HermesAPI(gateway: connection.gateway, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets))
+        let addresses = connection.addresses
+        let first = AddressMemory().lastGood(for: connection.id).flatMap { addresses.indices.contains($0) ? addresses[$0] : nil } ?? connection.gateway
+        self.address = first
+        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets))
         self.socket = GatewaySocket(
             urlProvider: { [weak self] in
                 guard let self else { throw SocketError.cancelled }
@@ -88,6 +102,7 @@ public final class GatewayRuntime {
                 guard let self else { return }
                 let wasOpen = self.socketState.isOpen
                 self.socketState = s
+                if !wasOpen, s.isOpen { self.rememberAddress() }
                 // The status widget shows whether the gateway is reachable: tell it on every flip.
                 // Where HTTP counts too (the watch), a socket that closed asks HTTP afresh rather
                 // than keep the last answer.
@@ -122,9 +137,9 @@ public final class GatewayRuntime {
         var refreshed: GatewaySecrets
         var signedInAgain = false
         do {
-            refreshed = try await NativeAuthClient.refresh(gateway: connection.gateway, secrets: secrets)
+            refreshed = try await NativeAuthClient.refresh(gateway: address, secrets: secrets)
         } catch HermesAPIError.sessionExpired {
-            guard let signInAgain, let renewed = await signInAgain(connection, secrets) else {
+            guard let signInAgain, let renewed = await signInAgain(connection.using(address), secrets) else {
                 refreshRefused = true
                 throw HermesAPIError.sessionExpired
             }
@@ -173,7 +188,8 @@ public final class GatewayRuntime {
     }
 
     private nonisolated func websocketURL() async throws -> (URL, [String: String]) {
-        let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
+        let gateway = await chooseAddress()
+        let (authMode, secrets) = await (connection.authMode, self.secrets)
         var ticket: String?
         if authMode.usesBearer {
             let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody(), directOnly: true)
@@ -186,7 +202,7 @@ public final class GatewayRuntime {
     /// A socket URL for a plugin's own endpoint (the kanban event stream), credentialled the
     /// same way as the main socket: a minted ticket for bearer gateways, `?token=` otherwise.
     nonisolated func pluginWebsocketURL(path: String, query: [URLQueryItem]) async throws -> (URL, [String: String]) {
-        let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
+        let (gateway, authMode, secrets) = await (address, connection.authMode, self.secrets)
         var items = query
         if authMode.usesBearer {
             let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody(), directOnly: true)
@@ -197,13 +213,73 @@ public final class GatewayRuntime {
         return (gateway.websocket(path, query: items), secrets.access.headers)
     }
 
+    // MARK: Two addresses (#283)
+
+    /// Before each connect, a gateway with a backup address asks both addresses which is
+    /// answering (`AddressChooser`: the one that worked last first, briefly, then the first good
+    /// answer; no credentials sent). No good answer keeps the address in use, as one address
+    /// always does.
+    private func chooseAddress() async -> GatewayURL {
+        let addresses = connection.addresses
+        guard addresses.count > 1 else { return address }
+        let probe = addressProbe ?? AddressChooser.statusProbe(accessHeaders: connection.hasAccessHeaders ? secrets.access.headers : [:])
+        let choice = await AddressChooser.choose(addresses: addresses, lastGood: addressMemory.lastGood(for: connection.id),
+                                                 known: addressMemory.identity(for: connection.id), probe: probe)
+        chosenAddress = choice
+        if let choice, addresses[choice.index] != address {
+            address = addresses[choice.index]
+            await api.setGateway(address)
+            log.info("address: \(AddressChooser.label(for: self.address), privacy: .public)")
+        }
+        return address
+    }
+
+    /// The socket opened, signed in, at `address`: it is this gateway. Remembered on this
+    /// device as the address that works and as what the gateway says about itself. When the
+    /// probe had no good answer (the gateway's sign-in changed, say), what this address says
+    /// now is asked afresh and kept, so the next choice is not stuck on the old answer.
+    private func rememberAddress() {
+        let addresses = connection.addresses
+        guard addresses.count > 1, let index = addresses.firstIndex(of: address) else { return }
+        addressMemory.setLastGood(index, for: connection.id)
+        if let chosen = chosenAddress, chosen.index == index {
+            addressMemory.setIdentity(chosen.identity, for: connection.id)
+            return
+        }
+        let probe = addressProbe ?? AddressChooser.statusProbe(accessHeaders: connection.hasAccessHeaders ? secrets.access.headers : [:])
+        let id = connection.id, at = address
+        Task { [weak self] in
+            guard let identity = await probe(at), let self, self.address == at else { return }
+            self.addressMemory.setIdentity(identity, for: id)
+        }
+    }
+
+    /// With two addresses, a change of network while connected is checked at once: the address
+    /// in use may be out of reach from the new network, and the heartbeat could take half a
+    /// minute to notice. A socket that does not answer reconnects, and the reconnect chooses.
+    private func watchNetwork() {
+        guard connection.alternate != nil, pathWatch == nil else { return }
+        pathWatch = Task { [weak self] in
+            for await _ in NetworkWatch.shared.pathChanges() {
+                guard let self, !Task.isCancelled else { return }
+                await self.networkChanged()
+            }
+        }
+    }
+
+    /// The network changed: a socket that does not answer within 3 s is dropped, and its
+    /// reconnect chooses the address again.
+    func networkChanged() async {
+        if socketState.isOpen { await socket.checkAlive(timeout: 3) }
+    }
+
     // MARK: Lifecycle
 
     public func start() async {
         projects.attach(self)
         kanban.attach(self)
         voice.attach(self)
-        if socketEnabled { await socket.connect() }
+        if socketEnabled { watchNetwork(); await socket.connect() }
         // The first HTTP call waits for the socket, briefly: on first open the route may still
         // be coming up, and a profile list asked for before it failed and put up an error the
         // connect loop was about to make moot (#305). The reconnect loads what this missed.
@@ -214,6 +290,7 @@ public final class GatewayRuntime {
     }
 
     public func stop() async {
+        pathWatch?.cancel(); pathWatch = nil
         globalEventTask?.cancel()
         kanban.stopEvents()
         await socket.disconnect()

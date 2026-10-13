@@ -31,7 +31,9 @@ public struct EmptyBody: Encodable, Sendable { public init() {} }
 
 /// REST client for one gateway. Applies auth + Access headers, `?profile=`, 401→refresh→retry, and HTML detection.
 public actor HermesAPI {
-    public let gateway: GatewayURL
+    /// Where calls go. A gateway with two addresses (#283) has its runtime point this at the one
+    /// in use before each connect.
+    public private(set) var gateway: GatewayURL
     public private(set) var signer: RequestSigner
     private let urlSession: URLSession
     /// Called on 401 for bearer modes; returns a refreshed signer or throws.
@@ -54,6 +56,8 @@ public actor HermesAPI {
     /// each change.
     public private(set) var lastRelayed = false
     private var onRouteUsed: (@Sendable (Bool) -> Void)?
+
+    public func setGateway(_ gateway: GatewayURL) { self.gateway = gateway }
 
     public init(gateway: GatewayURL, signer: RequestSigner, urlSession: URLSession = HermesAPI.makeSession()) {
         self.gateway = gateway
