@@ -121,6 +121,11 @@ struct VoryMacApp: App {
                 .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)) { _ in model.lock.willEnterForeground(); BotAmbient.shared.displayAsleep = false }
         }
         .defaultSize(width: 980, height: 700)
+        // Opening Vory always shows its window (#328: a window closed before quitting meant a
+        // launch from Finder, Spotlight or Launchpad could show only the menu bar item). A launch at
+        // login shows it too (judgement call #7). Restoration stays on, so the window keeps its
+        // size and place.
+        .defaultLaunchBehavior(.presented)
         .commands {
             // Settings… (⌘,) is the Settings tab of the window; the app has one state, not two windows.
             CommandGroup(replacing: .appSettings) {
