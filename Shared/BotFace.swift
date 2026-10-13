@@ -278,8 +278,8 @@ public enum BotFace {
     static func stroke(_ x: Double) -> Double { let u = min(1, max(0, x)); return u * u * u * (u * (u * 6 - 15) + 10) }
 
     /// The pose at time `t` for a bot in `state`. `since`: seconds since the state began (the
-    /// one-shots at a state's start count from here). `finishedAt` / `tappedAt`: the reply just
-    /// ended / the bot was just tapped — a full turn / a small one, over anything else. `group`:
+    /// one-shots at a state's start count from here). `finishedAt`: the reply just ended — a full
+    /// turn, over anything else. `group`:
     /// in a group only one bot moves its body per block, in turn.
     /// Bots share the clock but not the phase: `seed` (shape, eyes and name) offsets each one's
     /// blocks and picks its routine, so a page of bots never moves in unison.
@@ -287,7 +287,7 @@ public enum BotFace {
     /// stored choice; widgets and the watch leave it at 1.
     nonisolated(unsafe) public static var motionScale: Double = 1
 
-    public static func motion(time t: Double, seed: Int, spec: BotLookSpec, state: State, since: Double = 0, finishedAt: Double? = nil, tappedAt: Double? = nil, group: (index: Int, count: Int)? = nil) -> Motion {
+    public static func motion(time t: Double, seed: Int, spec: BotLookSpec, state: State, since: Double = 0, finishedAt: Double? = nil, group: (index: Int, count: Int)? = nil) -> Motion {
         let sign: Double = seed % 2 == 0 ? 1 : -1
         // Per-shape flavour: the cloud keeps its flat bottom planted, the pill's wide face makes
         // any roll read large, the drop's point should not stab.
@@ -297,12 +297,10 @@ public enum BotFace {
         var m = Motion()
 
         // The finish: one full turn, a blink as the face goes edge-on, then a glance down at the
-        // new bubble. A tap: a small turn and back with a blink and a tick of light on the rim —
-        // pressing a physical chip, not a button. Both play on top of whatever the state holds:
-        // a "!" spins as a "!".
-        var finishing: Double? = nil, tapping: Double? = nil
+        // new bubble, on top of whatever the state holds: a "!" spins as a "!". (A tap's reaction
+        // is the motion engine's, `BotMotionModel.react`.)
+        var finishing: Double? = nil
         if let f = finishedAt, t - f >= 0, t - f < 1.75 { finishing = t - f }
-        else if let tp = tappedAt, t - tp >= 0, t - tp < 0.55 { tapping = (t - tp) / 0.55 }
         defer {
             if let u = finishing {
                 if u < 1.15 {
@@ -313,13 +311,9 @@ public enum BotFace {
                 } else if !m.freezeGlance {
                     m.eyeY += 0.5 * sin((u - 1.15) / 0.6 * .pi)
                 }
-            } else if let u = tapping {
-                m.yaw = 0.314 * (u < 0.5 ? stroke(u * 2) : stroke((1 - u) * 2))
-                m.sheen = 0.6 * sin(u * .pi); m.sheenAngle = -130 + 90 * u
-                if u > 0.42, u < 0.68 { m.eyeOpen = min(m.eyeOpen, 0.12) }
             }
         }
-        if finishing != nil || tapping != nil, state == .working { return m }
+        if finishing != nil, state == .working { return m }
 
         switch state {
         case .idle:
@@ -1041,9 +1035,20 @@ public final class BotAmbient {
         finished[profile] = Date()
         if let session { finishedSessions[session] = Date() }
     }
-    /// When each bot was last tapped: a small turn and a blink at that moment.
+    /// When each bot was last tapped (a card, the chat's pill, the toolbar), and the same by chat:
+    /// the face tapped reacts (a blink and a small bounce), a face that stands for a chat only to
+    /// its own chat's taps, so a list of one bot's chats does not all react to one.
     public var tapped: [String: Date] = [:]
-    public func tap(profile: String) { tapped[profile] = Date() }
+    public var tappedSessions: [String: Date] = [:]
+    public func tap(profile: String, session: String? = nil) {
+        tapped[profile] = Date()
+        if let session, !session.isEmpty { tappedSessions[session] = Date() }
+    }
+    /// The tap a face reacts to: its chat's when it stands for one, else its bot's.
+    public func lastTap(profile: String?, session: String?) -> Date? {
+        if let session, !session.isEmpty { return tappedSessions[session] }
+        return profile.flatMap { tapped[$0] }
+    }
 }
 
 /// The bot's body as a Shape, so the app can give it real Liquid Glass.
@@ -1206,10 +1211,8 @@ public struct BotFaceView: View {
         guard let d, Date().timeIntervalSince(d) < 1.8 else { return nil }
         return d.timeIntervalSinceReferenceDate
     }
-    private var tappedAt: Double? {
-        guard let p = mood.profile, let d = ambient.tapped[p], Date().timeIntervalSince(d) < 0.6 else { return nil }
-        return d.timeIntervalSinceReferenceDate
-    }
+    /// The tap this face reacts to, whenever it was (the reaction itself checks it is recent).
+    private var lastTap: Date? { ambient.lastTap(profile: mood.profile, session: mood.session) }
 
     /// The frame's pose. For 0.4 s after a state change the frame blends from the pose that was
     /// on screen (`exitPose`) to the new state's, so nothing jumps — whatever the old state had
@@ -1218,9 +1221,9 @@ public struct BotFaceView: View {
     /// new one grows. Reduce Motion jumps to the end pose with the body frozen (a held lean stays;
     /// it does not move); painted renders keep the transforms still. Under 32 pt (beside a bubble,
     /// on the toolbar) the body keeps its shape: eyes, and a lean or nudge, only.
-    private func pose(time t: Double, now: Date, since: Double, finished: Double?, tapped: Double?, held: Bool = false) -> BotFace.Motion {
+    private func pose(time t: Double, now: Date, since: Double, finished: Double?, held: Bool = false) -> BotFace.Motion {
         let group: (index: Int, count: Int)? = mood.groupCount > 1 ? (mood.groupIndex, mood.groupCount) : nil
-        var m = BotFace.motion(time: t, seed: seed, spec: spec, state: state, since: since, finishedAt: finished, tappedAt: tapped, group: group)
+        var m = BotFace.motion(time: t, seed: seed, spec: spec, state: state, since: since, finishedAt: finished, group: group)
         let back = now.timeIntervalSince(exitAt)
         if back < 0.4, !reduceMotion, !held {
             let ex = exitPose
@@ -1405,14 +1408,13 @@ public struct BotFaceView: View {
         let tiltWeight: CGFloat = held ? 1.0 : 0.5
         let ambientGaze = listens ? CGPoint(x: ambient.gaze.x + tilt.x * tiltWeight, y: ambient.gaze.y + tilt.y * tiltWeight) : .zero
         let finished = finishedAt
-        let tapped = tappedAt
         let state = state
         let engine = BotFace.motionEngine && !drawn
         let targets = BotMotionTargets.targets(for: state == .working && !active ? .idle : state)
         // The frame blends from the last pose for 0.4 s after a state change.
         let leaving = Date().timeIntervalSince(exitAt) < 0.5
         // Any state but idle keeps the clock running: the poses are functions of time.
-        let animating = (active || state != .idle || finished != nil || tapped != nil || leaving) && live
+        let animating = (active || state != .idle || finished != nil || leaving) && live
         let wobble = state == .working && (live || drawn)
         let ticks = live && (animating || eyesBusy || gaze != shownGaze)
         let _ = spinTick
@@ -1430,7 +1432,7 @@ public struct BotFaceView: View {
             let g = CGPoint(x: max(-1, min(1, g0.x + ambientGaze.x)), y: max(-1, min(1, g0.y + ambientGaze.y)))
             // Held (not live), the bot stands at rest in its current state's end pose: no turn,
             // nod or blend part-way through, and the idle eyes open.
-            let m = pose(time: t, now: timeline.date, since: timeline.date.timeIntervalSince(stateSince), finished: finished, tapped: tapped, held: !live && !drawn)
+            let m = pose(time: t, now: timeline.date, since: timeline.date.timeIntervalSince(stateSince), finished: finished, held: !live && !drawn)
             let _ = { shown.pose = m }()
             // The motion model's frame, once per tick: held or under Reduce Motion it is snapped
             // to the state's still. The eyes held (the Mac idle, a stacked face): open, no blink.
@@ -1557,12 +1559,21 @@ public struct BotFaceView: View {
             try? await Task.sleep(for: .milliseconds(600))
             spinTick += 1
         }
-        // A tap on the bot: the small turn. Simultaneous, so the row or link it sits in still gets it.
-        .simultaneousGesture(TapGesture().onEnded { if let p = mood.profile, !drawn { ambient.tap(profile: p) } })
-        // Once a finish spin or a tap has played, a nudge re-evaluates the body so the timeline
-        // pauses again (nothing else changes afterwards and it would keep running otherwise).
-        .task(id: "\(finished ?? 0)-\(tapped ?? 0)") {
-            guard finished != nil || tapped != nil else { return }
+        // A tap on the bot. Simultaneous, so the row or link it sits in still gets it.
+        .simultaneousGesture(TapGesture().onEnded { if let p = mood.profile, !drawn { ambient.tap(profile: p, session: mood.session) } })
+        // The engine plays the tap's reaction; a face mounted for it (a list's still swapped for
+        // the live view) starts it on its first frame. Not held, not under Reduce
+        // Motion (the model is snapped to its still every frame there), not with the bots still
+        // (Settings › Bots › Style) or the switch off.
+        .onChange(of: lastTap, initial: true) { _, d in
+            guard engine, let d, BotMotionModel.Reaction.plays, Date().timeIntervalSince(d) < BotMotionModel.Reaction.length else { return }
+            model.react(at: d.timeIntervalSinceReferenceDate)
+            spinTick += 1
+        }
+        // Once a finish spin has played, a nudge re-evaluates the body so the timeline pauses
+        // again (nothing else changes afterwards and it would keep running otherwise).
+        .task(id: "\(finished ?? 0)") {
+            guard finished != nil else { return }
             try? await Task.sleep(for: .milliseconds(1900))
             spinTick += 1
         }

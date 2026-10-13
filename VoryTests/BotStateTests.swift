@@ -134,15 +134,14 @@ import Testing
         #expect(m.sheen > 0.3)
     }
 
-    @Test func theFinishTurnAndTheTapNeverReachTheCaller() {
-        // As written today, `motion` applies the finish turn and the tap in a `defer`, which runs
-        // after `return m` has already copied the pose: the caller gets no yaw, no blink. The
-        // 1.5 port replaces both with the eye orbit (decision 9), so this stays as a record of
-        // what 1.4 did, not as a target.
+    @Test func theFinishTurnNeverReachesTheCaller() {
+        // As written today, `motion` applies the finish turn in a `defer`, which runs after
+        // `return m` has already copied the pose: the caller gets no yaw, no blink. The 1.5 port
+        // replaces it with the eye orbit (decision 9), so this stays as a record of what 1.4 did,
+        // not as a target. (The tap's turn, dead the same way, is gone: a tap is the engine's
+        // reaction now, `BotMotionModel.react`.)
         let finish = BotFace.motion(time: 100.575, seed: 2, spec: spec, state: .working, finishedAt: 100)
         #expect(finish.yaw == 0 && finish.eyeOpen == 1)
-        let tap = BotFace.motion(time: 100.275, seed: 2, spec: spec, state: .idle, tappedAt: 100)
-        #expect(tap.yaw == 0)
     }
 
     @Test func theMotionStyleScalesTheBodyNotTheHold() {

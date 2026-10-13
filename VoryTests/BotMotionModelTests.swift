@@ -152,6 +152,57 @@ import Testing
         #expect(m.isSettled)
     }
 
+    /// A moment from `t` on with no scheduled blink for `seconds`, so a blink seen is the tap's.
+    private func quiet(after t: Double, seed: Int, seconds: Double = 0.6) -> Double {
+        var t0 = t
+        while stride(from: t0, to: t0 + seconds, by: 1.0 / 120).contains(where: { BotMotionModel.blink(at: $0, seed: seed) > 0 }) { t0 += 0.25 }
+        return t0
+    }
+
+    /// A tap (judgement call #8 (a)): a blink and a small bounce, then rest. The model is unsettled
+    /// while it plays, so the face's clock runs, and settled soon after, so it pauses again.
+    @Test func aTapBlinksBouncesAndSettles() {
+        let m = BotMotionModel(seed: 1)
+        let t0 = quiet(after: 2, seed: 1)
+        _ = run(m, .idle, from: 0, seconds: t0)
+        #expect(m.isSettled)
+        m.react(at: t0)
+        var minEye = 1.0, minSy = 1.0
+        _ = run(m, .idle, from: t0, seconds: 0.3) { f, _ in minEye = min(minEye, f.eyeOpen); minSy = min(minSy, f.sy) }
+        #expect(minEye < 0.2, "no blink: \(minEye)")
+        #expect(minSy < 0.97, "no bounce: \(minSy)")
+        #expect(m.unsettled.contains("react"))
+        _ = run(m, .idle, from: t0 + 0.3, seconds: 1.5)
+        #expect(m.isSettled, "still moving: \(m.unsettled)")
+    }
+
+    /// A face mounted for the tap (a list's still swapped for the live view) plays it from its
+    /// first frame.
+    @Test func aTapBeforeTheFirstFrameStillPlays() {
+        let m = BotMotionModel(seed: 1)
+        let t0 = quiet(after: 2, seed: 1)
+        m.react(at: t0 - 0.02)
+        var minEye = 1.0
+        _ = run(m, .idle, from: t0, seconds: 0.3) { f, _ in minEye = min(minEye, f.eyeOpen) }
+        #expect(minEye < 0.3, "no blink: \(minEye)")
+    }
+
+    /// Reduce Motion and a held face snap to the still on every frame: a tap moves nothing.
+    @Test func aSnappedFaceDoesNotReact() {
+        let m = BotMotionModel(seed: 1)
+        let t0 = quiet(after: 2, seed: 1)
+        _ = run(m, .idle, from: 0, seconds: t0)
+        m.react(at: t0)
+        var t = t0, minEye = 1.0, sy = (lo: 1.0, hi: 1.0)
+        for _ in 0..<30 {
+            t += 1.0 / 60
+            m.snap(to: .targets(for: .idle), at: t)
+            let f = m.advance(to: t, targets: .targets(for: .idle))
+            minEye = min(minEye, f.eyeOpen); sy = (min(sy.lo, f.sy), max(sy.hi, f.sy))
+        }
+        #expect(minEye > 0.99 && sy.lo == 1 && sy.hi == 1)
+    }
+
     @Test func snappingIsAStillFrameOfTheState() {
         let m = BotMotionModel(seed: 1)
         m.snap(to: .targets(for: .awaitingApproval), at: 0)

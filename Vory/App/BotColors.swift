@@ -131,7 +131,8 @@ struct BotAvatar: View {
         let a = BotAmbient.shared
         if let s = mood.session, let d = a.finishedSessions[s], now.timeIntervalSince(d) < 1.2 { return false }
         if mood.session == nil, let d = a.finished[profile], now.timeIntervalSince(d) < 1.2 { return false }
-        if let d = a.tapped[profile], now.timeIntervalSince(d) < 1.2 { return false }
+        // The live view for a tap's reaction only where one plays (not still, not under Reduce Motion).
+        if BotMotionModel.Reaction.plays, !StillBlink.reduceMotionOn, let d = a.lastTap(profile: profile, session: mood.session), now.timeIntervalSince(d) < 1.2 { return false }
         return true
     }
     /// The same seed the live view blinks on, so the picture and the live face agree on when.
@@ -205,7 +206,7 @@ private struct StillBlink: ViewModifier {
     let key: String
     let on: Bool
     @Environment(\.botsLive) private var pageLive
-    private static var reduceMotionOn: Bool {
+    static var reduceMotionOn: Bool {
         #if os(iOS)
         UIAccessibility.isReduceMotionEnabled
         #else

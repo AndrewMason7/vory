@@ -112,6 +112,10 @@ public final class BotMotionModel {
     private var lastKick: Double = -10
     private var loopStart: Double?
     private var orbitStart: Double?
+    /// A tap's reaction under way, and whether its bounce has been given (on the first frame
+    /// past its start, so the springs carry it).
+    private var reactStart: Double?
+    private var reactKicked = false
     /// The targets last advanced toward, for `isSettled`.
     private var lastTargets = BotMotionTargets()
     /// Once a symbol that hides the eyes is the target, the eyes only go down until a symbol
@@ -174,17 +178,37 @@ public final class BotMotionModel {
     public static let orbitLength = 0.68
     public func spin(at t: Double) { orbitStart = t }
 
+    /// A tap's reaction (judgement call #8 (a), the look): a blink and a small bounce, then rest.
+    /// One set of numbers: how long it holds the clock, the blink's length, and the squash given
+    /// to the body's springs (they bounce it back over the next few tenths).
+    public enum Reaction {
+        public static let length = 0.42
+        public static let blinkLength = 0.16
+        public static let squash = 1.1
+        /// A judgement call made while Matt was out: `-vory-tap-reaction-off` leaves a tapped
+        /// face still (the tap still does what it did).
+        public static let off = ProcessInfo.processInfo.arguments.contains("-vory-tap-reaction-off")
+        /// Whether a tap plays at all: not off, and the bots not still (Settings › Bots › Style ›
+        /// Still, or their motion turned off). Reduce Motion is the view's: it snaps the face.
+        @MainActor public static var plays: Bool { !off && BotFace.motionScale > 0 && BotAmbient.shared.enabled }
+    }
+    /// Starts the reaction to a tap at `t`.
+    public func react(at t: Double) { reactStart = t; reactKicked = false }
+
     /// Advances to `t` (seconds) toward `targets` and returns the frame to draw.
     @discardableResult
     public func advance(to t: Double, targets asked: BotMotionTargets) -> BotMotionFrame {
         // A face's first frame is its settled pose: nothing springs in from a neutral face when a
         // row scrolls into view, so an idle face draws once and its timeline pauses at once
         // (the list fling's main-thread cost on the phone was rows' faces settling, 2026-10-11).
-        if lastTime == nil { snap(to: asked, at: t) }
+        // A reaction started before the face's first frame (a face mounted for it) plays on.
+        if lastTime == nil { let r = reactStart; snap(to: asked, at: t); reactStart = r }
         let dt = lastTime.map { max(0, t - $0) } ?? 0
         lastTime = t
         let targets = held(asked, at: t)
         lastTargets = targets
+        // A tap: the squash once, from the frame its reaction starts on.
+        if let r = reactStart, !reactKicked, t >= r { sy.v -= Reaction.squash; sx.v += Reaction.squash / 2; reactKicked = true }
         // A change of symbol: a small squash kick, rate-limited so fast flips never stack (item 15).
         if targets.visual != lastVisual {
             lastVisual = targets.visual
@@ -207,7 +231,12 @@ public final class BotMotionModel {
         arcs.step(toward: targets.arcs, dt: dt)
         var f = BotMotionFrame()
         for v in BotVisual.allCases { f.amounts[v] = amounts[v]?.x ?? 0 }
-        let blink = Self.blink(at: t, seed: seed)
+        var blink = Self.blink(at: t, seed: seed)
+        if let r = reactStart {
+            let u = t - r
+            if u >= Reaction.length { reactStart = nil }
+            else if u >= 0, u < Reaction.blinkLength { blink = max(blink, sin(u / Reaction.blinkLength * .pi)) }
+        }
         f.eyeOpen = min(eyeOpen.x, 1 - blink * 0.92)
         f.eyeX = eyeX.x; f.eyeY = eyeY.x
         // The eyes go with the symbol that hides them: gone by the time it is a third grown (item 5).
@@ -234,6 +263,7 @@ public final class BotMotionModel {
     public var unsettled: [String] {
         var out: [String] = []
         if orbitStart != nil { out.append("orbit") }
+        if reactStart != nil { out.append("react") }
         if lastTargets.loops { out.append("loop") }
         for v in BotVisual.allCases where !(amounts[v]?.isSettled(at: v == lastTargets.visual ? 1 : 0) ?? true) { out.append(v.rawValue) }
         let hidden = lastTargets.visual.hidesEyes
@@ -255,6 +285,6 @@ public final class BotMotionModel {
         eyeOpacity.snap(to: targets.visual.hidesEyes ? 0 : 1)
         eyesHeldDown = targets.visual.hidesEyes; lastEyeOpacity = eyesHeldDown ? 0 : 1
         sx.snap(to: 1); sy.snap(to: 1); dim.snap(to: targets.dim); halo.snap(to: targets.halo); arcs.snap(to: targets.arcs)
-        orbitStart = nil; loopStart = targets.loops ? t : nil
+        orbitStart = nil; reactStart = nil; loopStart = targets.loops ? t : nil
     }
 }
