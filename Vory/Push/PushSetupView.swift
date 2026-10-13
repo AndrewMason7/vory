@@ -655,7 +655,7 @@ struct RestartCountdownRows: View {
             Button { Task { await setup.restartNow(runtime: runtime) } } label: { Label("Restart Gateway now", systemImage: "arrow.clockwise") }
             Button { Task { await setup.checkRestartNow(runtime: runtime) } } label: { Label("Check now", systemImage: "waveform.path.ecg") }
             if setup.restartError?.localizedCaseInsensitiveContains("expired") == true || setup.restartError?.localizedCaseInsensitiveContains("401") == true {
-                NavigationLink { GatewayFormView(existing: runtime.connection) } label: { Label("Sign in again", systemImage: "person.badge.key") }
+                NavigationLink { GatewayFormView(existing: runtime.connection).pushedPage() } label: { Label("Sign in again", systemImage: "person.badge.key") }
                 Text("If the gateway already came back, Settings › Companion will show it running; sign in again and the restart is not needed.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -787,10 +787,10 @@ struct CompanionView: View {
             if let rt {
                 let push = model.push
                 Section {
-                    NavigationLink { PushSetupView(setup: setup) } label: {
+                    NavigationLink { PushSetupView(setup: setup).pushedPage() } label: {
                         Label(setup.isCompleted(for: rt) ? "Configure" : "Configure the Companion", systemImage: "wand.and.stars")
                     }
-                    NavigationLink { SoftwareUpdateView() } label: {
+                    NavigationLink { SoftwareUpdateView().pushedPage() } label: {
                         HStack {
                             Label("Software Update", systemImage: "arrow.down.circle")
                             Spacer(minLength: 8)
@@ -828,7 +828,7 @@ struct CompanionView: View {
                     }
                 }
                 Section {
-                    NavigationLink { CompanionDiagnosticsView(setup: setup, push: push) } label: { Label("Diagnostics", systemImage: "stethoscope") }
+                    NavigationLink { CompanionDiagnosticsView(setup: setup, push: push).pushedPage() } label: { Label("Diagnostics", systemImage: "stethoscope") }
                 } footer: {
                     Text(DeviceWords.isMac ? "The last notification and the last push the Companion sent." : "The last notification, the Live Activity's tokens and log, and the last push the Companion sent.")
                 }

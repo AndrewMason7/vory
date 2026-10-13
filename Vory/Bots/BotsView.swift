@@ -56,10 +56,10 @@ struct BotsView: View {
             }
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame().withAppModel() } }
             .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p).sheetFrame().withAppModel() } }
-            .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0) }
+            .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0).pushedPage() }
             .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).untitledPage() }
-            .navigationDestination(for: Room.self) { RoomView(room: $0) }
-            .navigationDestination(for: ChatRoute.self) { ConversationView(route: $0) }
+            .navigationDestination(for: Room.self) { RoomView(room: $0).pushedPage() }
+            .navigationDestination(for: ChatRoute.self) { ConversationView(route: $0).pushedPage() }
             .reloadable { await load() }
             .task(id: model.runtime?.connection.id) { await load() }
             .onChange(of: model.pageRequest) { _, r in
@@ -405,7 +405,7 @@ struct BotDetailView: View {
     var body: some View {
         SettingsList {
             Section {
-                NavigationLink { ProfileCardView(profileName: profile.name) } label: {
+                NavigationLink { ProfileCardView(profileName: profile.name).pushedPage() } label: {
                     HStack(spacing: 12) {
                         BotAvatar(profile: profile.name, size: 36)
                         Text("Profile")
@@ -434,7 +434,7 @@ struct BotDetailView: View {
             guard r != nil, model.selectedTab == .bots, model.composeProfile == profile.name else { return }
             composing = true
         }
-        .navigationDestination(isPresented: $composing) { ConversationView(route: ChatRoute(storedID: nil, title: nil, profile: profile.name)) }
+        .navigationDestination(isPresented: $composing) { ConversationView(route: ChatRoute(storedID: nil, title: nil, profile: profile.name)).pushedPage() }
         .reloadable { await load() }
         .task { await load() }
         .alert("Delete chat?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {

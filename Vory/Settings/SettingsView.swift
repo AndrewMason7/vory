@@ -62,7 +62,7 @@ struct SettingsView: View {
             SettingsList {
                 if search.isEmpty, !setupCardDone, model.runtime != nil, model.push.registeredAt == nil {
                     Section {
-                        NavigationLink { CompanionView() } label: {
+                        NavigationLink { CompanionView().pushedPage() } label: {
                             HStack(spacing: 12) {
                                 // A picture that blinks: the live face kept the page redrawing at rest (#248).
                                 BotStill(spec: AboutView.voryBot, size: 46)
@@ -84,7 +84,7 @@ struct SettingsView: View {
                 }
                 if search.isEmpty {
                     Section {
-                        NavigationLink { GatewaysView() } label: {
+                        NavigationLink { GatewaysView().pushedPage() } label: {
                             HStack(spacing: 12) {
                                 GatewayTile()
                                 VStack(alignment: .leading) {
@@ -199,7 +199,7 @@ struct GatewaysView: View {
                         }
                         .buttonStyle(.plain)
                         Spacer()
-                        NavigationLink { GatewayFormView(existing: c) } label: { EmptyView() }.frame(width: 20)
+                        NavigationLink { GatewayFormView(existing: c).pushedPage() } label: { EmptyView() }.frame(width: 20)
                     }
                     .rowActions { Button(role: .destructive) { pendingDelete = c } label: { Label("Delete", systemImage: "trash") } }
                 }
@@ -231,7 +231,7 @@ struct GatewaysView: View {
                     Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
                     if case .authRejected(let why) = rt.socketState {
                         Text(why).font(.footnote).foregroundStyle(.red)
-                        NavigationLink("Sign in again") { GatewayFormView(existing: rt.connection) }
+                        NavigationLink("Sign in again") { GatewayFormView(existing: rt.connection).pushedPage() }
                     }
                 }
             }
@@ -400,7 +400,7 @@ struct NotificationsView: View {
                 #endif
             }
             Section {
-                NavigationLink { CompanionView() } label: { Label("Companion", systemImage: "puzzlepiece.extension") }
+                NavigationLink { CompanionView().pushedPage() } label: { Label("Companion", systemImage: "puzzlepiece.extension") }
                     .disabled(model.runtime == nil)
             } footer: {
                 Text("Approvals, questions, finished turns and errors while Vory is closed are delivered by the Companion on your gateway. In the foreground they arrive locally without it.")
@@ -509,7 +509,7 @@ struct BotsSettingsView: View {
             }
             #endif
             Section {
-                NavigationLink { MotionDemoView() } label: { Label("Preview motion", systemImage: "play.circle") }
+                NavigationLink { MotionDemoView().pushedPage() } label: { Label("Preview motion", systemImage: "play.circle") }
             } footer: {
                 Text("Every pose the bots know, side by side: working, thinking, using a tool, waiting for a yes, and the rest. \(DeviceWords.isMac ? "Click one to see it react" : "Tap one to see its tap").")
             }
@@ -982,7 +982,7 @@ struct AboutView: View {
             }
             // Out of plain sight: Reset lives one page further in, not on the Settings list.
             Section {
-                NavigationLink { ResetView() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
+                NavigationLink { ResetView().pushedPage() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
                     .accessibilityIdentifier("about.reset")
             }
         }
@@ -1071,7 +1071,7 @@ struct SoftwareUpdateView: View {
                     if setup.companionCheckedAt == nil {
                         Label { Text("Checking for updates…") } icon: { ProgressView() }.foregroundStyle(.secondary)
                     } else if setup.installedVersion == nil {
-                        NavigationLink { SetupWizardHost() } label: {
+                        NavigationLink { SetupWizardHost().pushedPage() } label: {
                             HStack(spacing: 12) {
                                 BotFaceView(spec: AboutView.voryBot, size: 44, active: true)
                                 VStack(alignment: .leading, spacing: 2) {

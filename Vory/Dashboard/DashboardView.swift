@@ -58,7 +58,7 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 10)
                     }
                     .buttonStyle(.bordered).tint(editingHome ? Color.vory : .secondary)
-                    NavigationLink { HomeSettingsView() } label: {
+                    NavigationLink { HomeSettingsView().pushedPage() } label: {
                         Label("Settings", systemImage: "slider.horizontal.3").font(.subheadline.weight(.medium))
                             .frame(maxWidth: .infinity).padding(.vertical, 10)
                     }
@@ -99,7 +99,7 @@ struct DashboardView: View {
         .onChange(of: pageShown) { _, shown in
             if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { lastVisit = max(lastVisit, visitStart); editingHome = false }
         }
-        .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
+        .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).pushedPage() }
     }
 
     @State private var editingHome = false

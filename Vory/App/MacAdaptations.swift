@@ -176,12 +176,37 @@ private struct PageToolbar<Items: ToolbarContent>: ViewModifier {
     func body(content: Content) -> some View { content.toolbar { if shown { items } } }
 }
 
+extension View {
+    /// A page pushed on a page's stack. On the Mac its Back stands in the window's toolbar only
+    /// while its page is on show: visited pages stay mounted with what was pushed on them (as the
+    /// phone's tabs do), and a hidden page's Back stood over the page in front. Nothing on the
+    /// phone, where the morph bar owns Back.
+    @ViewBuilder func pushedPage() -> some View {
+        #if os(macOS)
+        modifier(MacPushedPage())
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct MacPushedPage: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    func body(content: Content) -> some View { content.navigationBarBackButtonHidden(!shown) }
+}
+#endif
+
 #if os(macOS)
 /// See `untitledPage`. The title comes out of the toolbar only while the page is on show: the Mac
 /// keeps visited pages mounted, and a hidden Home took the title out of every page's bar.
 private struct MacUntitledPage: ViewModifier {
     @Environment(\.macPageShown) private var shown
-    func body(content: Content) -> some View { content.navigationTitle("").toolbar(removing: shown ? .title : nil) }
+    func body(content: Content) -> some View {
+        content.navigationTitle("").toolbar(removing: shown ? .title : nil)
+            // Pushed on a hidden page's stack, its Back must not stand over the page on show.
+            .navigationBarBackButtonHidden(!shown)
+    }
 }
 #endif
 

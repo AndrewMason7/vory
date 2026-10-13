@@ -581,7 +581,7 @@ struct CronView: View {
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             if jobs.isEmpty, error == nil { ContentUnavailableView("No cron jobs", systemImage: "clock", description: Text("Jobs scheduled on any profile of this gateway appear here.")) }
             ForEach(jobs, id: \.identity) { j in
-                NavigationLink { CronJobDetailView(job: j, raw: raw[j.identity] ?? .null, onChange: { Task { await load() } }) } label: {
+                NavigationLink { CronJobDetailView(job: j, raw: raw[j.identity] ?? .null, onChange: { Task { await load() } }).pushedPage() } label: {
                     HStack(spacing: 12) {
                         Image(systemName: j.enabled == false || j.state == "paused" ? "pause.circle" : "clock").foregroundStyle(j.enabled == false || j.state == "paused" ? Color.secondary : Color.green)
                         VStack(alignment: .leading, spacing: 2) {

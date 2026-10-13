@@ -72,7 +72,7 @@ struct PluginRow: View {
     }
 
     var body: some View {
-        NavigationLink { PluginDetailView(plugin: plugin) } label: {
+        NavigationLink { PluginDetailView(plugin: plugin).pushedPage() } label: {
             HStack(spacing: 12) {
                 Image(systemName: highlight ? "bell.badge.fill" : plugin.hasDashboardManifest == true ? "rectangle.on.rectangle" : "puzzlepiece.extension")
                     .foregroundStyle(highlight ? Color.vory : .secondary).frame(width: 24)
