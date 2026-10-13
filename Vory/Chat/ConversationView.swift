@@ -163,7 +163,7 @@ struct ConversationView: View {
                 // The bot, in the middle over its thread; a click opens its profile.
                 ToolbarItem(placement: .principal) {
                     // The face's small turn plays on the click, as on the iPhone's pill.
-                    Button { BotAmbient.shared.tap(profile: chat.profileName); showProfile = true } label: {
+                    Button { BotAmbient.shared.tap(profile: chat.profileName, session: chat.storedID); showProfile = true } label: {
                         HStack(spacing: 7) {
                             // The pose the header shows on the phone, in the pill (the Mac's toolbar hosts it).
                             BotAvatar(profile: chat.profileName, size: 22, active: chat.isRunning, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
@@ -575,8 +575,8 @@ struct ChatHeader: View {
             }
             Spacer(minLength: 0)
             Button {
-                // The bot on the pill turns for the tap as it does elsewhere, and the plate opens.
-                BotAmbient.shared.tap(profile: chat.profileName)
+                // The bot on the pill reacts to the tap as it does elsewhere, and the plate opens.
+                BotAmbient.shared.tap(profile: chat.profileName, session: chat.storedID)
                 onProfile()
             } label: {
                 // Seated on the pill by its base; while it asks (the "!"), it lifts clear so the

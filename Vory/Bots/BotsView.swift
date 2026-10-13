@@ -87,7 +87,13 @@ struct BotsView: View {
         if let rt = model.runtime {
             LazyVGrid(columns: columns, spacing: 22) {
                 ForEach(Array(rt.profiles.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) || $0.label.localizedCaseInsensitiveContains(searchText) }.enumerated()), id: \.element.id) { i, p in
-                    NavigationLink(value: p) {
+                    // The card's tap opens the bot (the same push as a link) and its face reacts,
+                    // a blink and a small bounce. A tap gesture beside a link's own lost the link's
+                    // tap on the card's glass pill.
+                    Button {
+                        BotAmbient.shared.tap(profile: p.name)
+                        path.append(p)
+                    } label: {
                         BotCard(profile: p, isActive: rt.selectedProfile == p.name,
                                 working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
                                 slot: i, slots: rt.profiles.count)

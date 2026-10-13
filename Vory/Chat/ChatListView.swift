@@ -957,8 +957,9 @@ struct ChatListView: View {
     }
 
     /// A row that opens `route`: a link on the phone, a button into the detail column on the Mac.
-    /// `pick`: the chat's id, for a row that can be chosen while selecting.
-    @ViewBuilder private func rowLink<Label: View>(_ route: some Hashable, selected: Bool = false, pick: String? = nil, @ViewBuilder label: () -> Label) -> some View {
+    /// `pick`: the chat's id, for a row that can be chosen while selecting. `face`: the bot and
+    /// chat of the face the row shows, which reacts to the tap where the row stays on screen.
+    @ViewBuilder private func rowLink<Label: View>(_ route: some Hashable, selected: Bool = false, pick: String? = nil, face: RowFace? = nil, @ViewBuilder label: () -> Label) -> some View {
         if selecting {
             let on = pick.map(selection.contains) ?? false
             Button {
@@ -976,16 +977,24 @@ struct ChatListView: View {
             .disabled(pick == nil)
             .accessibilityAddTraits(on ? .isSelected : [])
         } else {
-            openLink(route, selected: selected, label: label)
+            openLink(route, selected: selected, face: face, label: label)
         }
     }
 
-    @ViewBuilder private func openLink<Label: View>(_ route: some Hashable, selected: Bool, @ViewBuilder label: () -> Label) -> some View {
+    /// The face a row shows: its bot and its chat.
+    struct RowFace { let profile: String; let session: String }
+
+    @ViewBuilder private func openLink<Label: View>(_ route: some Hashable, selected: Bool, face: RowFace? = nil, @ViewBuilder label: () -> Label) -> some View {
         if detailPath != nil {
             // Beside a detail column (the Mac, the iPad, the open Duo, and the same split view
             // collapsed on a phone): the row selects into the detail path (`open`), never a
             // NavigationLink, which would push onto the list's own stack instead.
-            Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
+            // The row stays beside the chat it opens, so its face reacts to the tap. On the phone
+            // the chat covers the list at once: the link alone, with no gesture over its row.
+            Button {
+                if let face { BotAmbient.shared.tap(profile: face.profile, session: face.session) }
+                open(route)
+            } label: { label().contentShape(.rect) }.buttonStyle(.plain)
                 // The open chat's row, tinted like the selected conversation in Messages. Drawn
                 // here: the Mac's list did not show a listRowBackground on these rows.
                 .background {
@@ -1011,7 +1020,7 @@ struct ChatListView: View {
 
     @ViewBuilder private func sessionRow(_ s: StoredSession, runtime: GatewayRuntime, showProject: Bool = true) -> some View {
         let route = ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile)
-                rowLink(route, selected: selectedID == s.id, pick: s.id) {
+                rowLink(route, selected: selectedID == s.id, pick: s.id, face: rowsShowBot ? RowFace(profile: s.profile ?? runtime.selectedProfile ?? "", session: s.id) : nil) {
                     SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: rowsShowBot,
                                botProfile: s.profile ?? runtime.selectedProfile,
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,

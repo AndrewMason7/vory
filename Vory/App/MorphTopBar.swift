@@ -216,7 +216,17 @@ struct MorphTopBar: View {
         // behind its pill, Matt 2026-10-12). Same inset as the measured space.
         .overlay(alignment: .topLeading) {
             if let chat = state.chat, let a = chatFrames[.mid], let b = listFrames[.mid] {
-                face(chat, over: lerp(a, b, shown)).padding(.horizontal, 16).padding(.top, 4)
+                let mid = lerp(a, b, shown)
+                ZStack(alignment: .topLeading) {
+                    face(chat, over: mid)
+                    // A tap on the seated face does what a tap on the pill does (#339): Bot info,
+                    // and the face reacts. Only with the chat at rest.
+                    FaceTapArea { openBotInfo(chat) }
+                        .frame(width: 44, height: 44)
+                        .position(x: mid.midX, y: mid.minY + 10 - 22 + 44 * seatDrop(chat))
+                        .allowsHitTesting(shown < 0.02 && !state.scrubbing)
+                }
+                .padding(.horizontal, 16).padding(.top, 4)
             }
         }
         // The bar's type stops at XXXL, as the system's own bar does: at the accessibility
@@ -300,9 +310,20 @@ struct MorphTopBar: View {
         }
     }
 
+    /// How far the chat's face sits into its pill, from the looks read here, so a shape changed on
+    /// the bot's card re-seats the face.
+    private func seatDrop(_ chat: ChatSession) -> CGFloat {
+        BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape)
+    }
+
+    /// The pill's action: the face reacts and Bot info opens.
+    private func openBotInfo(_ chat: ChatSession) {
+        BotAmbient.shared.tap(profile: chat.profileName, session: chat.storedID)
+        model.chatRequest = .init(.profile)
+    }
+
     private func face(_ chat: ChatSession, over mid: CGRect) -> some View {
-        // From the looks read here, so a shape changed on the bot's card re-seats the face.
-        let drop = BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape)
+        let drop = seatDrop(chat)
         return BotAvatar(profile: chat.profileName, size: 44, active: chat.isRunning,
                          mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
             .scaleEffect(reduceMotion ? 1 : 0.6 + 0.4 * (1 - t))
@@ -335,7 +356,9 @@ struct MorphTopBar: View {
             .accessibilityAction { model.chatRequest = .init(.back) }
             .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
         case .mid:
-            let pill = Button { BotAmbient.shared.tap(profile: chat.profileName); model.chatRequest = .init(.profile) } label: { pillText(chat).contentShape(.rect) }
+            // The face seated over the pill reacts to its tap; a tap on the face itself comes in
+            // through FaceTapArea (#339).
+            let pill = Button { openBotInfo(chat) } label: { pillText(chat).contentShape(.rect) }
                 .buttonStyle(.plain)
             Group {
                 if axSize {
@@ -667,6 +690,28 @@ private extension View {
         // disappearance landed after the new view's measurement and wiped it, which left the
         // capsule drawn from memory with its hit testing off (the Bots +). Whether a page has
         // the slot comes from its chrome (`tabChrome`), not from the frames.
+    }
+}
+/// The seated face's touch area in a chat (#339): a tap there does what the pill does. A UIKit view
+/// with a tap recognizer, out of the accessibility tree (the pill is the element): the pill's own
+/// touch shape, stretched over the face, did not reach outside the bar's glass, and a SwiftUI tap
+/// gesture here would read to VoiceOver as an unnamed element.
+private struct FaceTapArea: UIViewRepresentable {
+    var action: () -> Void
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        v.isAccessibilityElement = false
+        v.accessibilityElementsHidden = true
+        v.addGestureRecognizer(UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped)))
+        return v
+    }
+    func updateUIView(_ v: UIView, context: Context) { context.coordinator.action = action }
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+    @MainActor final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func tapped() { action() }
     }
 }
 #else

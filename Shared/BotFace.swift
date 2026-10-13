@@ -1559,10 +1559,10 @@ public struct BotFaceView: View {
             try? await Task.sleep(for: .milliseconds(600))
             spinTick += 1
         }
-        // A tap on the bot. Simultaneous, so the row or link it sits in still gets it.
-        .simultaneousGesture(TapGesture().onEnded { if let p = mood.profile, !drawn { ambient.tap(profile: p, session: mood.session) } })
-        // The engine plays the tap's reaction; a face mounted for it (a list's still swapped for
-        // the live view) starts it on its first frame. Not held, not under Reduce
+        // A tap reaches the face through what it sits in (the card, the chat's pill, the row,
+        // the toolbar button), never a gesture of its own: one here took the tap from the card
+        // around it (#339). The engine plays the reaction; a face mounted for it (a list's still
+        // swapped for the live view) starts it on its first frame. Not held, not under Reduce
         // Motion (the model is snapped to its still every frame there), not with the bots still
         // (Settings › Bots › Style) or the switch off.
         .onChange(of: lastTap, initial: true) { _, d in
