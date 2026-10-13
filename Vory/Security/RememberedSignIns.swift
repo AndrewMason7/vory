@@ -259,10 +259,11 @@ final class RememberedSignInCoordinator {
     private func attempt(_ c: GatewayConnection, access: CloudflareAccess) async throws -> GatewaySecrets {
         guard let context = await authenticator.authenticate(reason: "Sign in to \(c.name)") else { throw RememberedSignInError.cancelled }
         guard let remembered = try vault.signIn(for: c.id, context: context) else { throw RememberedSignInError.gone }
-        guard remembered.belongs(to: c.gateway) else {
+        guard c.addresses.contains(where: { remembered.belongs(to: $0) }) else {
             // Typed for another address: the gateway was moved since, here or on another device
-            // through iCloud. The password goes only where it was typed, so it is forgotten
-            // rather than sent to a host the person never gave it to.
+            // through iCloud. The password goes only to an address the person gave this gateway
+            // (either of its two, #283, both typed by them for it), so it is forgotten rather
+            // than sent to a host the person never gave it to.
             vault.forget(c.id)
             throw RememberedSignInError.moved
         }

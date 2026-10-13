@@ -434,6 +434,10 @@ enum CloudGateways {
 
         func copy(of c: GatewayConnection) -> CloudGateway {
             let secrets = store.secrets(for: c.id)
+            // The backup address travels in its own item (`CloudAlternates`): a device on 1.5 (20)
+            // writes this file back without it, and would drop it for everyone.
+            var c = c
+            c.alternate = nil
             return CloudGateway(connection: c, sessionToken: c.authMode == .sessionToken ? secrets.sessionToken : nil, access: secrets.access, updatedAt: now)
         }
 
@@ -511,6 +515,79 @@ enum CloudGateways {
         defaults.set(seen, forKey: seenKey)
         if file != before { storage.save(file); out.pushed = true }
         return out
+    }
+}
+
+/// The gateways' backup addresses (#283), synced beside the gateway list in an item of their
+/// own. A device on 1.5 (20) reads and writes the list without knowing the field and would
+/// write it back without the backups; it never touches this item. Keyed by gateway id, with
+/// the same memory the list has: edited here goes up, edited elsewhere comes down. A removed
+/// backup goes up as a nil address, so the other devices drop it too.
+@MainActor
+enum CloudAlternates {
+    static let account = "gateways.alternates"
+    static let stampsKey = "cloudSync.alternateStamps"
+    static let seenKey = "cloudSync.alternateSeen"
+
+    struct Entry: Codable, Equatable {
+        var alternate: String?
+        var updatedAt: Double
+    }
+
+    struct Storage {
+        var load: () -> [String: Entry]
+        var save: ([String: Entry]) -> Void
+
+        @MainActor static let keychain = Storage(
+            load: { Keychain.getSynced(account: CloudAlternates.account).flatMap { try? JSONDecoder().decode([String: Entry].self, from: $0) } ?? [:] },
+            save: { file in if let data = try? JSONEncoder().encode(file) { try? Keychain.setSynced(data, account: CloudAlternates.account) } })
+    }
+
+    /// One pass, both ways. Returns the gateways whose backup came down (to reconnect).
+    @discardableResult
+    static func reconcile(store: any GatewayStoring, storage: Storage = .keychain, listedIDs: Set<String>? = nil,
+                          defaults: UserDefaults = .standard, now: Double = Date().timeIntervalSince1970) -> [UUID] {
+        var file = storage.load()
+        let before = file
+        var changed: [UUID] = []
+        var stamps = (defaults.dictionary(forKey: stampsKey) as? [String: Double]) ?? [:]
+        var seen = (defaults.dictionary(forKey: seenKey) as? [String: String]) ?? [:]
+        let none = "\u{0}"   // what "no backup" is remembered as
+        for c in store.connections where !CloudGateways.isLoopback(c) {
+            let id = c.id.uuidString
+            let mine = c.alternate?.description
+            guard let theirs = file[id] else {
+                if let mine { file[id] = Entry(alternate: mine, updatedAt: now) }
+                stamps[id] = now; seen[id] = mine ?? none
+                continue
+            }
+            if theirs.alternate == mine {
+                stamps[id] = theirs.updatedAt; seen[id] = mine ?? none
+            } else if seen[id] == nil, mine != nil {
+                // The first meeting with different backups: both stay until one is edited.
+                stamps[id] = theirs.updatedAt; seen[id] = mine ?? none
+            } else if let last = seen[id], last != (mine ?? none) {
+                // Edited here since the last agreement: it goes up.
+                file[id] = Entry(alternate: mine, updatedAt: now)
+                stamps[id] = now; seen[id] = mine ?? none
+            } else if theirs.updatedAt > (stamps[id] ?? 0) || seen[id] == nil {
+                // Edited on another device (or new to this one): taken.
+                var conn = c
+                conn.alternate = theirs.alternate.flatMap { try? GatewayURL.normalize($0) }
+                if (try? store.upsert(conn, secrets: store.secrets(for: c.id))) != nil {
+                    changed.append(c.id)
+                    stamps[id] = theirs.updatedAt; seen[id] = theirs.alternate ?? none
+                }
+            }
+        }
+        // Gateways gone from this device and from the list: their backups go too.
+        let ids = Set(store.connections.map(\.id.uuidString))
+        let listed = listedIDs ?? Set(CloudGateways.load().gateways.map(\.connection.id.uuidString))
+        for id in file.keys where !ids.contains(id) && !listed.contains(id) { file[id] = nil }
+        defaults.set(stamps, forKey: stampsKey)
+        defaults.set(seen, forKey: seenKey)
+        if file != before { storage.save(file) }
+        return changed
     }
 }
 
@@ -709,7 +786,8 @@ final class CloudSync {
         let defaults = UserDefaults.standard
         let awaiting = defaults.bool(forKey: Self.awaitingGatewaysKey)
         let out = CloudGateways.reconcile(store: store, importNew: Self.importsGateways(hasConnections: !store.connections.isEmpty, awaiting: awaiting))
-        reconnectIfChanged(out.changed)
+        let backups = CloudAlternates.reconcile(store: store)
+        reconnectIfChanged(out.changed + backups.filter { !out.changed.contains($0) })
         if awaiting, !store.connections.isEmpty {
             defaults.removeObject(forKey: Self.awaitingGatewaysKey)
             if !out.added.isEmpty { gatewaysArrived(out.added, store: store) }
