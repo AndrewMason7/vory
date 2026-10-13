@@ -55,16 +55,15 @@ final class DuoBarUITests: XCTestCase {
         let closedDuo = abs(window.width - 466) < 2 && window.height > window.width
         if closedDuo {
             XCTAssertTrue(vertical, "on the closed Duo the bar should stand on the side: chats \(chats.frame), settings \(settings.frame)")
-            // One column with the system's own strip items (Matt): the navigation bar's "+"
-            // (New bot) and the profile menu share a centre line; ours must sit on it, within 1 pt.
-            let plus = app.buttons["New bot"].firstMatch
-            let items = [("New bot", plus), ("chats.view", app.buttons["chats.view"].firstMatch), ("chats.voice", app.buttons["chats.voice"].firstMatch), ("chats.new", app.buttons["chats.new"].firstMatch), ("tab.chats", chats), ("tab.settings", settings)]
-            for (name, e) in items where e.exists { print("STRIP-ITEM \(name) \(e.frame)") }
-            if plus.exists {
-                let axis = plus.frame.midX
-                for (name, e) in items where e.exists {
-                    XCTAssertEqual(e.frame.midX, axis, accuracy: 1, "\(name) is off the strip's centre line: \(e.frame.midX) vs \(axis)")
-                }
+            // One column on the system strip's centre line, 48 pt in from the window's edge
+            // (VoryTabBar.stripCentreFromEdge), within 1 pt. It was read off the navigation bar's
+            // "+" (New bot) standing in the strip; the morph bar has had the page's own items at
+            // the top since 1.5 (11), and that "+" is the top bar's now.
+            let axis = chats.frame.midX > window.midX ? window.maxX - 48 : window.minX + 48
+            let items = [("chats.voice", app.buttons["chats.voice"].firstMatch), ("chats.new", app.buttons["chats.new"].firstMatch), ("tab.chats", chats), ("tab.settings", settings)]
+            for (name, e) in items where e.exists {
+                print("STRIP-ITEM \(name) \(e.frame)")
+                XCTAssertEqual(e.frame.midX, axis, accuracy: 1, "\(name) is off the strip's centre line: \(e.frame.midX) vs \(axis)")
             }
             // Three groups down the strip, never touching: the page's own items (the list's "+"
             // and View menu), then our tabs, then the circles. The first tab starts at least a
