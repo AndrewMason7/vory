@@ -27,8 +27,9 @@ import UIKit
             let r = ImageRenderer(content: BotFaceView(spec: spec, size: size, active: false, drawn: true)
                 .padding(8).background(dark ? Color.black : Color.white).environment(\.colorScheme, dark ? .dark : .light))
             r.scale = 3
-            BotFace.stillBlink = 0
+            // The renderer draws when its image is read: the blink is reset after that.
             let png = try #require(r.uiImage?.pngData())
+            BotFace.stillBlink = 0
             try png.write(to: folder.appendingPathComponent("bubble-\(finish)-\(Int(size))-\(dark ? "dark" : "light")\(shut ? "-shut" : "").png"))
         } } } }
     }
