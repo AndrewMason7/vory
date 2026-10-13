@@ -999,8 +999,21 @@ public final class BotAmbient {
     /// scrolling, which redrew every visible face on every scroll frame (Matt, 2026-10-10:
     /// "get rid of look where you scroll"); the tilt lean has its own value.
     public var gaze: CGPoint = .zero
-    /// −1…1: roll (x) and pitch (y) away from the resting hold.
+    /// −1…1: roll (x) and pitch (y) away from the resting hold. Exactly zero at the hold.
     public var tilt: CGPoint = .zero
+    /// The tilt is being fed (Settings › Bots › Tilt on, the app in front, a gyroscope): only
+    /// then, and only while the device is off its hold, does a face that follows it need its
+    /// live view at rest.
+    public var tiltLive = false
+    /// A face that follows the tilt keeps its live view: on the phone while it leans (the tilt
+    /// fed and off the hold); on the Mac always, as it was (its idle faces are paused anyway).
+    public var tiltKeepsLive: Bool {
+        #if os(macOS)
+        true
+        #else
+        tiltLive && tilt != .zero
+        #endif
+    }
     public var enabled = true
     /// A list of faces is scrolling (set from the scroll phase, once per change): idle faces hold
     /// their blinks until it settles, since a blink mid-fling cannot be seen and each one wakes a

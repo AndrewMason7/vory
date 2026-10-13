@@ -125,8 +125,9 @@ struct BotAvatar: View {
     /// working session, bigger faces and the painted twin keep the live view.
     private var restsAsImage: Bool {
         // Any size: the Bots page's cards (78 pt) and the dashboard's faces rest as pictures
-        // too; a face that leans with the device keeps its live view.
-        guard !active, !drawn, override == nil, !mood.followsTilt, choice != .photo, mood.state == .idle else { return false }
+        // too; a face that leans with the device keeps its live view while it leans (with tilt
+        // off, or the device at its hold, the Bots page's live faces cost 9% at rest).
+        guard !active, !drawn, override == nil, !(mood.followsTilt && BotAmbient.shared.tiltKeepsLive), choice != .photo, mood.state == .idle else { return false }
         let now = Date()
         let a = BotAmbient.shared
         if let s = mood.session, let d = a.finishedSessions[s], now.timeIntervalSince(d) < 1.2 { return false }
@@ -172,7 +173,7 @@ struct BotAvatar: View {
         .frame(width: size, height: size)
         .accessibilityHidden(true)
         .modifier(StillBlink(shut: $eyesShut, seed: blinkSeed, key: "\(profile)|\(size)|\(active)|\(mood.state == .idle)",
-                             on: !active && !drawn && !mood.followsTilt && mood.state == .idle))
+                             on: !active && !drawn && !(mood.followsTilt && BotAmbient.shared.tiltKeepsLive) && mood.state == .idle))
     }
 }
 
