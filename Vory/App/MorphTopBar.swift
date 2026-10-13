@@ -455,8 +455,12 @@ struct MorphTopBar: View {
                           opening: chats && model.visibleChat == nil && model.roomsOnScreen == 0)
         }
         .onChange(of: model.visibleChat?.storedID) { _, id in
-            // The chat lands a beat after the path opens on a fresh push.
-            if id != nil, model.chatsPathOpen, state.chat == nil, let c = model.visibleChat { state.push(c) }
+            // The chat lands a beat after the path opens on a fresh push. And the chat in front
+            // can change with the path still open: a Bot Chat opened from a "Messaged X" notice
+            // sits over the chat it came from, and back from it that chat is in front again. The
+            // bar is the one in front's: kept on the chat underneath, its Back reached that chat
+            // and took both pages away (#346, Matt on 1.5 (23): Back went to the list).
+            if id != nil, model.chatsPathOpen, let c = model.visibleChat, state.chat !== c { state.push(c) }
         }
     }
 
