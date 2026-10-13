@@ -1897,6 +1897,7 @@ class Gateway:
             while len(text) < secs * 240:   # about 240 characters a second at the 35 ms pace
                 n += 1
                 text += f"**Step {n}.** {para}" + ("\n\n" if n % 3 == 0 else "")
+            text += "\n\nThat is the end of the export notes."   # a last line a test can wait for
             await self.stream_words(s, text)
             self.store_turn(s, prompt, [text])
             s.inflight = None

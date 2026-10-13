@@ -65,7 +65,7 @@ final class ChatFollowUITests: XCTestCase {
     }
 
     /// A row of words on screen whose text is nowhere else in the tree, to find again.
-    private func mark() -> (label: String, y: CGFloat)? {
+    private func mark(prefix: String = "") -> (label: String, y: CGFloat)? {
         guard let snap = try? app.snapshot() else { return nil }
         let window = app.windows.firstMatch.frame
         var seen: [String: Int] = [:]
@@ -77,8 +77,8 @@ final class ChatFollowUITests: XCTestCase {
         var found: (String, CGFloat)?
         func walk(_ s: XCUIElementSnapshot) {
             guard found == nil else { return }
-            if s.elementType == .staticText, s.label.count >= 12, !s.label.contains("…"),
-               s.frame.minY > window.minY + 140, s.frame.maxY < window.maxY - 220,
+            if s.elementType == .staticText, s.label.count >= 12, !s.label.contains("…"), s.label.hasPrefix(prefix),
+               s.frame.minY > window.minY + 140, s.frame.minY < window.maxY - 260,
                seen.filter({ $0.key.contains(s.label.lowercased()) }).values.reduce(0, +) == 1 {
                 found = (s.label, s.frame.minY); return
             }
@@ -102,6 +102,40 @@ final class ChatFollowUITests: XCTestCase {
         let to = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.midX, dy: app.frame.height - 4))
         from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0)
         pause(1)
+    }
+
+    /// #329's candidate: a reader a short way up the thread (about 300 pt, the end still near and
+    /// the jump arrow showing) keeps the rows being read where they are while the reply grows and
+    /// ends. Anchored to the end for size changes, the growth carried them up at a constant
+    /// distance from the end.
+    func testANearEndReaderKeepsTheRowsAsTheReplyGrows() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        newChat(url: url, token: token)
+        let distance = Double(ProcessInfo.processInfo.environment["HERMES_E2E_ROW"] ?? "") ?? 300
+        send("long 35")
+        XCTAssertTrue(text("Step 1.").firstMatch.waitForExistence(timeout: 20), "the reply did not start")
+        pause(10)
+        keyboardDown()
+        // Up by `distance` (300 pt, or HERMES_E2E_ROW): a slow drag, held at its end so it does not fling.
+        let x = app.frame.midX, y0 = app.frame.height * 0.3
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: y0))
+        let end = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: y0 + distance))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.6)
+        pause(0.8)
+        let lastLine = text("That is the end of the export notes").firstMatch
+        XCTAssertFalse(lastLine.exists, "the reply had already finished: too short to read during")
+        XCTAssertTrue(arrow.waitForExistence(timeout: 3), "not away from the end after the drag")
+        let held = try XCTUnwrap(mark(prefix: "Step "), "no row of the reply to hold")
+        print("CHAT-FOLLOW near-end held \(held.label.prefix(40)) at \(Int(held.y))")
+        shot("near-end-held")
+        XCTAssertTrue(lastLine.waitForExistence(timeout: 60), "the reply did not finish")
+        pause(2)
+        shot("near-end-after")
+        let after = text(held.label).firstMatch
+        print("CHAT-FOLLOW near-end after the reply: \(after.exists ? Int(after.frame.minY) : -1)")
+        XCTAssertTrue(after.exists, "the row held is no longer in the thread")
+        XCTAssertEqual(after.frame.minY, held.y, accuracy: 24, "the rows being read moved \(Int(after.frame.minY - held.y)) pt with the reply")
+        XCTAssertTrue(arrow.exists, "the thread went back to its end")
     }
 
     /// A reader at the end keeps the end of a long streamed reply in view, to its last word, with
