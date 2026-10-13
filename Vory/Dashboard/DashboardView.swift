@@ -24,6 +24,13 @@ struct DashboardView: View {
     @State private var sinceSummary: String?
     @State private var summarizing = false
     @State private var visitStart: Double = 0
+    /// The page's own liveness (the phone's tab in front; on the Mac the page on show in a window
+    /// in front): its loads wait while it is hidden.
+    @Environment(\.botsLive) private var pageLive
+    /// The Mac keeps the page mounted behind the others: a visit starts and ends with it on show.
+    @Environment(\.macPageShown) private var pageShown
+    @State private var visits = 0
+    @State private var loadedKey = ""
 
     private var runtime: GatewayRuntime? { model.runtime }
     private var layout: HomeLayout { HomeLayout.parse(layoutRaw) }
@@ -76,9 +83,22 @@ struct DashboardView: View {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
         .reloadable { await Task { await load() }.value }
-        .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)") { await load() }
+        // Loads while the page is live; a change made while it was hidden (another bot, the range)
+        // loads on its way back, and on the Mac so does each new visit (the page stays mounted).
+        // The rows and numbers are replaced in place, so a return shows no reload.
+        .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)|\(pageLive)") {
+            guard pageLive else { return }
+            let key = "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)"
+            guard key != loadedKey else { return }
+            await load()
+            // Marked done only when it ran to the end (a hide part-way through loads again on return).
+            if !Task.isCancelled { loadedKey = key }
+        }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
         .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }
+        .onChange(of: pageShown) { _, shown in
+            if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { lastVisit = max(lastVisit, visitStart); editingHome = false }
+        }
         .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
     }
 
@@ -435,7 +455,7 @@ struct DashboardView: View {
                 }
             }
         })
-        .task(id: changedSinceVisit.map(\.id).joined()) { await summarizeSince(force: false) }
+        .task(id: "\(changedSinceVisit.map(\.id).joined())|\(pageLive)") { if pageLive { await summarizeSince(force: false) } }
     }
 
     private func summarizeSince(force: Bool) async {

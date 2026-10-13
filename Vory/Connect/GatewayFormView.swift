@@ -271,7 +271,7 @@ struct GatewayFormView: View {
         #endif
         .navigationTitle(existing == nil ? "Add Gateway" : "Edit Gateway")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+        .pageToolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(!testPassed || name.trimmingCharacters(in: .whitespaces).isEmpty).accessibilityIdentifier("gateway.save") }
         }

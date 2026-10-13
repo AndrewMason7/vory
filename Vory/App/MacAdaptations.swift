@@ -119,7 +119,7 @@ extension View {
     /// is taken out of the toolbar instead.
     @ViewBuilder func untitledPage() -> some View {
         #if os(macOS)
-        navigationTitle("").toolbar(removing: .title)
+        modifier(MacUntitledPage())
         #else
         navigationTitle("").navigationBarTitleDisplayMode(.inline)
         #endif
@@ -139,15 +139,79 @@ extension View {
     /// Refresh button in the toolbar (⌘R) on the Mac.
     @ViewBuilder func reloadable(_ action: @escaping @MainActor () async -> Void) -> some View {
         #if os(macOS)
-        toolbar { ToolbarItem(placement: .automatic) { ReloadButton(action: action) } }
+        modifier(MacReloadable(action: action))
         #else
         pullRefresh(ownWheel: true, action)
         #endif
     }
 }
 
-/// Whether the Mac page a view sits in is the one on show. The Mac keeps the Chats page mounted
-/// behind the other pages (MainSplitView); a page that is mounted but hidden declares no window
+extension View {
+    /// A page's search field: the phone's drawer under the title; on the Mac a field in the
+    /// window's toolbar, declared only while the page is on show. The Mac keeps visited pages
+    /// mounted, and the window's toolbar takes one search field: a second (a kept page's beside
+    /// the shown page's) stopped the app (NSToolbar: "Duplicate items of this type are not
+    /// allowed", 2026-10-12).
+    @ViewBuilder func pageSearchable(text: Binding<String>, prompt: LocalizedStringKey? = nil, always: Bool = false) -> some View {
+        #if os(macOS)
+        modifier(MacPageSearchable(text: text, prompt: prompt))
+        #else
+        searchable(text: text, placement: .navigationBarDrawer(displayMode: always ? .always : .automatic), prompt: prompt.map { Text($0) })
+        #endif
+    }
+}
+
+extension View {
+    /// `.toolbar` for a page and the pages pushed on it. On the Mac its items stand in the window's
+    /// toolbar only while the page is on show: visited pages stay mounted behind the one in front
+    /// (MainSplitView), and their items stood in its bar. On the phone, `.toolbar` as it is.
+    func pageToolbar<Items: ToolbarContent>(@ToolbarContentBuilder _ items: () -> Items) -> some View {
+        modifier(PageToolbar(items: items()))
+    }
+}
+
+private struct PageToolbar<Items: ToolbarContent>: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    let items: Items
+    func body(content: Content) -> some View { content.toolbar { if shown { items } } }
+}
+
+#if os(macOS)
+/// See `untitledPage`. The title comes out of the toolbar only while the page is on show: the Mac
+/// keeps visited pages mounted, and a hidden Home took the title out of every page's bar.
+private struct MacUntitledPage: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    func body(content: Content) -> some View { content.navigationTitle("").toolbar(removing: shown ? .title : nil) }
+}
+#endif
+
+#if os(macOS)
+/// The Refresh button (⌘R) only while its page is on show: the Mac keeps visited pages mounted
+/// behind the one in front, and a hidden page's button stood in its toolbar and answered ⌘R.
+private struct MacReloadable: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    var action: @MainActor () async -> Void
+    func body(content: Content) -> some View {
+        content.toolbar { if shown { ToolbarItem(placement: .automatic) { ReloadButton(action: action) } } }
+    }
+}
+
+/// See `pageSearchable`. The field hangs off an empty background, so the page itself keeps its
+/// identity (and its state) as the field comes and goes with the page.
+private struct MacPageSearchable: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    var text: Binding<String>
+    var prompt: LocalizedStringKey?
+    func body(content: Content) -> some View {
+        content.background {
+            if shown { Color.clear.searchable(text: text, placement: .toolbar, prompt: prompt.map { Text($0) }) }
+        }
+    }
+}
+#endif
+
+/// Whether the Mac page a view sits in is the one on show. The Mac keeps visited pages mounted
+/// behind the one in front (MainSplitView); a page that is mounted but hidden declares no window
 /// toolbar items while this is false, or its items would stand in the bar beside the shown
 /// page's. Always true where nothing sets it: the iPhone, sheets, the page on show.
 extension EnvironmentValues {

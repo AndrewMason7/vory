@@ -38,7 +38,7 @@ struct BotsView: View {
             }
             .onScrollPhaseChange { _, phase in BotAmbient.shared.scrolling = phase != .idle }
             .navigationTitle("Bots")
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search bots")
+            .pageSearchable(text: $searchText, prompt: "Search bots")
             .tabRoot(.bots)
             .background(InteractivePopEnabler())
             .overlay {
@@ -49,7 +49,7 @@ struct BotsView: View {
                 if ProcessInfo.processInfo.arguments.contains("-vory-motion-bench") { MotionDemoView(bench: true) }
                 #endif
             }
-            .toolbar {
+            .pageToolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     if !MorphTopBar.active(model) { Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot") }
                 }
@@ -509,7 +509,7 @@ struct RoomView: View {
             // The bar is hidden, which switches off the edge swipe back; put it back.
             .background(InteractivePopEnabler())
             #else
-            .toolbar {
+            .pageToolbar {
                 ToolbarItem(placement: .principal) {
                     GroupToolbarTitle(room: room, working: working) { showMembers = true }
                 }

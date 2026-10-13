@@ -131,7 +131,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .tabRoot(.settings)
             .background(InteractivePopEnabler())
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search settings")
+            .pageSearchable(text: $search, prompt: "Search settings")
         }
     }
 }

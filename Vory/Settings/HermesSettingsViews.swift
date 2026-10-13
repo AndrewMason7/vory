@@ -137,7 +137,7 @@ struct ConfigFormView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search config keys")
+        .pageSearchable(text: $search, prompt: "Search config keys", always: true)
         .overlay { if schema == nil && error == nil { ProgressView() } }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
@@ -265,8 +265,8 @@ struct EnvView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
-        .toolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } } }
+        .pageSearchable(text: $search, always: true)
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } } }
         .onChange(of: model.pageRequest) { _, r in
             guard let r, r.kind == .tasksAdd else { return }
             model.pageRequest = nil; showAdd = true
@@ -376,7 +376,7 @@ struct SkillsView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
+        .pageSearchable(text: $search, always: true)
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
     }
@@ -770,7 +770,7 @@ struct CronJobDetailView: View {
         }
         .navigationTitle(job.name?.isEmpty == false ? job.name! : "Scheduled task")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(!dirty) } }
+        .pageToolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(!dirty) } }
         .task {
             guard !loaded else { return }
             loaded = true
@@ -911,7 +911,7 @@ struct SessionsView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
+        .pageSearchable(text: $search, always: true)
         .onChange(of: search) { _, _ in Task { await load() } }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
@@ -919,7 +919,7 @@ struct SessionsView: View {
             guard let r, r.kind == .sessionsAdvanced else { return }
             model.pageRequest = nil; showAdvanced = true
         }
-        .toolbar {
+        .pageToolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if !MorphTopBar.active(model) {
                 Menu {

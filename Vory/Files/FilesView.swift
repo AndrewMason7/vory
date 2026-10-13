@@ -114,7 +114,7 @@ struct FilesView: View {
             .navigationTitle("Files")
             .tabRoot(.files)
             .background(InteractivePopEnabler())
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search this folder")
+            .pageSearchable(text: $searchText, prompt: "Search this folder")
             .onChange(of: model.pageRequest) { _, r in
                 guard let r else { return }
                 switch r.kind {
@@ -125,7 +125,7 @@ struct FilesView: View {
                 }
             }
             .onChange(of: showHidden, initial: true) { _, h in model.filesShowHidden = h }
-            .toolbar {
+            .pageToolbar {
                 ToolbarItem(placement: .topBarLeading) { if !MorphTopBar.active(model) { Button { path = nil } label: { Label("Home", systemImage: "house") } } }
                 ToolbarItem(placement: .primaryAction) {
                     if !MorphTopBar.active(model) {

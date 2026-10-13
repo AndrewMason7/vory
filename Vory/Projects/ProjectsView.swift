@@ -42,8 +42,8 @@ struct ProjectsView: View {
             }
         }
         .untitledPage()
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search projects")
-        .toolbar {
+        .pageSearchable(text: $searchText, prompt: "Search projects")
+        .pageToolbar {
             ToolbarItem(placement: .primaryAction) {
                 #if os(iOS)
                 if MorphTopBar.active(model) { EmptyView() } else {

@@ -127,6 +127,8 @@ private struct MainSplitView: View {
     @AppStorage("launchTab") private var launchTab = "chats"
     @State private var openedOnLaunchTab = false
     @State private var appearedAt = Date.distantPast
+    /// The rail's other pages, kept mounted once visited (first visit order). See `body`.
+    @State private var kept: [AppModel.AppTab] = []
     /// How long after the window appears a page that the gateway has to vouch for (the Board)
     /// may still take the start: its plugin is probed once the gateway answers, a second or two in.
     private static let launchTabGrace: TimeInterval = 8
@@ -143,10 +145,7 @@ private struct MainSplitView: View {
             // The Chats page (rail, list, chat) stays mounted while another page shows, as the
             // iPhone keeps every tab page alive (RootView): tearing it down cost ~250 ms of the
             // switch away and building it again ~450 ms of the switch back (the aligned hitch
-            // tables of 2026-10-11/12, clean-click drive). Hidden, it is not drawn, not hit-
-            // testable, not read by accessibility, and its faces hold still (`botsLive`), the
-            // same four rules the iPhone applies. The other pages are cheap to build (Settings
-            // from Bots: ~80 ms) and keep mounting on demand.
+            // tables of 2026-10-11/12, clean-click drive). Hidden, it follows `MacPage`.
             NavigationSplitView(columnVisibility: $columns) {
                 // Its rail's ⌘ numbers only while it shows: the other page's rail has them then
                 // (declared twice, ⌘2 from Bots fired on both rails, and on Chats ⌘3 and ⌘4 then did
@@ -163,20 +162,18 @@ private struct MainSplitView: View {
                 // open Duo in 1.5; no back chevron, the list is the way between chats.
                 ChatDetailStack(path: $chatPath) { NoChatView() }
             }
-            .opacity(chats ? 1 : 0)
-            .allowsHitTesting(chats)
-            .accessibilityHidden(!chats)
-            .environment(\.botsLive, windowLive && chats)
-            // The Mac's window toolbar items are declared by the pages (the list's menus, the
-            // chat's pill and buttons); the hidden Chats page must not keep its items in the
-            // bar beside the shown page's, so they read this flag.
-            .environment(\.macPageShown, chats)
-            if !chats {
+            .modifier(MacPage(shown: chats, windowLive: windowLive))
+            // Every other page the same way (2026-10-12, follow-up 1): mounted on its first visit
+            // and kept, so a switch is an opacity change, not a split view, a rail and a page
+            // built afresh (69 % of the 300 ms leaving Chats). One split per page, keyed by its
+            // tab; a page whose tab leaves the rail is dropped.
+            ForEach(keptPages, id: \.self) { tab in
                 NavigationSplitView(columnVisibility: $columns) {
-                    Sidebar(tabs: tabs)
+                    Sidebar(tabs: tabs, shortcuts: model.selectedTab == tab)
                 } detail: {
-                    page(model.selectedTab)
+                    page(tab)
                 }
+                .modifier(MacPage(shown: model.selectedTab == tab, windowLive: windowLive))
             }
         }
         // Room for the rail, the list and a reading column with a table in it: narrower than this
@@ -189,21 +186,34 @@ private struct MainSplitView: View {
         .onAppear { appearedAt = Date(); openOnLaunchTab(tabs) }
         // Signpost intervals for the hitch traces (Smooth, 1.5): a page switch and a chat open
         // on the Mac, so Instruments can score each one by name; free when nothing listens.
-        .onChange(of: model.selectedTab) { _, now in
+        .onChange(of: model.selectedTab, initial: true) { was, now in
+            if now != .chats, !kept.contains(now) { kept.append(now) }
+            guard was != now else { return }
             Smooth.animate("page")
-            // Leaving Chats, the keyboard focus leaves it too: the hidden page stays mounted, and
-            // its composer or list kept the focus (keys and pastes aimed at a page not on show).
-            // The window holds it, as when the page was torn down.
-            if now != .chats, let w = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MacWindow.main) == true }), w.firstResponder !== w {
-                w.makeFirstResponder(nil)
+            // The keyboard focus leaves the page that hides: it stays mounted, and its composer,
+            // list or field kept the focus (keys and pastes aimed at a page not on show). The
+            // window holds it, as when the page was torn down.
+            if let w = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MacWindow.main) == true }), w.firstResponder !== w,
+               !w.makeFirstResponder(nil) {
+                Perf.stamp("page: the focus stayed with \(String(describing: w.firstResponder))")
             }
         }
         .onChange(of: chatPath) { _, _ in Smooth.animate("chatOpen") }
         .onChange(of: tabs) { _, now in
+            kept.removeAll { !now.contains($0) }
             openOnLaunchTab(now)
             // The page showing left the rail (the plugin went, or the layout changed): back to Chats.
             if !now.contains(model.selectedTab) { model.selectedTab = .chats }
         }
+    }
+
+    /// The pages mounted beside Chats: those visited and still in the rail, and the one being
+    /// shown now (in the same pass, so a first visit never draws a frame with no page).
+    private var keptPages: [AppModel.AppTab] {
+        var pages = kept.filter { tabs.contains($0) }
+        let now = model.selectedTab
+        if now != .chats, !pages.contains(now) { pages.append(now) }
+        return pages
     }
 
     private func openOnLaunchTab(_ now: [AppModel.AppTab]) {
@@ -230,6 +240,23 @@ private struct MainSplitView: View {
         // Settings pages are Forms; grouped is the Mac's System Settings look.
         case .settings: SettingsView().formStyle(.grouped)
         }
+    }
+}
+
+/// A page of the window's ZStack, on show or kept behind the one that is: hidden, it is not
+/// drawn, not hit-testable, not read by accessibility, and its faces hold still (`botsLive`),
+/// the four rules the iPhone's RootView applies to its tabs. The Mac's window toolbar items are
+/// declared by the pages, so a hidden page drops its own (they read `macPageShown`).
+private struct MacPage: ViewModifier {
+    var shown: Bool
+    var windowLive: Bool
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .accessibilityHidden(!shown)
+            .environment(\.botsLive, windowLive && shown)
+            .environment(\.macPageShown, shown)
     }
 }
 

@@ -491,7 +491,7 @@ struct SoulEditorView: View {
         }
         .navigationTitle("SOUL.md")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+        .pageToolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button { Task { await save() } } label: { if saving { ProgressView() } else { Image(systemName: "checkmark") } }
                     .disabled(saving || text == original)
