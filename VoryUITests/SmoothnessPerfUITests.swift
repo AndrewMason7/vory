@@ -392,7 +392,7 @@ final class SmoothnessPerfUITests: XCTestCase {
     }
 
     /// Every root's title capsule on the same line (Matt on 1.5 (17): "the title headings like bot
-    /// and settings they should all be on the exact same spot"): the same top and height on every
+    /// and settings they should all be on the exact same spot"): the same centre line on every
     /// tab, and the same leading edge on the tabs without a round control before it (Chats' bot,
     /// Files' Home).
     func testHeadingSpotEveryRoot() throws {
@@ -411,14 +411,18 @@ final class SmoothnessPerfUITests: XCTestCase {
             print("HEADING \(tab) \(title.frame) lead=\(lead)")
             frames.append((tab, title.frame, lead))
         }
+        // XCTest reports either the title's text or its whole capsule, from one tab to the next
+        // (on the 17 Pro: the text on Chats and Bots, the capsule on the others), so the line is
+        // the centre, and a text's leading edge is taken back to its capsule's by the capsule's
+        // padding (12 pt).
         guard let first = frames.first else { return XCTFail("no tabs") }
         for f in frames {
-            XCTAssertEqual(f.frame.minY, first.frame.minY, accuracy: 0.5, "\(f.tab)'s title is not on \(first.tab)'s line")
-            XCTAssertEqual(f.frame.height, first.frame.height, accuracy: 0.5, "\(f.tab)'s title is not \(first.tab)'s height")
+            XCTAssertEqual(f.frame.midY, first.frame.midY, accuracy: 0.5, "\(f.tab)'s title is not on \(first.tab)'s line")
         }
+        func capsuleLeading(_ r: CGRect) -> CGFloat { r.height > 30 ? r.minX : r.minX - 12 }
         let bare = frames.filter { !$0.lead }
         for f in bare.dropFirst() {
-            XCTAssertEqual(f.frame.minX, bare[0].frame.minX, accuracy: 0.5, "\(f.tab)'s title does not start where \(bare[0].tab)'s does")
+            XCTAssertEqual(capsuleLeading(f.frame), capsuleLeading(bare[0].frame), accuracy: 0.5, "\(f.tab)'s title does not start where \(bare[0].tab)'s does")
         }
     }
 
