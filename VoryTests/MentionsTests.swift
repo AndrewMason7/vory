@@ -37,6 +37,20 @@ import VoryCore
         #expect(codeRuns.allSatisfy { $0.link == nil && $0.foregroundColor == nil })
     }
 
+    /// The inline text a transcript row draws: a paragraph with no "@" skips the mention walk and
+    /// is the cached markdown as it is; one with a known bot is still marked.
+    @MainActor @Test func inlineSkipsTheWalkOnlyWithoutAnAt() {
+        let saved = Mentions.names
+        defer { Mentions.names = saved }
+        Mentions.names = names
+        let plain = "**Step 3.** The export writes to the backups disk; see [the log](https://example.com/log)."
+        #expect(MarkdownView.inline(plain) == MarkdownView.inlineCached(plain))
+        let mention = "Handing the deploy to @ops now."
+        let marked = MarkdownView.inline(mention)
+        #expect(marked != MarkdownView.inlineCached(mention))
+        #expect(marked.runs.compactMap { $0.link }.compactMap(Mentions.bot(from:)) == ["ops"])
+    }
+
     @Test func thePersonGetsTheStrongerMark() {
         let marked = Mentions.attributed("That one is for @you.", names: names)
         let run = marked.runs.first { $0.backgroundColor != nil }
