@@ -456,6 +456,42 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertFalse(any("chat.back").exists, "the chat's Back stayed after the chat closed")
     }
 
+    /// A page pushed from a pushed page (Bots › a bot's page › Profile, depth 3): it slides in,
+    /// shows no system back button of its own beside the bar's Back (1.5 (18) hid it before the
+    /// push; the probe has to hear pushes past the root), and Back pops one page at a time. The
+    /// bot's page comes through its card's menu ("Chats"): a tap on a card lands on its face.
+    func testPushedPageDepthThree() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "bots", extra: ["-vory-geometry-probe"])
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let plus = any("bots.newBot")
+        XCTAssertTrue(plus.waitForExistence(timeout: 10), "no + on the Bots page")
+        pause(2)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.26, dy: 0.30)).press(forDuration: 1.2)
+        let chats = app.buttons.matching(NSPredicate(format: "label == 'Chats' AND identifier != 'tab.chats'")).firstMatch
+        XCTAssertTrue(chats.waitForExistence(timeout: 5), "no card menu")
+        chats.tap()
+        XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "the bot's page has no Back capsule")
+        pause(1.5)
+        let profile = app.staticTexts["Profile"].firstMatch
+        XCTAssertTrue(profile.waitForExistence(timeout: 5), "no Profile row on the bot's page")
+        profile.tap()
+        pause(1.5); shot("depth3")
+        XCTAssertFalse(profile.exists && profile.isHittable, "the bot's Profile page did not come in")
+        let record = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'probe push '")).firstMatch
+        print("PUSH-RECORD depth3 \(record.exists ? record.label : "none")")
+        XCTAssertTrue(record.exists && record.label.contains("push animated=true coordinator=true depth=3"), "the depth-3 push was not animated: \(record.exists ? record.label : "no record")")
+        let systemBack = app.navigationBars.buttons.matching(identifier: "BackButton").firstMatch
+        XCTAssertFalse(systemBack.exists && systemBack.isHittable, "the depth-3 page shows the system's back button")
+        XCTAssertTrue(any("page.back").exists, "the depth-3 page has no Back capsule")
+        any("page.back").tap(); pause(1.5)
+        // One page back: the bot's page, still a pushed page (the bar's Back, no Bots +).
+        XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "Back went past the bot's page")
+        XCTAssertFalse(plus.exists && plus.isHittable, "Back went past the bot's page")
+        any("page.back").tap(); pause(1.5)
+        XCTAssertTrue(plus.waitForExistence(timeout: 5) && plus.isHittable, "Back did not go to the Bots page")
+    }
+
     /// A page pushed on Settings, then Chats and back: the pushed page's Back belongs to its tab
     /// (Chats shows its own title and no Back), and it is there again back on Settings.
     func testPushedPageTabSwitch() throws {
@@ -827,14 +863,23 @@ final class SmoothnessPerfUITests: XCTestCase {
     /// and the pushed page keeps the system's title and Back; then Back to the root.
     func testMorphPushedPage() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
-        launch(url: url, token: token, tab: "settings")
+        // The geometry probe's banner (at 150 pt, clear of the rows) carries the probe's record of
+        // the push: whether UIKit was asked to animate it and had a coordinator for it.
+        launch(url: url, token: token, tab: "settings", extra: ["-vory-geometry-probe"])
         func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
         pause(2); shot("settings-root")
-        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
+        // HERMES_E2E_ROW picks the row (settings.row.profile); the first row otherwise.
+        let rowID = ProcessInfo.processInfo.environment["HERMES_E2E_ROW"] ?? ""
+        let row = rowID.isEmpty ? app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch : any(rowID)
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
         row.tap(); pause(1.5); shot("settings-pushed")
         let back = any("page.back")
         XCTAssertTrue(back.waitForExistence(timeout: 5), "the pushed page has no Back capsule")
+        // 1.5 (18) pushed every page without its slide (Matt: "there's no longer an animation when
+        // clicking into panes"); the pop still slid.
+        let record = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'probe push '")).firstMatch
+        print("PUSH-RECORD \(record.exists ? record.label : "none")")
+        XCTAssertTrue(record.exists && record.label.contains("push animated=true coordinator=true"), "the push was not animated: \(record.exists ? record.label : "no record")")
         XCTAssertFalse(app.navigationBars.buttons.matching(identifier: "BackButton").firstMatch.exists, "the system's back button still shows on the pushed page")
         back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5); shot("settings-root-again")
         XCTAssertTrue(app.staticTexts["Settings"].firstMatch.waitForExistence(timeout: 5), "the Settings title capsule is not back")

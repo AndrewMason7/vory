@@ -388,24 +388,69 @@ struct TabRoot: ViewModifier {
 ///   the Back arrow and back, following the swipe like a chat);
 /// - hides the pushed page's own back button under the bar's Back (its title stays);
 /// - pops one page when the bar's Back bumps `popOne`.
-/// Event-driven: the stack's delegate (`NavTap`) reports each transition as it starts and each
-/// page once shown, and a display link runs only while a finger has a pop back to the root, for
-/// the scrub. Nothing runs at rest (the battery rule, #248; the 60 Hz poll this replaced cost
-/// 1.3% CPU on a root at rest).
-struct RootArrivalProbe: UIViewRepresentable {
-    /// The last decision, for the geometry probe's banner (a UI test's stills).
-    nonisolated(unsafe) static var last = "none"
+/// Event-driven: a small view controller under the root page hears the root being covered (a
+/// push from it starts) and uncovered (a pop back to it starts), with the transition's
+/// coordinator; each page pushed gets one of its own (`PageProbe`), which hears the next push
+/// from it, so a page at any depth hides its own Back; and a display link runs only while a
+/// finger has a pop back to the root, for the scrub. Nothing runs at rest (the battery rule, #248; the 60 Hz poll this replaced cost 1.3%
+/// CPU on a root at rest). Not the stack's delegate: wrapped in a forwarder, SwiftUI pushed every
+/// page without its slide (1.5 (18), Matt: "there's no longer an animation when clicking into
+/// panes").
+struct RootArrivalProbe: UIViewControllerRepresentable {
+    /// The last decision, for the geometry probe's banner (a UI test reads it; observable, so the
+    /// banner follows a push past the root, which changes nothing else on screen).
+    @MainActor static var last: String {
+        get { ProbeRecord.shared.last }
+        set { ProbeRecord.shared.last = newValue }
+    }
+    @MainActor @Observable final class ProbeRecord {
+        static let shared = ProbeRecord()
+        var last = "none"
+    }
     let tab: AppModel.AppTab
     let active: Bool
     let popOne: Int
     let arrived: () -> Void
-    func makeUIView(context: Context) -> ArrivalView { let v = ArrivalView(); v.isUserInteractionEnabled = false; v.tab = tab; v.active = active; v.arrived = arrived; return v }
-    func updateUIView(_ v: ArrivalView, context: Context) {
+    func makeUIViewController(context: Context) -> ProbeController {
+        let c = ProbeController()
+        c.probe.tab = tab; c.probe.active = active; c.probe.arrived = arrived
+        return c
+    }
+    func updateUIViewController(_ c: ProbeController, context: Context) {
+        let v = c.probe
         let widthChanged = v.active != active
         v.arrived = arrived; v.active = active
         if popOne != v.popSeen { v.popSeen = popOne; if popOne > 0 { v.popOnePage() } }
-        v.watch()
         if widthChanged { DispatchQueue.main.async { v.chromeForWidth() } }
+    }
+
+    /// A child of the root page's controller, so the root's appearance reaches it: covered as a
+    /// push from the root starts, uncovered as a pop back to it starts, each with the
+    /// transition's coordinator. Its view is the ArrivalView.
+    final class ProbeController: UIViewController {
+        let probe = ArrivalView()
+        override func loadView() { probe.isUserInteractionEnabled = false; view = probe }
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            probe.pageWillHide(parent, animated: animated, coordinator: transitionCoordinator)
+        }
+        override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); probe.rootSettled() }
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            probe.rootWillShow(coordinator: transitionCoordinator)
+        }
+        override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); probe.rootSettled() }
+    }
+
+    /// Added to each pushed page's controller (a child, so the page's appearance reaches it): it
+    /// hears the page going, covered by the next push or popped, with the transition's coordinator.
+    final class PageProbe: UIViewController {
+        weak var owner: ArrivalView?
+        override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.isHidden = true; view = v }
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            owner?.pageWillHide(parent, animated: animated, coordinator: transitionCoordinator)
+        }
     }
     final class ArrivalView: UIView {
         var tab: AppModel.AppTab = .chats
@@ -421,8 +466,8 @@ struct RootArrivalProbe: UIViewRepresentable {
             get { MorphState.shared.pushedTabs.contains(tab) }
             set { if newValue { MorphState.shared.pushedTabs.insert(tab) } else { MorphState.shared.pushedTabs.remove(tab) } }
         }
-        /// The transition being followed: its start is reported twice on a pop (the delegate,
-        /// then the root's return to the window).
+        /// The transition being followed: its start is reported twice on a pop (the root's
+        /// appearance, then its return to the window).
         private weak var followed: AnyObject?
         private var nav: UINavigationController? { parentViewController?.navigationController }
 
@@ -445,27 +490,54 @@ struct RootArrivalProbe: UIViewRepresentable {
                 arrived?()
             }
             guard tab != .chats, let nav else { return }
-            watch(nav)
             if let c = nav.transitionCoordinator { follow(c, in: nav) } else { settle(nav) }
         }
 
-        /// Puts the tap on the stack's delegate (again, if SwiftUI has set its own since).
-        func watch(_ nav: UINavigationController? = nil) {
-            guard tab != .chats, let nav = nav ?? self.nav else { return }
-            NavTap.install(on: nav, for: self)
+        /// A page of this stack (the root, or a pushed page through its PageProbe) is going: a push
+        /// from it, or the pop of it, starts. Only a transition between this stack's own pages
+        /// counts: a full-screen cover or a window move also takes a root out of view, and read as
+        /// a push it would send the bar away over no page. Anything else settles.
+        fileprivate func pageWillHide(_ page: UIViewController?, animated: Bool, coordinator c: UIViewControllerTransitionCoordinator?) {
+            guard tab != .chats, let nav else { return }
+            let inStack = c.map { isInStack($0, nav) } ?? false
+            // A push (the page coming in sits deeper than the one going): its record, for the tests
+            // (the geometry probe's banner) and the log. A push without a coordinator records too.
+            let pages = nav.viewControllers
+            if let page, let from = pages.firstIndex(of: page), pages.count > from + 1,
+               c == nil || (c?.viewController(forKey: .to)).flatMap({ pages.firstIndex(of: $0) }).map({ $0 > from }) == true {
+                RootArrivalProbe.last = "push animated=\(animated) coordinator=\(c != nil) depth=\(pages.count)"
+                Perf.stamp("root probe \(tab.rawValue): \(RootArrivalProbe.last)")
+            }
+            if let c, inStack { follow(c, in: nav) } else { settleSoon(nav) }
         }
 
-        /// A transition starts (the delegate's willShow).
-        fileprivate func willShow(_ vc: UIViewController, in nav: UINavigationController) {
-            if let c = nav.transitionCoordinator { follow(c, in: nav); return }
-            // SwiftUI's push asks before UIKit has made the transition's coordinator (a pop has
-            // one): a page other than the root is on its way in, which is all the bar needs.
-            guard vc !== nav.viewControllers.first else { return }
-            showPushed(vc)
+        /// The root is being uncovered: a pop back to it starts (one inside this stack only).
+        fileprivate func rootWillShow(coordinator c: UIViewControllerTransitionCoordinator?) {
+            guard tab != .chats, let nav else { return }
+            if let c, isInStack(c, nav) { follow(c, in: nav) } else { settleSoon(nav) }
         }
 
-        /// A page is shown (the delegate's didShow).
-        fileprivate func didShow(in nav: UINavigationController) { settleSoon(nav) }
+        /// Both ends of the transition are pages of this stack.
+        private func isInStack(_ c: UIViewControllerTransitionCoordinator, _ nav: UINavigationController) -> Bool {
+            guard let from = c.viewController(forKey: .from), let to = c.viewController(forKey: .to) else { return false }
+            return from.navigationController === nav && to.navigationController === nav
+        }
+
+        /// Gives a pushed page its own probe: it hears the next push from that page.
+        private func watchPage(_ page: UIViewController) {
+            guard !page.children.contains(where: { $0 is PageProbe }) else { return }
+            let probe = PageProbe()
+            probe.owner = self
+            page.addChild(probe)
+            page.view.addSubview(probe.view)
+            probe.didMove(toParent: page)
+        }
+
+        /// The root's appearance has settled either way (a cancelled pop ends covered again).
+        fileprivate func rootSettled() {
+            guard tab != .chats, let nav else { return }
+            settleSoon(nav)
+        }
 
         /// One transition, from its start: which way it goes is read from its ends, not from the
         /// stack's depth (SwiftUI's stack keeps its depth until a pop commits).
@@ -506,6 +578,7 @@ struct RootArrivalProbe: UIViewRepresentable {
         /// A page other than the root is coming in: its own Back and title go, and the first
         /// one over the root sends the bar away.
         private func showPushed(_ vc: UIViewController) {
+            watchPage(vc)
             let first = !wasPushed
             wasPushed = true
             guard active else { return }
@@ -527,6 +600,7 @@ struct RootArrivalProbe: UIViewRepresentable {
             guard nav.transitionCoordinator == nil else { return }
             let deep = nav.viewControllers.count > 1, was = wasPushed
             wasPushed = deep
+            for page in nav.viewControllers.dropFirst() { watchPage(page) }
             guard active else { return }
             let state = MorphState.shared
             if deep {
@@ -599,43 +673,6 @@ struct RootArrivalProbe: UIViewRepresentable {
             guard let nav, nav.viewControllers.count > 1 else { return }
             nav.popViewController(animated: true)
         }
-    }
-}
-
-/// The stack's delegate, wrapped: everything goes on to the one SwiftUI set, and the root's probe
-/// hears each transition as it starts (willShow, with the coordinator set) and each page once
-/// shown. Kept on the navigation controller, so SwiftUI's delegate keeps its forwarder for as
-/// long as the stack lives.
-private final class NavTap: NSObject, UINavigationControllerDelegate {
-    private static var key = 0
-    nonisolated(unsafe) weak var inner: UINavigationControllerDelegate?
-    weak var probe: RootArrivalProbe.ArrivalView?
-
-    static func install(on nav: UINavigationController, for probe: RootArrivalProbe.ArrivalView) {
-        if let tap = nav.delegate as? NavTap { tap.probe = probe; return }
-        let tap = objc_getAssociatedObject(nav, &key) as? NavTap ?? NavTap()
-        tap.inner = nav.delegate
-        tap.probe = probe
-        objc_setAssociatedObject(nav, &key, tap, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        // UIKit reads which methods its delegate answers when it is set: `inner` comes first.
-        nav.delegate = tap
-        Perf.stamp("root probe \(probe.tab.rawValue): delegate tapped, inner \(tap.inner.map { String(describing: type(of: $0)) } ?? "nil")")
-    }
-
-    nonisolated override func responds(to sel: Selector!) -> Bool {
-        super.responds(to: sel) || inner?.responds(to: sel) == true
-    }
-    nonisolated override func forwardingTarget(for sel: Selector!) -> Any? {
-        if let inner, inner.responds(to: sel) { return inner }
-        return super.forwardingTarget(for: sel)
-    }
-    func navigationController(_ nav: UINavigationController, willShow vc: UIViewController, animated: Bool) {
-        inner?.navigationController?(nav, willShow: vc, animated: animated)
-        probe?.willShow(vc, in: nav)
-    }
-    func navigationController(_ nav: UINavigationController, didShow vc: UIViewController, animated: Bool) {
-        inner?.navigationController?(nav, didShow: vc, animated: animated)
-        probe?.didShow(in: nav)
     }
 }
 
