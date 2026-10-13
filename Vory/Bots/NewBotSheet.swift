@@ -91,9 +91,9 @@ struct NewBotSheet: View {
                         Button(role: .destructive) { confirmDelete = true } label: { Label("Delete \(e.label)", systemImage: "trash") }
                             .disabled(busy || e.isDefault == true)
                             // Asked from its own button, so the bubble opens beside it and not at the top of the form.
-                            .confirmationDialog("Delete \(editing?.label ?? "this bot")?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                            .confirmationDialog(BotDelete.question(editing?.label ?? "this bot"), isPresented: $confirmDelete, titleVisibility: .visible) {
                                 Button("Delete bot", role: .destructive) { Task { await deleteBot() } }
-                            } message: { Text("Its SOUL.md, config and chats on the gateway are removed. This cannot be undone.") }
+                            } message: { Text(BotDelete.consequence) }
                     } footer: {
                         Text(e.isDefault == true ? "The default bot cannot be deleted." : "Removes the profile and its folder from the gateway: its SOUL.md, config and chats go with it.")
                     }
@@ -148,10 +148,7 @@ struct NewBotSheet: View {
         guard let e = editing else { return }
         busy = true; defer { busy = false }
         do {
-            let _: JSONValue = try await runtime.api.send("DELETE", "/api/profiles/\(e.name)", body: EmptyBody())
-            if runtime.selectedProfile == e.name { runtime.selectedProfile = runtime.profiles.first { $0.name != e.name }?.name }
-            await runtime.loadProfiles()
-            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
+            try await BotDelete.delete(e.name, runtime: runtime)
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
@@ -176,5 +173,19 @@ struct NewBotSheet: View {
             NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Deleting a bot: its profile and its folder on the gateway. Edit Bot's Delete and the Bots
+/// page's menu (#139) both ask first, with the same words (`question`, `consequence`).
+enum BotDelete {
+    static func question(_ label: String) -> String { "Delete \(label)?" }
+    static let consequence = "Its SOUL.md, config and chats on the gateway are removed. This cannot be undone."
+
+    @MainActor static func delete(_ name: String, runtime: GatewayRuntime) async throws {
+        let _: JSONValue = try await runtime.api.send("DELETE", "/api/profiles/\(name)", body: EmptyBody())
+        if runtime.selectedProfile == name { runtime.selectedProfile = runtime.profiles.first { $0.name != name }?.name }
+        await runtime.loadProfiles()
+        NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
     }
 }

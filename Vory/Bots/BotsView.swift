@@ -13,6 +13,11 @@ struct BotsView: View {
     @State private var searchText = ""
     /// A bot being edited in the same sheet that creates one.
     @State private var editing: ProfileInfo?
+    /// A bot whose folder is being renamed, and one about to be deleted, from its menu (#139).
+    @State private var renaming: ProfileInfo?
+    @State private var deleting: ProfileInfo?
+    /// Rename bot… is offered only where the gateway has the route (#315).
+    @State private var renameSupported = false
     @State private var path = NavigationPath()
 
     @Environment(\.wideLayout) private var wide
@@ -56,6 +61,11 @@ struct BotsView: View {
             }
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame().withAppModel() } }
             .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p).sheetFrame().withAppModel() } }
+            .sheet(item: $renaming) { p in BotRenameSheet(profileName: p.name) { _ in renaming = nil }.sheetFrame().withAppModel() }
+            .confirmationDialog(BotDelete.question(deleting?.label ?? "this bot"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                titleVisibility: .visible, presenting: deleting) { p in
+                Button("Delete bot", role: .destructive) { Task { await delete(p) } }
+            } message: { _ in Text(BotDelete.consequence) }
             .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0).pushedPage() }
             .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).untitledPage() }
             .navigationDestination(for: Room.self) { RoomView(room: $0).pushedPage() }
@@ -80,16 +90,8 @@ struct BotsView: View {
                                 slot: i, slots: rt.profiles.count)
                     }
                     .buttonStyle(.plain)
-                    // Press and hold: what you would otherwise dig for.
-                    .contextMenu {
-                        Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
-                        Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
-                        Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
-                        Button { editing = p } label: { Label("Edit bot", systemImage: "pencil") }
-                        if rt.selectedProfile != p.name {
-                            Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
-                        }
-                    }
+                    // Press and hold (a right-click on the Mac): what you would otherwise dig for.
+                    .contextMenu { botActions(p, rt) }
                 }
             }
             .padding(.horizontal, 16).padding(.top, 18)
@@ -119,9 +121,36 @@ struct BotsView: View {
         }
     }
 
+    /// Everything the Bots page does to one bot, in one menu (#139): what to do with it, then
+    /// changing it, then deleting it, last and in red. The default bot's folder is fixed, so it
+    /// has neither Rename nor Delete (Edit Bot says why).
+    @ViewBuilder private func botActions(_ p: ProfileInfo, _ rt: GatewayRuntime) -> some View {
+        Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
+        Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
+        if rt.selectedProfile != p.name {
+            Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
+        }
+        Divider()
+        Button { editing = p } label: { Label("Edit bot…", systemImage: "pencil") }
+        if renameSupported, p.isDefault != true {
+            Button { renaming = p } label: { Label("Rename bot…", systemImage: "folder.badge.gearshape") }
+        }
+        Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
+        if p.isDefault != true {
+            Divider()
+            Button(role: .destructive) { deleting = p } label: { Label("Delete bot…", systemImage: "trash") }
+        }
+    }
+
+    private func delete(_ p: ProfileInfo) async {
+        guard let rt = model.runtime else { return }
+        do { try await BotDelete.delete(p.name, runtime: rt); error = nil } catch { self.error = error.localizedDescription }
+    }
+
     private func load() async {
         guard let rt = model.runtime else { return }
         if rt.profiles.isEmpty { await rt.loadProfiles() }
+        renameSupported = await BotRename.supported(on: rt.api)
         capabilities = try? (await rt.rpc("groups.capabilities")).decode()
         guard capabilities != nil else { rooms = []; return }
         do {
