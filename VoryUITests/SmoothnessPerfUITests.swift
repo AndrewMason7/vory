@@ -866,6 +866,29 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(plus.waitForExistence(timeout: 5) && plus.isHittable, "the + is not back on the Bots page")
     }
 
+    /// Pulls to refresh, measured with the scroll-dragging hitch metric: the title capsule opens
+    /// with the finger, frame for frame, and the bar's hitch time must stay at 0 ms/s, as for the
+    /// fling. HERMES_E2E_TAB picks the page (chats; dashboard is Home), HERMES_E2E_PULL the speed
+    /// (slow: to the trigger and past it; fast: a quick flick down).
+    func testPullHitches() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        let e = ProcessInfo.processInfo.environment
+        let tab = e["HERMES_E2E_TAB"] ?? "chats", fast = e["HERMES_E2E_PULL"] == "fast"
+        launch(url: url, token: token, tab: tab)
+        pause(3)
+        let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        print("PULL-HITCHES \(tab) \(fast ? "fast" : "slow")")
+        measure(metrics: [XCTOSSignpostMetric.scrollDraggingMetric], options: longOptions) {
+            if fast {
+                top.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62)), withVelocity: .fast, thenHoldForDuration: 0)
+            } else {
+                top.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78)), withVelocity: .slow, thenHoldForDuration: 0.1)
+            }
+            pause(2)
+            stopMeasuring()
+        }
+    }
+
     /// The "/" list out of the field and back (type "/", then delete it).
     func testSlashMenu() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
