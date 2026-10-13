@@ -85,8 +85,8 @@ struct BotsView: View {
             LazyVGrid(columns: columns, spacing: 22) {
                 ForEach(Array(rt.profiles.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) || $0.label.localizedCaseInsensitiveContains(searchText) }.enumerated()), id: \.element.id) { i, p in
                     // The card's tap opens the bot (the same push as a link; on the Mac, its
-                    // settings) and its face reacts on the phone, a blink and a small bounce. A tap gesture beside a link's own lost the link's
-                    // tap on the card's glass pill.
+                    // settings) and its face reacts on the phone, a blink and a small bounce. A
+                    // tap gesture beside a link's own lost the link's tap on the card's glass pill.
                     Button {
                         #if os(macOS)
                         // The Mac: a click opens the bot's settings (its look, instructions and
@@ -103,7 +103,7 @@ struct BotsView: View {
                                 working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
                                 slot: i, slots: rt.profiles.count)
                     }
-                    .pressLookButtonStyle()
+                    .buttonStyle(.plain)
                     // VoiceOver: the menu's items as the card's actions, from the same list.
                     .accessibilityActions { botActions(p, rt) }
                     .accessibilityIdentifier("bots.card.\(p.name)")
@@ -128,7 +128,7 @@ struct BotsView: View {
                             .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
                     }
                     ForEach(rooms) { room in
-                        NavigationLink(value: room) { RoomCard(room: room) }.pressLookButtonStyle()
+                        NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain)
                     }
                     Text("Start one from the compose button on Chats by adding more than one bot.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
@@ -221,8 +221,7 @@ struct BotCard: View {
             }
             .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 7)
             .frame(maxWidth: .infinity)
-            .glassEffect(PressLook.glass(.regular), in: .capsule)
-            .pressLookFill(in: Capsule())
+            .glassEffect(.regular.interactive(), in: .capsule)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -365,8 +364,7 @@ struct RoomCard: View {
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(14)
-        .glassEffect(PressLook.glass(.regular), in: .rect(cornerRadius: 18))
-        .pressLookFill(in: RoundedRectangle(cornerRadius: 18))
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
         .padding(.horizontal, 16)
     }
 }
