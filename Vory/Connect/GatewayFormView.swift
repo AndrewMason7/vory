@@ -88,6 +88,11 @@ struct GatewayFormView: View {
     @State private var testing = false
     @State private var testPassed = false
     @State private var testedVersion: String?
+    /// A second address for the same gateway (#283), its own test, and what the test said.
+    @State private var backupText = ""
+    @State private var backupSteps: [ConnectionTestStep] = []
+    @State private var backupTesting = false
+    @State private var backupPassed = false
     @State private var errorMessage: String?
     @State private var signingIn = false
     @State private var authClient = NativeAuthClient()
@@ -103,6 +108,21 @@ struct GatewayFormView: View {
     /// anywhere else, https. Typing the scheme always wins.
     private var defaultScheme: String { kind == .local || kind == .tailscale ? "http" : "https" }
     private var normalizedURL: GatewayURL? { try? GatewayURL.normalize(urlText, pathPrefix: pathPrefix, defaultScheme: defaultScheme) }
+    /// The backup address as typed, whole (its own path, if any); http for a home or tailnet
+    /// host typed without a scheme, as the main field does.
+    private var normalizedBackup: GatewayURL? { Self.backupURL(backupText) }
+    static func backupURL(_ text: String) -> GatewayURL? {
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty, let https = try? GatewayURL.normalize(text, defaultScheme: "https") else { return nil }
+        if !text.contains("://"), https.isPrivateHost || https.isTailscaleHost { return try? GatewayURL.normalize(text, defaultScheme: "http") }
+        return https
+    }
+    /// What is wrong with the backup address, if anything was typed.
+    private var backupProblem: String? {
+        guard !backupText.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        guard let b = normalizedBackup else { return "The backup address does not look like a URL." }
+        if let u = normalizedURL, u == b { return "The backup address is the same as the gateway URL." }
+        return nil
+    }
     private var urlError: String? {
         guard !urlText.isEmpty else { return nil }
         do { _ = try GatewayURL.normalize(urlText, pathPrefix: pathPrefix, defaultScheme: defaultScheme); return nil } catch { return error.localizedDescription }
@@ -142,6 +162,99 @@ struct GatewayFormView: View {
             } header: {
                 Text("Gateway")
             } footer: {
+                gatewayFooter
+            }
+            backupSection
+            gatewayRest
+        }
+        .formStyle(.grouped)
+        #if os(macOS)
+        .buttonStyle(SettingsRowButtonStyle())
+        #endif
+        .navigationTitle(existing == nil ? "Add Gateway" : "Edit Gateway")
+        .navigationBarTitleDisplayMode(.inline)
+        .pageToolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(saveBlocker != nil).accessibilityIdentifier("gateway.save") }
+        }
+        .onChange(of: urlText) { _, _ in invalidate() }
+        .onChange(of: kind) { _, _ in invalidate() }
+        .onChange(of: pathPrefix) { _, _ in invalidate() }
+        .onChange(of: authMode) { _, _ in invalidate(); Task { await loadProviders() } }
+        .onChange(of: sessionToken) { _, _ in invalidate() }
+        .onChange(of: cfClientId) { _, _ in invalidate() }
+        .onChange(of: cfClientSecret) { _, _ in invalidate() }
+        .onChange(of: backupText) { _, _ in backupPassed = false; backupSteps = [] }
+        .task {
+            let auth = model.rememberedSignIn.authenticator
+            canRemember = auth.canAuthenticate
+            guardName = auth.methodName
+            loadExisting()
+            await loadProviders()
+        }
+    }
+
+    /// A second address for the same gateway (#283): at home and away, say. Vory tries the one
+    /// that worked last, then the other; the sign-in is the same for both. Its own test, and
+    /// one passing address is enough to save: the other may be out of reach from here.
+    @ViewBuilder private var backupSection: some View {
+        Section {
+            TextField("Backup address (optional)", text: $backupText, prompt: Text("Another way in: a Tailscale or tunnel address"))
+                .keyboardType(.URL).textContentType(.URL).autocorrectionDisabled().textInputAutocapitalization(.never)
+                .accessibilityIdentifier("gateway.backup")
+            if normalizedBackup != nil, backupProblem == nil {
+                Button {
+                    Task { await runBackupTest() }
+                } label: {
+                    HStack {
+                        Label("Test Backup Address", systemImage: "antenna.radiowaves.left.and.right")
+                        Spacer()
+                        if backupTesting { ProgressView() }
+                        else if backupPassed { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                    }
+                }
+                .disabled(!canTest || backupTesting)
+                .accessibilityIdentifier("gateway.testBackup")
+                ForEach(backupSteps) { step in
+                    HStack(alignment: .top, spacing: 10) {
+                        stepIcon(step.status)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(step.title).font(.subheadline)
+                            switch step.status {
+                            case .passed(let s): Text(s).font(.footnote).foregroundStyle(.secondary)
+                            case .failed(let s): Text(s).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+                            default: EmptyView()
+                            }
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Backup address")
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("A second way to reach the same gateway, for at home and away. Vory tries the address that worked last, then the other. The sign-in is the same for both.")
+                if let backupProblem { Text(backupProblem).foregroundStyle(.red).accessibilityIdentifier("gateway.backupProblem") }
+                else if let b = normalizedBackup {
+                    Text("Will also try \(b.description)").foregroundStyle(.secondary)
+                    if let untested = Self.untestedNote(primaryPassed: testPassed, backupPassed: backupPassed) {
+                        Text(untested).foregroundStyle(.secondary).accessibilityIdentifier("gateway.untested")
+                    }
+                }
+            }
+        }
+    }
+
+    /// One address passed and the other has not: it is saved all the same, and said so.
+    static func untestedNote(primaryPassed: Bool, backupPassed: Bool) -> String? {
+        switch (primaryPassed, backupPassed) {
+        case (true, false): return "Backup address: not tested from this network. Vory tries it when the gateway URL does not answer."
+        case (false, true): return "Gateway URL: not tested from this network. Vory tries it when the backup address does not answer."
+        default: return nil
+        }
+    }
+
+    @ViewBuilder private var gatewayFooter: some View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Enter the URL of your Hermes dashboard (`hermes serve`), not a chat-webui or SSH app. Reverse-proxy path prefixes are supported.")
                     if let urlError { Text(urlError).foregroundStyle(.red) }
@@ -164,6 +277,7 @@ struct GatewayFormView: View {
                 }
             }
 
+    @ViewBuilder private var gatewayRest: some View {
             Section {
                 NavigationLink { TroubleshootingView() } label: { Label("Troubleshooting", systemImage: "wrench.and.screwdriver") }
             } footer: {
@@ -263,33 +377,6 @@ struct GatewayFormView: View {
                 }
             }
         }
-        // Grouped on both: on the Mac this is the System Settings look the other pages have
-        // (the column style ran headings into footers and clipped the longer labels).
-        .formStyle(.grouped)
-        #if os(macOS)
-        .buttonStyle(SettingsRowButtonStyle())
-        #endif
-        .navigationTitle(existing == nil ? "Add Gateway" : "Edit Gateway")
-        .navigationBarTitleDisplayMode(.inline)
-        .pageToolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(!testPassed || name.trimmingCharacters(in: .whitespaces).isEmpty).accessibilityIdentifier("gateway.save") }
-        }
-        .onChange(of: urlText) { _, _ in invalidate() }
-        .onChange(of: kind) { _, _ in invalidate() }
-        .onChange(of: pathPrefix) { _, _ in invalidate() }
-        .onChange(of: authMode) { _, _ in invalidate(); Task { await loadProviders() } }
-        .onChange(of: sessionToken) { _, _ in invalidate() }
-        .onChange(of: cfClientId) { _, _ in invalidate() }
-        .onChange(of: cfClientSecret) { _, _ in invalidate() }
-        .task {
-            let auth = model.rememberedSignIn.authenticator
-            canRemember = auth.canAuthenticate
-            guardName = auth.methodName
-            loadExisting()
-            await loadProviders()
-        }
-    }
 
     /// Under the switch: what remembering does, or what it needs.
     private var rememberFootnote: String {
@@ -324,9 +411,12 @@ struct GatewayFormView: View {
 
     /// What stands between the form and Save, in a line under the test; nil when it can save.
     private var saveBlocker: String? {
-        Self.saveBlocker(named: !name.trimmingCharacters(in: .whitespaces).isEmpty, urlOK: normalizedURL != nil, canTest: canTest, testPassed: testPassed)
+        // One passing address is enough (#283): the other may be out of reach from here.
+        Self.saveBlocker(named: !name.trimmingCharacters(in: .whitespaces).isEmpty, urlOK: normalizedURL != nil, canTest: canTest,
+                         testPassed: testPassed || backupPassed, backupProblem: backupProblem)
     }
-    static func saveBlocker(named: Bool, urlOK: Bool, canTest: Bool, testPassed: Bool) -> String? {
+    static func saveBlocker(named: Bool, urlOK: Bool, canTest: Bool, testPassed: Bool, backupProblem: String? = nil) -> String? {
+        if let backupProblem { return "To save: " + backupProblem }
         if testPassed && named { return nil }
         var parts: [String] = []
         if !urlOK { parts.append("enter the gateway's address") }
@@ -345,12 +435,13 @@ struct GatewayFormView: View {
         }
     }
 
-    private func invalidate() { testPassed = false; steps = [] }
+    private func invalidate() { testPassed = false; steps = []; backupPassed = false; backupSteps = [] }
 
     private func loadExisting() {
         guard let c = existing else { return }
         name = c.name
         urlText = c.gateway.description
+        backupText = c.alternate?.description ?? ""
         kind = ConnectionKind(rawValue: c.connectionKind ?? "") ?? (c.hasAccessHeaders ? .cloudflare : c.gateway.isTailscaleHost ? .tailscale : c.gateway.isPrivateHost ? .local : .other)
         authMode = c.authMode
         providerName = c.authProvider ?? ""
@@ -398,7 +489,9 @@ struct GatewayFormView: View {
         }
     }
 
-    private func buildSecrets() async throws -> GatewaySecrets {
+    /// The secrets to test and save with; a password sign-in goes to `address` (the one being
+    /// tested: either of the gateway's two, #283), and its session serves both.
+    private func buildSecrets(at address: GatewayURL? = nil) async throws -> GatewaySecrets {
         var s = GatewaySecrets()
         s.access = access
         switch authMode {
@@ -406,7 +499,7 @@ struct GatewayFormView: View {
             s.sessionToken = sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
         case .password:
             if let b = bearerSecrets, b.bearer != nil, username.isEmpty { s = b; s.access = access; break }
-            guard let u = normalizedURL else { throw GatewayURLError.invalid }
+            guard let u = address ?? normalizedURL else { throw GatewayURLError.invalid }
             if !providers.isEmpty, !providers.contains(where: { $0.supportsPassword ?? false }) {
                 throw NativeAuthError.invalidResponse(Self.noPasswordProviderMessage(providers))
             }
@@ -436,7 +529,7 @@ struct GatewayFormView: View {
         testing = true; testPassed = false; errorMessage = nil
         defer { testing = false }
         do {
-            let secrets = try await buildSecrets()
+            let secrets = try await buildSecrets(at: u)
             let conn = GatewayConnection(id: existing?.id ?? UUID(), name: name, gateway: u, authMode: authMode, authProvider: providerName.isEmpty ? nil : providerName)
             let outcome = await ConnectionTester.run(connection: conn, secrets: secrets) { s in Task { @MainActor in steps = s } }
             steps = outcome.steps
@@ -447,11 +540,29 @@ struct GatewayFormView: View {
         }
     }
 
+    /// The backup address's own test: the same three legs, the same credentials.
+    private func runBackupTest() async {
+        guard let b = normalizedBackup, backupProblem == nil else { return }
+        backupTesting = true; backupPassed = false; errorMessage = nil
+        defer { backupTesting = false }
+        do {
+            let secrets = try await buildSecrets(at: b)
+            let conn = GatewayConnection(id: existing?.id ?? UUID(), name: name, gateway: b, authMode: authMode, authProvider: providerName.isEmpty ? nil : providerName)
+            let outcome = await ConnectionTester.run(connection: conn, secrets: secrets) { s in Task { @MainActor in backupSteps = s } }
+            backupSteps = outcome.steps
+            backupPassed = outcome.succeeded
+            if testedVersion == nil { testedVersion = outcome.version }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func save() {
         guard let u = normalizedURL else { return }
         Task {
             do {
-                let secrets = try await buildSecrets()
+                // Signed in where a test passed: the backup when only it could be reached.
+                let secrets = try await buildSecrets(at: !testPassed && backupPassed ? normalizedBackup : u)
                 var conn = existing ?? GatewayConnection(name: name, gateway: u, authMode: authMode)
                 conn.name = name.trimmingCharacters(in: .whitespaces)
                 conn.gateway = u
@@ -459,6 +570,7 @@ struct GatewayFormView: View {
                 conn.authProvider = providerName.isEmpty ? nil : providerName
                 conn.lastVersion = testedVersion
                 conn.connectionKind = kind.rawValue
+                conn.alternate = backupProblem == nil ? normalizedBackup : nil
                 try model.store.upsert(conn, secrets: secrets)
                 do { try updateRememberedSignIn(conn.id, gateway: conn.gateway) } catch {
                     // Saved and signed in all the same; only the remembering failed. The switch

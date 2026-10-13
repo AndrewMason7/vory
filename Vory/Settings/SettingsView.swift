@@ -89,7 +89,8 @@ struct SettingsView: View {
                                 GatewayTile()
                                 VStack(alignment: .leading) {
                                     Text(model.runtime?.connection.name ?? "No gateway").font(.headline)
-                                    Text(model.runtime?.connection.gateway.description ?? "Add a gateway").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    // The address in use: with a backup (#283), the one that answered.
+                                    Text(model.runtime.map { rt in [rt.addressLabel, rt.address.description].compactMap { $0 }.joined(separator: " · ") } ?? "Add a gateway").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer()
                                 if let s = model.runtime?.socketState { ConnectionPill(state: s) }

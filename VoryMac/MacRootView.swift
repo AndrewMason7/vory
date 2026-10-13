@@ -496,7 +496,8 @@ private struct GatewayFooter: View {
     @State private var editing = false
 
     private var name: String { model.runtime?.connection.name ?? model.store.active?.name ?? "No gateway" }
-    private var state: String { model.runtime.map { $0.socketState.label } ?? (model.activationError ?? "Connecting…") }
+    /// The socket, and with a backup address (#283) the address in use.
+    private var state: String { model.runtime.map { [$0.addressLabel, $0.socketState.label].compactMap { $0 }.joined(separator: " · ") } ?? (model.activationError ?? "Connecting…") }
     private var dot: Color {
         guard let s = model.runtime?.socketState else { return .secondary }
         switch s {

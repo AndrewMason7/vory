@@ -122,7 +122,7 @@ struct TurnMenu: View {
                     BotFaceView(spec: BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BFF", finish: "flat"), size: 28, active: false, mood: BotFaceView.Mood(profile: "vory-menubar"))
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Nothing running").font(.subheadline.weight(.semibold))
-                        Text(model.runtime.map { "\($0.connection.name) · \($0.socketState.label)" } ?? "No gateway").font(.caption).foregroundStyle(.secondary)
+                        Text(model.runtime.map { [$0.connection.name, $0.addressLabel, $0.socketState.label].compactMap { $0 }.joined(separator: " · ") } ?? "No gateway").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .padding(12)

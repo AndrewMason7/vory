@@ -1409,7 +1409,8 @@ struct ChatListProfileItems: View {
                 Button { model.chatListRequest = .init(.newBot) } label: { Label("New Bot…", systemImage: "plus") }
                 #endif
                 Divider()
-                Section(runtime.connection.name) {
+                // With a backup address (#283), the address in use beside the gateway's name.
+                Section([runtime.connection.name, runtime.addressLabel].compactMap { $0 }.joined(separator: " · ")) {
                     Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
                     if case .open = runtime.socketState {} else {
                         Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
