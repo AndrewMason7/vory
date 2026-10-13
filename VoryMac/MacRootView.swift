@@ -129,6 +129,13 @@ private struct MainSplitView: View {
     @State private var appearedAt = Date.distantPast
     /// The rail's other pages, kept mounted once visited (first visit order). See `body`.
     @State private var kept: [AppModel.AppTab] = []
+    /// Judgement call while Matt is away (2026-10-13, vory-ops/JUDGEMENT-CALLS.md): a page left with a
+    /// page pushed on it keeps it, as the phone's tabs do. Setting this key (`defaults write <bundle id>
+    /// mac.pages.popOnLeave -bool YES`) goes back to 1.5 (18)'s way: a page left is re-created at its
+    /// root a moment after the switch, out of sight.
+    static let popOnLeaveKey = "mac.pages.popOnLeave"
+    /// Bumped to re-create a page left behind when `popOnLeaveKey` is set.
+    @State private var resets: [AppModel.AppTab: Int] = [:]
     /// How long after the window appears a page that the gateway has to vouch for (the Board)
     /// may still take the start: its plugin is probed once the gateway answers, a second or two in.
     private static let launchTabGrace: TimeInterval = 8
@@ -173,6 +180,8 @@ private struct MainSplitView: View {
                 } detail: {
                     page(tab)
                 }
+                // The whole split: what is pushed lives in the split's detail column, not in the page.
+                .id(resets[tab, default: 0])
                 .modifier(MacPage(shown: model.selectedTab == tab, windowLive: windowLive))
             }
         }
@@ -190,6 +199,9 @@ private struct MainSplitView: View {
             if now != .chats, !kept.contains(now) { kept.append(now) }
             guard was != now else { return }
             Smooth.animate("page")
+            if was != .chats, UserDefaults.standard.bool(forKey: Self.popOnLeaveKey) {
+                Task { @MainActor in resets[was, default: 0] += 1 }
+            }
             // The keyboard focus leaves the page that hides: it stays mounted, and its composer,
             // list or field kept the focus (keys and pastes aimed at a page not on show). The
             // window holds it, as when the page was torn down.
