@@ -2157,9 +2157,13 @@ struct CopyButton: View {
             Task { try? await Task.sleep(for: .seconds(1.5)); withAnimation { copied = false } }
         } label: {
             Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.caption).foregroundStyle(copied ? .green : .secondary)
-                .frame(width: 24, height: 20).contentShape(.rect)
+                // A 32 x 28 click target around the glyph (it was 24 x 20); a content shape
+                // larger than the frame did not take clicks on the Mac.
+                .frame(width: 32, height: 28).contentShape(.rect)
         }
         .buttonStyle(.plain)
+        // Laid out at 24 x 20 as before: the code header and the overlays place it by that frame.
+        .padding(-4)
         .accessibilityLabel(copied ? "Copied" : "Copy code")
     }
 }
