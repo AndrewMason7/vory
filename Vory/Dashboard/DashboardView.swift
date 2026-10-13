@@ -263,7 +263,7 @@ struct DashboardView: View {
             HStack {
                 Text("Overview").font(.headline)
                 Spacer()
-                GlassSegments(options: [(7, "7d"), (30, "30d"), (90, "90d")], selection: $rangeDays)
+                GlassSegments(options: [(7, "7d"), (30, "30d"), (90, "90d")], spoken: ["7 days", "30 days", "90 days"], selection: $rangeDays)
                     .accessibilityLabel("Range")
             }
             let t = usage?.totals
@@ -614,17 +614,18 @@ enum Format {
 /// under the chosen one (the lens morphs between positions inside the container).
 struct GlassSegments<T: Hashable>: View {
     var options: [(T, String)]
+    /// What VoiceOver says for each option, when its short label is not a word ("7d").
+    var spoken: [String]? = nil
     @Binding var selection: T
     @Namespace private var lens
 
     var body: some View {
         GlassEffectContainer(spacing: 6) {
             HStack(spacing: 0) {
-                ForEach(options, id: \.0) { option in
+                ForEach(Array(options.enumerated()), id: \.element.0) { i, option in
                     Text(option.1).font(.caption.weight(.semibold))
                         .foregroundStyle(selection == option.0 ? .primary : .secondary)
                         .frame(width: 42, height: 26)
-                        .contentShape(.rect)
                         .background {
                             if selection == option.0 {
                                 Capsule().fill(.clear)
@@ -632,11 +633,19 @@ struct GlassSegments<T: Hashable>: View {
                                     .glassEffectID("lens", in: lens)
                             }
                         }
+                        // Each option takes the capsule's full height (its padding above and below
+                        // the 26 pt label), so the click target is 32 pt tall; the look is the same.
+                        .padding(.vertical, 3)
+                        .contentShape(.rect)
                         .onTapGesture { withAnimation(.snappy(duration: 0.3)) { selection = option.0 } }
+                        .accessibilityLabel(spoken.map { $0[i] } ?? option.1)
                         .accessibilityAddTraits(selection == option.0 ? [.isButton, .isSelected] : .isButton)
                 }
             }
-            .padding(3)
+            // The options inside one element, so a label on the control names the group, not
+            // every option ("Range" on all three before).
+            .accessibilityElement(children: .contain)
+            .padding(.horizontal, 3)
             .glassEffect(.regular, in: .capsule)
         }
     }
