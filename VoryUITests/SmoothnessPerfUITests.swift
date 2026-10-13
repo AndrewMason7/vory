@@ -877,6 +877,42 @@ final class SmoothnessPerfUITests: XCTestCase {
         print("STREAM-AT end")
     }
 
+    /// I: the bar's controls answer a touch (Matt on (18): "at touching indication on the top right
+    /// icons"). On the Chats +, sort and filter: a press held for a second then lifted, and a press
+    /// that slides off before it lifts, for the phone's frames (the log's Press lines are the
+    /// moments). Whatever opened is closed again; the slide-off must not open the New Bot sheet.
+    func testPressedStyle() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        waitForList(); clearSystemAlert()
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        // Closes what a press opened: the New Bot sheet, or a menu (tapped outside only when one is
+        // showing; with nothing open, that tap opened the chat row under it).
+        func closeAnything() {
+            if app.buttons["Cancel"].waitForExistence(timeout: 1) { app.buttons["Cancel"].tap() }
+            else if app.buttons["Recent"].exists || app.buttons["Pinned only"].exists || app.switches["Pinned only"].exists {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+            }
+            pause(1)
+        }
+        let away = app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5))
+        for id in ["chats.newBot", "chats.sort", "chats.filters"] {
+            let c = any(id)
+            XCTAssertTrue(c.waitForExistence(timeout: 5), "\(id) is not there")
+            let centre = c.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            print("PRESS-AT \(id) hold")
+            centre.press(forDuration: 1.0)
+            pause(1); shot("\(id)-after-hold"); closeAnything()
+            print("PRESS-AT \(id) slide-off")
+            centre.press(forDuration: 0.6, thenDragTo: away)
+            pause(1); shot("\(id)-after-slide-off")
+            if id == "chats.newBot" {
+                XCTAssertFalse(app.buttons["Cancel"].exists, "sliding off the + still opened the New Bot sheet")
+            }
+            closeAnything()
+        }
+    }
+
     /// Tab switches by a tap, Chats → Bots → Files → Settings → Chats, for a frame check of the
     /// morph prototype's bar morphing one page's set into the next.
     func testTabTapSwitch() throws {

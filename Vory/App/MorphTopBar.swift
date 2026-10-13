@@ -327,7 +327,7 @@ struct MorphTopBar: View {
             Button { model.chatRequest = .init(.back) } label: {
                 Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MorphPressStyle(kind: .circle))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Back").accessibilityIdentifier("chat.back").accessibilityAddTraits(.isButton)
             // Activation through accessibility (VoiceOver, XCTest's element tap) did not reach
@@ -359,7 +359,7 @@ struct MorphTopBar: View {
             } label: {
                 Image(systemName: "ellipsis").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
             }
-            .menuStyle(.button).buttonStyle(.plain)
+            .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .circle))
             .accessibilityLabel("Chat options")
             .accessibilityShowsLargeContentViewer { Label("Chat options", systemImage: "ellipsis") }
             .accessibilityIdentifier("chat.more")
@@ -376,7 +376,7 @@ struct MorphTopBar: View {
                     Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: scheme))
                         .renderingMode(.original).frame(width: 44, height: 44).contentShape(.circle)
                 }
-                .menuStyle(.button).buttonStyle(.plain)
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .circle))
                 .accessibilityLabel("Profile: \(model.listChipProfile ?? "none")")
                 .accessibilityShowsLargeContentViewer { Label("Profile", systemImage: "person.crop.circle") }
                 .accessibilityIdentifier("chats.profile")
@@ -406,7 +406,7 @@ struct MorphTopBar: View {
                 Menu {
                     Button { model.pageRequest = .init(.sessionsAdvanced) } label: { Label("Advanced", systemImage: "internaldrive") }
                 } label: { Image(systemName: "gearshape").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(.plain)
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
                 .font(.body.weight(.medium)).foregroundStyle(.tint)
                 .padding(.horizontal, 16).frame(height: 44)
                 .accessibilityLabel("Options").accessibilityIdentifier("sessions.options")
@@ -431,7 +431,7 @@ struct MorphTopBar: View {
     /// A circle button in a leading or trailing slot, with the accessibility it needs.
     private func circleButton(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.body.weight(.medium)).foregroundStyle(.tint).frame(width: 44, height: 44).contentShape(.circle) }
-            .buttonStyle(.plain)
+            .buttonStyle(MorphPressStyle(kind: .circle))
             .accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityAddTraits(.isButton)
             .accessibilityAction { action() }
             .accessibilityShowsLargeContentViewer { Label(label, systemImage: symbol) }
@@ -443,7 +443,7 @@ struct MorphTopBar: View {
         HStack(spacing: 18) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                 Button(action: item.action) { Image(systemName: item.symbol).contentShape(.rect) }
-                    .buttonStyle(.plain)
+                    .buttonStyle(MorphPressStyle(kind: .icon))
                     .accessibilityElement(children: .ignore).accessibilityLabel(item.label).accessibilityAddTraits(.isButton)
                     .accessibilityAction { item.action() }
                     .accessibilityShowsLargeContentViewer { Label(item.label, systemImage: item.symbol) }
@@ -468,17 +468,17 @@ struct MorphTopBar: View {
     private var liveActions: some View {
         HStack(spacing: 18) {
             Button { model.chatListRequest = .init(.newBot) } label: { Image(systemName: "plus").contentShape(.rect) }
-                .buttonStyle(.plain)
+                .buttonStyle(MorphPressStyle(kind: .icon))
                 .accessibilityElement(children: .ignore).accessibilityLabel("New bot").accessibilityAddTraits(.isButton)
                 .accessibilityAction { model.chatListRequest = .init(.newBot) }
                 .accessibilityShowsLargeContentViewer { Label("New bot", systemImage: "plus") }
                 .accessibilityIdentifier("chats.newBot")
             Menu { ChatListSortItems() } label: { Image(systemName: "arrow.up.arrow.down").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(.plain)
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
                 .accessibilityLabel("Sort").accessibilityIdentifier("chats.sort")
                 .accessibilityShowsLargeContentViewer { Label("Sort", systemImage: "arrow.up.arrow.down") }
             Menu { ChatListFilterItems() } label: { Image(systemName: "line.3.horizontal.decrease.circle").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(.plain)
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
                 .accessibilityLabel("Filters").accessibilityIdentifier("chats.filters")
                 .accessibilityShowsLargeContentViewer { Label("Filters", systemImage: "line.3.horizontal.decrease.circle") }
         }
@@ -533,7 +533,7 @@ struct MorphTopBar: View {
         Button { model.popOne[tab, default: 0] += 1 } label: {
             Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MorphPressStyle(kind: .circle))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Back").accessibilityIdentifier("page.back").accessibilityAddTraits(.isButton)
         .accessibilityAction { model.popOne[tab, default: 0] += 1 }
@@ -608,6 +608,44 @@ private struct CapsuleFrame: ViewModifier {
             .position(x: present ? frame.minX + width / 2 : frame.midX, y: frame.midY)
             // With the wheel's own slot: one snappy step open, and closed after the refresh.
             .animation(.snappy(duration: 0.3), value: open)
+    }
+}
+
+/// The bar's controls pressed (Matt on 1.5 (18): "at touching indication on the top right icons
+/// for the chat page"): a soft fill behind the control touched, not its whole shared capsule, and
+/// a slight grow, like the system's glass controls, at touch-down; gone on lift or when the finger
+/// slides off. A fill, never glass taken to 0 (the glass reference). Reduce Motion: the fill
+/// alone. A judgement call made while Matt was out: `-vory-press-style-off` brings back (18)'s
+/// plain controls.
+struct MorphPressStyle: ButtonStyle {
+    enum Kind {
+        /// A 44 pt round control (Back, the bot circle, the chat's …): a circle just inside it.
+        case circle
+        /// An icon in a shared capsule (+, sort, filter): a rounded square around the glyph.
+        case icon
+    }
+    var kind: Kind
+    /// The pressed control's size, the one number to change the look by.
+    static let pressedScale: CGFloat = 1.05
+    static let off = ProcessInfo.processInfo.arguments.contains("-vory-press-style-off")
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed && !Self.off
+        let fill = scheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.12)
+        configuration.label
+            .scaleEffect(pressed && !reduceMotion ? Self.pressedScale : 1)
+            .background {
+                Group {
+                    switch kind {
+                    case .circle: Circle().fill(fill).padding(3)
+                    case .icon: RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill).padding(-8)
+                    }
+                }
+                .opacity(pressed ? 1 : 0)
+            }
+            .animation(.easeOut(duration: pressed ? 0.08 : 0.2), value: pressed)
     }
 }
 
