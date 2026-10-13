@@ -51,8 +51,19 @@ struct VoryMacApp: App {
         NSApp.activate()
         model.requestVoiceMode()
     }
-    /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
-    private var lastReply: String? { frontChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }
+    /// The newest finished reply in the open chat, for Chat › Copy and Speak Last Reply. While a
+    /// turn runs it is the one kept from before the turn: reading the chat's items here made the
+    /// whole app scene (the main menu, the windows' bars) update on every streamed token.
+    private var lastReply: String? {
+        guard let chat = frontChat else { return nil }
+        let key = ObjectIdentifier(chat)
+        if chat.isRunning { return Self.keptReply[key] }
+        let reply = VoiceCoordinator.lastReply(in: chat.items)
+        Self.keptReply[key] = reply
+        return reply
+    }
+    /// The last finished reply read for each chat, for `lastReply` while a turn runs.
+    @MainActor private static var keptReply: [ObjectIdentifier: String] = [:]
     /// The Board page is the one showing: its menu's keys apply, the Chat menu's ⌘N and ⌘R do not.
     private var boardInFront: Bool { model.selectedTab == .kanban }
 
