@@ -31,6 +31,8 @@ struct DashboardView: View {
     @Environment(\.macPageShown) private var pageShown
     @State private var visits = 0
     @State private var loadedKey = ""
+    /// The gateway the last finished load ran against (see `shouldLoad`).
+    @State private var loadedConnection: UUID?
 
     private var runtime: GatewayRuntime? { model.runtime }
     private var layout: HomeLayout { HomeLayout.parse(layoutRaw) }
@@ -83,18 +85,15 @@ struct DashboardView: View {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
         .reloadable { await Task { await load() }.value }
-        // The first load runs at once, live or not (on the phone Home mounts behind the tab in front
-        // at launch, and that load also refreshes the Overview widget's numbers). After it, loads run
-        // while the page is live: a change made while it was hidden (another bot, the range) loads on
-        // its way back, and on the Mac so does each new visit (the page stays mounted). The rows and
-        // numbers are replaced in place, so a return shows no reload.
+        // See `shouldLoad`. The rows and numbers are replaced in place, so a return shows no reload.
         .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)|\(pageLive)") {
-            guard pageLive || loadedKey.isEmpty else { return }
-            let key = "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)"
-            guard key != loadedKey else { return }
+            let connection = runtime?.connection.id
+            let key = "\(connection?.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)"
+            guard Self.shouldLoad(pageLive: pageLive, connection: connection, loadedConnection: loadedConnection, key: key, loadedKey: loadedKey) else { return }
             await load()
-            // Marked done only when it ran to the end (a hide part-way through loads again on return).
-            if !Task.isCancelled { loadedKey = key }
+            // Counted only when it ran to the end against a gateway: a load with none (Home mounted
+            // before activation) or one cut short by a hide loads again.
+            if !Task.isCancelled, runtime != nil { loadedKey = key; loadedConnection = connection }
         }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
         .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }
@@ -102,6 +101,17 @@ struct DashboardView: View {
             if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { lastVisit = max(lastVisit, visitStart); editingHome = false }
         }
         .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).pushedPage() }
+    }
+
+    /// Whether Home loads now. Hidden (the phone's other tab in front, or another Mac page), it loads
+    /// only for a gateway it has not loaded from yet: at launch, where Home mounts behind the tab in
+    /// front before the gateway is up and its load also refreshes the Overview widget, and after a
+    /// switch of gateway. Other changes made while it is hidden (another bot, the range) wait for its
+    /// return, as does each new Mac visit (`key` counts them). Live, it loads whenever the key moved.
+    static func shouldLoad(pageLive: Bool, connection: UUID?, loadedConnection: UUID?, key: String, loadedKey: String) -> Bool {
+        guard key != loadedKey else { return false }
+        if pageLive { return true }
+        return connection != nil && connection != loadedConnection
     }
 
     @State private var editingHome = false
