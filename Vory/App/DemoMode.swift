@@ -37,6 +37,10 @@ enum DemoMode {
         guard isOn, let g = values(after: "-vory-demo-gateway"), let url = try? GatewayURL.normalize(g.url) else { return }
         var conn = GatewayConnection(name: g.name, gateway: url, authMode: .sessionToken)
         conn.connectionKind = "local"
+        // `-vory-demo-backup <url>`: the gateway with a backup address (#283), for a cold launch
+        // with the first address down (the demo's gateways are re-added at every launch).
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-vory-demo-backup"), args.indices.contains(i + 1) { conn.alternate = try? GatewayURL.normalize(args[i + 1]) }
         try? store.upsert(conn, secrets: GatewaySecrets(sessionToken: g.token))
         store.activeConnectionID = conn.id
     }
