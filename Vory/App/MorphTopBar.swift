@@ -480,7 +480,10 @@ struct MorphTopBar: View {
             // came out a few points taller for a moment and the capsule breathed (Matt,
             // 2026-10-12: "the height of the bubble from bot to settings seems to change").
             .padding(.horizontal, 12).frame(height: titleHeight)
-            .measured(.mid, into: $listFrames, last: $lastListFrames)
+            // While a pull is dragged the capsule follows the finger, frame for frame: animated,
+            // it chased the wheel a 0.22 s spring behind (layout follows the finger; only looks
+            // spring). The open and the close after the release keep the snappy move.
+            .measured(.mid, into: $listFrames, last: $lastListFrames, animated: model.pullStates[model.selectedTab]?.dragging != true)
             Spacer(minLength: 0)
             switch chrome.trail {
             case .chatActions: actions.measured(.trail, into: $listFrames, last: $lastListFrames)
@@ -561,13 +564,14 @@ private extension View {
     /// Reports this view's frame in the bar's space under its slot. A change after the first
     /// measurement animates (a tab switch moves and resizes the capsules: the morph); a slot
     /// that goes away leaves its last frame so its capsule can fade out where it was.
-    func measured(_ slot: MorphSlot, into frames: Binding<[MorphSlot: CGRect]>, last: Binding<[MorphSlot: CGRect]>? = nil) -> some View {
+    func measured(_ slot: MorphSlot, into frames: Binding<[MorphSlot: CGRect]>, last: Binding<[MorphSlot: CGRect]>? = nil, animated: Bool = true) -> some View {
         onGeometryChange(for: CGRect.self) { $0.frame(in: .named("morph")) } action: { f in
             guard frames.wrappedValue[slot] != f else { return }
-            if frames.wrappedValue[slot] != nil || last?.wrappedValue[slot] != nil {
+            if animated, frames.wrappedValue[slot] != nil || last?.wrappedValue[slot] != nil {
                 withAnimation(.snappy(duration: 0.22)) { frames.wrappedValue[slot] = f }
             } else {
-                frames.wrappedValue[slot] = f
+                var tr = Transaction(); tr.disablesAnimations = true
+                withTransaction(tr) { frames.wrappedValue[slot] = f }
             }
             last?.wrappedValue[slot] = f
         }
