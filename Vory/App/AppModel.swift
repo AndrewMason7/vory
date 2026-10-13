@@ -279,6 +279,8 @@ final class AppModel {
     /// re-laid out the chat under the finger (the thread bounced, Matt, 2026-10-11). The bar's
     /// slide still starts with the path; the room it takes waits for the chat to be gone.
     var chatsOnScreen = 0
+    /// Of those, group chats: they keep their own header, and the morph bar steps aside.
+    var roomsOnScreen = 0
     /// Whether the pages make room for the bar along their edge right now.
     var tabBarReserved: Bool { !tabBarHidden && !(selectedTab == .chats && !wideLayout && chatsOnScreen > 0) }
 

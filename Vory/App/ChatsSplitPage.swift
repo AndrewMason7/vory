@@ -57,7 +57,9 @@ struct ChatsSplitPage: View {
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
                     }
                     .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).countsChatOnScreen() }
-                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen() }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true) }
+                    // The bar follows a chat's push and pop in this stack (`MorphState.follow`).
+                    .chatsStackProbe()
             }
         }
     }
@@ -80,18 +82,38 @@ struct NoChatPlaceholder: View {
 }
 
 /// Counts a chat or room pushed on the Chats tab's own stack while it is on screen
-/// (`AppModel.chatsOnScreen`): the bar's reserved size comes back only once it has gone.
+/// (`AppModel.chatsOnScreen`): the bar's reserved size comes back only once it has gone. A group
+/// chat is counted apart too (`roomsOnScreen`): it keeps its own header, and the morph bar steps
+/// aside from it.
 struct CountsChatOnScreen: ViewModifier {
     @Environment(AppModel.self) private var model
+    var room = false
     @State private var counted = false
 
     func body(content: Content) -> some View {
         content
-            .onAppear { guard !counted else { return }; counted = true; model.chatsOnScreen += 1 }
-            .onDisappear { guard counted else { return }; counted = false; model.chatsOnScreen = max(0, model.chatsOnScreen - 1) }
+            .onAppear {
+                guard !counted else { return }
+                counted = true; model.chatsOnScreen += 1
+                if room { model.roomsOnScreen += 1 }
+            }
+            .onDisappear {
+                guard counted else { return }
+                counted = false; model.chatsOnScreen = max(0, model.chatsOnScreen - 1)
+                if room { model.roomsOnScreen = max(0, model.roomsOnScreen - 1) }
+            }
     }
 }
 
 extension View {
-    func countsChatOnScreen() -> some View { modifier(CountsChatOnScreen()) }
+    func countsChatOnScreen(room: Bool = false) -> some View { modifier(CountsChatOnScreen(room: room)) }
+
+    /// Hands the Chats stack to the morph bar (iPhone only; the Mac has no bar).
+    @ViewBuilder func chatsStackProbe() -> some View {
+        #if os(iOS)
+        background(ChatsStackProbe().frame(width: 0, height: 0).accessibilityHidden(true))
+        #else
+        self
+        #endif
+    }
 }

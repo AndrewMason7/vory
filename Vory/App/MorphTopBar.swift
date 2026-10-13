@@ -44,10 +44,22 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// the bar is up: a tab switch, or the bar's return after the window widened and narrowed
     /// again, finds the right state at once (`showTab`).
     @ObservationIgnored var pushedTabs: Set<AppModel.AppTab> = []
+    /// A chat's page is up on Chats without its chat yet (it shows "Opening…"): the bar is away
+    /// as over a page pushed on another tab, its title capsule the Back, until the chat comes and
+    /// its controls form. Stepped aside there, the bar left the page with no Back and showed
+    /// empty glass as the page came in (the frame check's BLANK and LONE runs at a cold push).
+    var opening = false
     /// Away from a root page: a chat or a pushed page is up (or on its way).
-    var away: Bool { chat != nil || pushedTab != nil }
-    /// 0 = the chat's (or the pushed page's) controls, 1 = the root page's.
+    var away: Bool { chat != nil || pushedTab != nil || opening }
+    /// 0 = the chat's (or the pushed page's) controls, 1 = the root page's. The value the bar
+    /// is heading for: the bar draws the animated one (`MorphProgress`), so a transition that
+    /// starts mid-flight carries on from where the bar is, with its speed.
     var t: CGFloat = 1
+    /// Bumped by every transition that starts: a transition settles (`settleOnRoot`, a pop's or
+    /// a release's end) only while it is still the latest. Settled on a timer, an earlier pop's
+    /// settle landed inside the next push and took its chat away (Matt on 1.5 (21): in and out
+    /// of a chat quickly left the Back circle alone, or no controls at all).
+    @ObservationIgnored private var generation = 0
     /// The finger has the pop: `t` follows it and nothing is tappable.
     var scrubbing = false
     /// A swipe back to a tab's root page is under way (its root probe saw it start). Only that
@@ -65,20 +77,57 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// those pages again, as in (18) and (19).
     static let ownBarOff = ProcessInfo.processInfo.arguments.contains("-vory-ownbar-off")
 
+    /// The Chats stack, handed over by its root (`ChatsStackProbe`): a chat's push and pop there
+    /// are followed frame by frame, the page's own slide being the bar's progress. Timed on a
+    /// spring of its own, the bar ran apart from the page whenever UIKit turned a transition
+    /// around (a quick in and out): both sets half drawn over each other (Matt on 1.5 (21)).
+    @ObservationIgnored weak var chatsNav: UINavigationController?
+    /// The bar's progress as the page's slide puts it, while a push or a pop is followed. The bar
+    /// draws this; `t` keeps where it is heading, which decides the taps.
+    var followed: CGFloat?
+    @ObservationIgnored private var followLink: CADisplayLink?
+    @ObservationIgnored private let followTicker = FollowTicker()
+    /// The transition has been seen moving; frames without one before it count down a grace.
+    @ObservationIgnored private var followSeen = false
+    @ObservationIgnored private var followIdle = 0
+    /// `-vory-morph-timed`: the Chats morph on its own spring again, as in 1.5 (22), to compare.
+    static let follows = !ProcessInfo.processInfo.arguments.contains("-vory-morph-timed")
+
     func push(_ c: ChatSession) {
-        chat = c; pushedTab = nil
-        // The chat's end state is laid out and measured in this update; the morph starts on the
-        // next turn, toward frames that are there. Started together, the capsules had nothing to
-        // go to (the first chat after launch) or the last chat's pill, and jumped at the end
-        // (Matt on 1.5 (17): "the animation doesn't do anything when going into the chat but it
-        // goes well when leaving").
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.chat === c, !self.scrubbing, self.t > 0 else { return }
-            self.toAway()
+        generation += 1
+        // The chat came to a page already in (it was opening): its controls form from the Back.
+        if opening, followed == nil, t <= 0 {
+            withAnimation(.snappy(duration: 0.22)) { chat = c; opening = false; pushedTab = nil }
+            return
         }
+        chat = c; pushedTab = nil; opening = false
+        // With the page, in the same update. The bar draws every frame from its progress, so the
+        // chat's end frames, measured a layout later, are taken up on the way (the first frames
+        // are still at the list's). Started a turn later, the list's own search row went with the
+        // page while the bar stood still (Matt on 1.5 (21): a partial bar at each push).
+        // Heading for the chat already (a push followed since the page opened): nothing to start.
+        guard !scrubbing, t > 0 else { return }
+        if !follow(to: 0) { toAway() }
+    }
+    /// A chat's page is coming in on Chats before its chat is there: the bar goes with it.
+    func open() {
+        guard chat == nil, !scrubbing else { return }
+        generation += 1
+        opening = true; pushedTab = nil
+        guard t > 0 else { return }
+        if !follow(to: 0) { toAway() }
+    }
+    /// The page that came in is a group chat, which keeps its own header: the bar steps aside
+    /// (and is at the list's state when it comes back).
+    func roomShown() {
+        guard chat == nil, opening else { return }
+        endFollow()
+        var tr = Transaction(); tr.disablesAnimations = true
+        withTransaction(tr) { opening = false; t = 1 }
     }
     func pushPage(_ tab: AppModel.AppTab) {
         guard chat == nil else { return }
+        generation += 1
         // The page and its morph in one transaction: set apart, the bar went over to the pushed
         // page unanimated and jumped to the Back circle in one frame while the page slid (in (17)
         // too), where the pop morphs back over its slide (Matt on 18: "the reverse of going out").
@@ -90,14 +139,17 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
         // Quick, as the system's own glass morphs are (Matt, 2026-10-12: "too slow").
         else { withAnimation(.spring(duration: 0.32, bounce: 0)) { t = 0 } }
     }
-    private func settleOnRoot() { chat = nil; pushedTab = nil }
+    private func settleOnRoot() { chat = nil; pushedTab = nil; opening = false }
     /// The tab in front changed, or the bar came back: away over that tab's pushed page, at its
     /// root otherwise. With the capsules' own tab move, not the push's morph: a page pushed on
     /// Settings left its Back standing over Chats. A chat belongs to Chats (`open`, the chat up
     /// there): on another tab the bar is that tab's, even while a chat is still closing (a chat
     /// composed from a pushed page closes back onto it), and back on Chats the chat's returns.
-    func showTab(_ tab: AppModel.AppTab, chat open: ChatSession?) {
+    func showTab(_ tab: AppModel.AppTab, chat open: ChatSession?, opening opens: Bool = false) {
         guard !scrubbing else { return }
+        endFollow()
+        generation += 1
+        let g = generation
         if let open {
             // The tab move (0.22 s) like any other tab switch, not the push's 0.32 s morph; on the
             // next turn, so a chat set just now has its end state measured first (push's reason).
@@ -106,21 +158,25 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
             guard t != 0 else { return }
             Perf.stamp("bar: Chats with a chat up, the tab move")
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.chat === open, !self.scrubbing, self.t != 0 else { return }
+                guard let self, self.generation == g, self.chat === open, !self.scrubbing, self.t != 0 else { return }
                 withAnimation(.snappy(duration: 0.22)) { self.t = 0 }
             }
             return
         }
         let pushed = pushedTabs.contains(tab)
-        guard chat != nil || pushedTab != (pushed ? tab : nil) || t != (pushed ? 0 : 1) else { return }
+        // Chats with a chat's page up whose chat is not there yet: away, with its Back.
+        let awayHere = pushed || opens
+        guard chat != nil || pushedTab != (pushed ? tab : nil) || opening != opens || t != (awayHere ? 0 : 1) else { return }
         withAnimation(.snappy(duration: 0.22)) {
             chat = nil
+            opening = opens
             pushedTab = pushed ? tab : nil
-            t = pushed ? 0 : 1
+            t = awayHere ? 0 : 1
         }
     }
     func scrub(_ fraction: CGFloat) {
-        guard away, chat != nil || rootPopInFlight else { return }
+        guard away, chat != nil || opening || rootPopInFlight else { return }
+        if !scrubbing { generation += 1; endFollow() }
         scrubbing = true
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = fraction >= 0.5 ? 1 : 0 } }
         else { var tr = Transaction(); tr.disablesAnimations = true; withTransaction(tr) { t = fraction } }
@@ -128,33 +184,159 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// The swipe let go: finish to the list (fraction 1) or back to the chat (0) over what is
     /// left of the transition.
     func release(_ fraction: CGFloat, over duration: Double) {
-        guard away, chat != nil || rootPopInFlight else { return }
+        guard away, chat != nil || opening || rootPopInFlight else { return }
         scrubbing = false
         // With the page: the bar finishing ahead of the slide made the list's controls land
         // before the list (Matt, 2026-10-12: "the nav bar reappears weirdly").
         let d = min(0.4, max(0.18, duration))
         let end: CGFloat = fraction >= 1 ? 1 : 0
-        withAnimation(.spring(duration: d, bounce: 0)) { t = end }
+        generation += 1
+        let g = generation
         // Settled for certain once the transition is over: a trailing event from the second
         // recognizer (the edge gesture and the full-screen pan both drive the pop) could leave
         // `t` or `scrubbing` part-way, which switched the bar's hit testing off (Back after a
-        // cancelled swipe did nothing on the phone).
-        DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) {
+        // cancelled swipe did nothing on the phone). Only while this is still the latest
+        // transition: a tab switch (showTab) or a new push has put the bar where it belongs.
+        withAnimation(.spring(duration: d, bounce: 0), completionCriteria: .logicallyComplete) { t = end } completion: { [weak self] in
+            guard let self, self.generation == g else { return }
             self.scrubbing = false
-            // Back to the chat or the page only while one is still up: a tab switch in the
-            // meantime (showTab) has already put the bar where it belongs.
-            if end >= 1 { if self.t >= 1 { self.settleOnRoot() } } else if self.away { self.t = 0 }
+            if end >= 1 { self.t = 1; self.settleOnRoot() } else if self.away { self.t = 0 }
         }
     }
     /// What the bar is doing, for a diagnostic.
-    var debugLine: String { "chat=\(chat?.storedID ?? "nil") pushed=\(pushedTab?.rawValue ?? "nil") t=\(t) scrubbing=\(scrubbing)" }
+    var debugLine: String { "chat=\(chat?.storedID ?? "nil") pushed=\(pushedTab?.rawValue ?? "nil") opening=\(opening) t=\(t) followed=\(followed.map { "\($0)" } ?? "nil") scrubbing=\(scrubbing)" }
     /// A pop that was not a swipe (the Back button): the timed morph.
     func pop() {
-        guard away, !scrubbing else { return }
-        let d = 0.32
-        withAnimation(.spring(duration: d, bounce: 0)) { t = 1 }
-        DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.05) { if self.t >= 1 { self.settleOnRoot() } }
+        // Once per pop: a page pushed on another tab reported its pop twice (the transition's
+        // start and its completion), each starting the morph again.
+        guard away, !scrubbing, t < 1 else { return }
+        generation += 1
+        if follow(to: 1) { return }
+        timedPop()
     }
+    private func timedPop() {
+        let g = generation
+        withAnimation(.spring(duration: 0.32, bounce: 0), completionCriteria: .logicallyComplete) { t = 1 } completion: { [weak self] in
+            guard let self, self.generation == g, self.t >= 1 else { return }
+            self.settleOnRoot()
+        }
+    }
+
+    // MARK: Following the Chats stack
+
+    /// Follows the Chats stack's push or pop to `end`, if there is one to follow; false otherwise
+    /// (a page pushed on another tab, Reduce Motion, no stack), and the bar times its own morph.
+    /// The bar heads for `end` at once (taps go to the set that is coming, and a tap can turn it
+    /// around); what it draws is the page's place, from where it stands now.
+    private func follow(to end: CGFloat) -> Bool {
+        guard Self.follows, !UIAccessibility.isReduceMotionEnabled, chat != nil || opening,
+              let nav = chatsNav, nav.view.window != nil else { return false }
+        var tr = Transaction(); tr.disablesAnimations = true
+        withTransaction(tr) {
+            if followed == nil { followed = t }
+            t = end
+        }
+        followSeen = false; followIdle = 0
+        if followLink == nil {
+            followTicker.tick = { [weak self] in self?.followTick() }
+            let l = CADisplayLink(target: followTicker, selector: #selector(FollowTicker.fire))
+            l.add(to: .main, forMode: .common)
+            followLink = l
+        }
+        return true
+    }
+
+    /// Each frame of a followed transition: the bar is where the chat's page is. Once the stack
+    /// is still, the bar settles on it; a transition that never came (a path set without one)
+    /// gets the timed morph from where the bar stands.
+    private func followTick() {
+        guard let nav = chatsNav, nav.view.window != nil, !scrubbing, chat != nil || opening else { endFollow(); return }
+        if let c = nav.transitionCoordinator {
+            // A finger has it: FullScreenPop scrubs.
+            guard !c.isInteractive else { endFollow(); return }
+            let root = nav.viewControllers.first
+            let to = c.viewController(forKey: .to), from = c.viewController(forKey: .from)
+            // The chat's page: coming in on a push, going out on a pop. Not before it is laid out
+            // in its place (its first frame reads half a width off to the left).
+            let rtl = nav.view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            guard let page = to !== root ? to : from, page !== root, abs(page.view.frame.minX) < 1,
+                  let x = Self.slide(of: page.view, in: nav.view).map({ rtl ? -$0 : $0 }), x > -0.01 else { return }
+            followSeen = true; followIdle = 0
+            var tr = Transaction(); tr.disablesAnimations = true
+            withTransaction(tr) { followed = min(1, max(0, x)) }
+            return
+        }
+        followIdle += 1
+        // The push or the pop starts on a turn after the bar heard of it: a few frames' grace.
+        guard followSeen || followIdle > 3 else { return }
+        let end: CGFloat = nav.viewControllers.count > 1 ? 0 : 1
+        let seen = followSeen
+        followLink?.invalidate(); followLink = nil
+        var tr = Transaction(); tr.disablesAnimations = true
+        if seen {
+            withTransaction(tr) {
+                followed = nil
+                t = end
+                if end >= 1 { settleOnRoot() }
+            }
+        } else {
+            withTransaction(tr) { t = followed ?? t; followed = nil }
+            if end >= 1 { timedPop() } else { toAway() }
+        }
+    }
+
+    /// Stops following and leaves the bar where it is drawn (`t` takes the place it was at).
+    private func endFollow() {
+        followLink?.invalidate(); followLink = nil
+        guard let f = followed else { return }
+        var tr = Transaction(); tr.disablesAnimations = true
+        withTransaction(tr) { t = f; followed = nil }
+    }
+
+    /// Where a page of the stack is on screen, as a fraction of the stack's width (0 in place, 1
+    /// off the trailing edge), read through the presentation layers: the transition slides a
+    /// wrapper around the page, whose own frame stays at 0.
+    static func slide(of v: UIView, in root: UIView) -> CGFloat? {
+        var p = CGPoint.zero
+        var layer: CALayer? = v.layer
+        while let l = layer, l !== root.layer {
+            let shown = l.presentation() ?? l
+            p = shown.convert(p, to: shown.superlayer)
+            layer = l.superlayer
+        }
+        guard layer != nil else { return nil }
+        return p.x / max(1, root.bounds.width)
+    }
+}
+
+/// The display link's target (it must be an object of Objective-C's).
+@MainActor private final class FollowTicker: NSObject {
+    var tick: () -> Void = {}
+    @objc func fire() { tick() }
+}
+
+/// Under the Chats list in its own stack (a phone, the closed Duo): hands the stack to the bar,
+/// which follows a chat's push and pop in it frame by frame (`MorphState.follow`).
+struct ChatsStackProbe: UIViewRepresentable {
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            var r: UIResponder? = self
+            while let n = r {
+                if let vc = n as? UIViewController { if let nav = vc.navigationController { MorphState.shared.chatsNav = nav }; return }
+                r = n.next
+            }
+        }
+    }
+    func makeUIView(context: Context) -> Probe {
+        let v = Probe()
+        v.isUserInteractionEnabled = false
+        v.isAccessibilityElement = false
+        v.accessibilityElementsHidden = true
+        return v
+    }
+    func updateUIView(_ v: Probe, context: Context) {}
 }
 
 struct MorphTopBar: View {
@@ -188,12 +370,26 @@ struct MorphTopBar: View {
     /// Where a slot last was, so a page without it can fade its capsule out in place.
     @State private var lastListFrames: [MorphSlot: CGRect] = [:]
 
-    private var t: CGFloat { state.away ? state.t : 1 }
+    /// The bar's progress as drawn this frame (`MorphProgress`): frames, opacities and which
+    /// set is mounted follow it, so a push or a pop that starts mid-flight carries on from the
+    /// frame on screen. Read from the state's target, every frame started from an end state:
+    /// the outgoing set was taken down and the incoming one put up at the start, and a quick
+    /// in and out showed both sets half drawn, empty capsules or no controls (Matt on 1.5 (21)).
+    @Environment(\.morphProgress) private var drawn
+    private var t: CGFloat { state.away ? drawn : 1 }
+    /// Where the bar is heading: which set takes taps and which slots are there follow it, so a
+    /// tap mid-flight lands on the set that is coming (and can turn the bar around).
+    private var target: CGFloat { state.away ? state.t : 1 }
     /// The away state's frames: the chat's, or a pushed page's.
     private var awayFrames: [MorphSlot: CGRect] { state.chat != nil ? chatFrames : pageFrames }
-    private var settled: Bool { t <= 0 || t >= 1 }
+    private var settled: Bool { target <= 0 || target >= 1 }
+    /// Where the outgoing set has faded out (`1 - shown * 2.4`) and the incoming one starts: one
+    /// control at a time in each capsule, the next one coming in as the last is gone. A gap
+    /// between them (the list's set came in from the half) drew empty glass at every switch.
+    static let handoff: CGFloat = 1 / 2.4
     /// Reduce Motion: the two sets cross-fade at the halfway point instead of interpolating.
     private var shown: CGFloat { reduceMotion ? (t < 0.5 ? 0 : 1) : t }
+    private var shownTarget: CGFloat { reduceMotion ? (target < 0.5 ? 0 : 1) : target }
 
     var body: some View {
         let _ = Perf.tick("morphbar-body")
@@ -244,11 +440,19 @@ struct MorphTopBar: View {
         .accessibilityIdentifier(state.chat != nil ? "chat.header" : "morph.bar")
         .onChange(of: model.chatsPathOpen) { _, open in
             if open, let c = model.visibleChat { state.push(c) }
-            else if !open, state.chat != nil, !state.scrubbing, state.t < 1 { state.pop() }
+            // A chat whose page comes in before its chat (and, for a frame, a group chat, which
+            // then steps the bar aside: `roomShown`).
+            else if open, model.roomsOnScreen == 0 { state.open() }
+            // Also before the push's morph has begun: the pop turns it back (it starts on the
+            // next turn), where waiting for it left the chat's controls over the list.
+            else if !open, state.chat != nil || state.opening, !state.scrubbing { state.pop() }
         }
+        .onChange(of: model.roomsOnScreen) { _, n in if n > 0, model.chatsPathOpen { state.roomShown() } }
         // Initial too: the bar is made afresh when a wide window narrows again.
         .onChange(of: model.selectedTab, initial: true) { _, tab in
-            state.showTab(tab, chat: tab == .chats && model.chatsPathOpen ? model.visibleChat : nil)
+            let chats = tab == .chats && model.chatsPathOpen
+            state.showTab(tab, chat: chats ? model.visibleChat : nil,
+                          opening: chats && model.visibleChat == nil && model.roomsOnScreen == 0)
         }
         .onChange(of: model.visibleChat?.storedID) { _, id in
             // The chat lands a beat after the path opens on a fresh push.
@@ -268,9 +472,10 @@ struct MorphTopBar: View {
         // honoured, so there is no capsule at all there. A page pushed on another tab is an
         // "away" state like a chat: the title capsule becomes its Back and the others go.
         // So does it over a page that keeps its own bar (a form with its Cancel and Save).
-        let pushedAway = (model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil) || state.ownBarTabs.contains(model.selectedTab)
-        let awayHas = state.chat != nil ? true : (state.pushedTab != nil ? slot == .mid : pageHas)
-        let present = !pushedAway && (shown < 0.5 ? awayHas : pageHas)
+        // A chat's page whose chat is not there yet is away, with its Back (`opening`).
+        let pushedAway = (model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil && !state.opening) || state.ownBarTabs.contains(model.selectedTab)
+        let awayHas = state.chat != nil ? true : (state.pushedTab != nil || state.opening ? slot == .mid : pageHas)
+        let present = !pushedAway && (shownTarget < 0.5 ? awayHas : pageHas)
         // Going away (a page pushed on another tab), a slot the away state does not have goes at
         // once, at the push's start: its glass cannot fade inside the container, and shrinking
         // it with the morph left the Bots + standing beside the Back as it formed (Matt on 1.5
@@ -291,12 +496,20 @@ struct MorphTopBar: View {
                 // Settled, only the shown set is mounted: a menu's label in the glass kept a
                 // ghost of the other set at opacity 0 (the list's bot chip behind Back, the
                 // list's icons behind …; Matt, 2026-10-12).
-                if shown < 0.98 {
-                    if let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
-                    else if let tab = state.pushedTab, slot == .mid { pageBack(tab).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shown < 0.5) }
+                // These are functions of the frame drawn (`shown`), not of where the bar is
+                // heading: from the end values a push or a pop faded both sets across the whole
+                // morph, two half-drawn sets over each other, and a quick in and out restarted
+                // them from nothing (Matt on 1.5 (21)).
+                // Both sets are up for the whole flight, put up and taken down only where their
+                // opacity is 0 and with no transition of their own (a fade in on top of the one
+                // here would lag it).
+                if shown < 1 {
+                    if let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
+                    else if let tab = state.pushedTab ?? (state.opening ? .chats : nil), slot == .mid { pageBack(tab).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                 }
-                // Keyed by tab, so a tab switch cross-fades one page's control into the next's.
-                if shown > 0.02 { listContent(slot).id(model.selectedTab).transition(.opacity).opacity(Double(max(0, (shown - 0.5) * 2.4))).allowsHitTesting(shown >= 0.5 && pageHas) }
+                // Keyed by tab, so a tab switch cross-fades one page's control into the next's (at
+                // a root page only; going away or back the opacity here does it).
+                if shown > 0 { listContent(slot).id(model.selectedTab).transition(state.away ? .identity : .opacity).opacity(Double(max(0, (shown - Self.handoff) * 2.4))).allowsHitTesting(shownTarget >= 0.5 && pageHas) }
             }
             // An absent slot shrinks to nothing where it was: a view's opacity does not fade
             // glass (the + panel taught that), so the capsule also drops its glass there, in
@@ -554,14 +767,19 @@ struct MorphTopBar: View {
     }
 
     /// The pushed page's Back, live: pops its stack one page (the probe under the root does it).
+    /// On Chats, a chat's page still opening: its path goes back to the list.
     private func pageBack(_ tab: AppModel.AppTab) -> some View {
-        Button { model.popOne[tab, default: 0] += 1 } label: {
+        let back = {
+            if tab == .chats { if !model.chatPath.isEmpty { model.chatPath.removeLast() } }
+            else { model.popOne[tab, default: 0] += 1 }
+        }
+        return Button { back() } label: {
             Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
         }
         .buttonStyle(MorphPressStyle(kind: .circle))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Back").accessibilityIdentifier("page.back").accessibilityAddTraits(.isButton)
-        .accessibilityAction { model.popOne[tab, default: 0] += 1 }
+        .accessibilityLabel("Back").accessibilityIdentifier(tab == .chats ? "chat.back" : "page.back").accessibilityAddTraits(.isButton)
+        .accessibilityAction { back() }
         .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
     }
 
@@ -605,6 +823,30 @@ struct MorphTopBar: View {
         .font(.body.weight(.medium)).foregroundStyle(.tint)
         .padding(.horizontal, 16).frame(height: 44)
     }
+}
+
+/// The bar with its progress drawn: the state's `t`, animated here and handed down each frame
+/// (`morphProgress`), so the bar's body draws the frame between, not only the ends. While a
+/// chat's push or pop is followed, the page's place instead, frame by frame.
+struct MorphBarHost: View {
+    var body: some View {
+        let s = MorphState.shared
+        MorphTopBar().modifier(MorphProgress(t: s.away ? (s.followed ?? s.t) : 1))
+    }
+}
+
+private struct MorphProgress: ViewModifier, Animatable {
+    var t: CGFloat
+    var animatableData: CGFloat {
+        get { t }
+        set { t = newValue }
+    }
+    func body(content: Content) -> some View { content.environment(\.morphProgress, t) }
+}
+
+extension EnvironmentValues {
+    /// The top bar's morph as drawn this frame (1 at a root page, 0 over a chat or pushed page).
+    @Entry var morphProgress: CGFloat = 1
 }
 
 /// A seen capsule's frame, glass and place. The title's capsule widens here for the pull's wheel

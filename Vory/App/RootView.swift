@@ -248,7 +248,7 @@ struct MainTabView: View {
                 }
             }
             // The morph prototype's top controls, over every page and outside the stacks.
-            .overlay(alignment: .top) { if MorphTopBar.active(model) { MorphTopBar() } }
+            .overlay(alignment: .top) { if MorphTopBar.active(model) { MorphBarHost() } }
             // Reserves the bar's height (or width) so lists end before it; the bar itself is
             // hidden (slid off its edge) inside a chat and the setup wizard, and the pages then
             // use the full height. The bar is never removed from the tree: an insert/remove
