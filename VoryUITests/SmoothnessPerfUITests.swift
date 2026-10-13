@@ -326,12 +326,19 @@ final class SmoothnessPerfUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
         pause(1.5); shot("settings-back")
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back")
-        // A cancelled swipe: the pushed page stays, the capsule stays away.
+        // A cancelled swipe: the pushed page stays, where it was, and the capsule stays away.
         openRow()
+        // The pushed page's own header (the first row is Gateways): it must not move.
+        let header = app.staticTexts["Gateways"].firstMatch
+        let headerTop = header.waitForExistence(timeout: 3) ? header.frame.minY : nil
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
         pause(1.5); shot("settings-cancelled")
         XCTAssertTrue(any("page.back").firstMatch.exists, "the cancelled swipe lost the pushed page")
         XCTAssertFalse(title.exists && title.isHittable, "the Settings title capsule came back over the pushed page after a cancelled swipe")
+        if let headerTop {
+            print("CANCEL-HEADER before \(headerTop) after \(header.frame.minY)")
+            XCTAssertEqual(header.frame.minY, headerTop, accuracy: 1, "the pushed page's content moved after a cancelled swipe (its bar collapsed?)")
+        }
         any("page.back").firstMatch.tap(); pause(1.5)
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "the Settings title capsule is not back after Back")
         // A fast flick from the edge (to 0.9, as testSwipeBackKinds; a shorter one never popped
