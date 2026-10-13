@@ -99,6 +99,9 @@ struct TranscriptView: View {
     /// When the keyboard last moved: its own spring carries a stuck thread to the end, so a
     /// small overshoot is not landed against it.
     @State private var keyboardMovedAt = Date.distantPast
+    /// Until when the eased landing of an overshoot is under way: no landing in the same update
+    /// meets it (the two fought, a step at each frame of the ease).
+    @State private var overscrollEaseUntil = Date.distantPast
     /// How much of the scroll view the keyboard covers (beyond the home-indicator safe area). The
     /// thread moves up with the keyboard and, when it was at the bottom, stays there.
     @State private var keyboardInset: CGFloat = 0
@@ -544,7 +547,10 @@ extension TranscriptView {
     private func mayFollow() -> Bool {
         guard metrics.stickToBottom, !metrics.userScrolling else { return false }
         let reach = max(900, metrics.containerHeight * 1.5)
-        if metrics.distanceFromBottom > reach { metrics.stickToBottom = false; return false }
+        // Not while the chat's history is coming in: the rows arriving under a thread that was
+        // still at the top of the first ones read as a reader up the thread, with no finger on
+        // it, and the end it was locked to was lost (1.5 (23), the open's blank).
+        if metrics.distanceFromBottom > reach { if !chat.isResuming { metrics.stickToBottom = false }; return false }
         return true
     }
 
@@ -553,7 +559,10 @@ extension TranscriptView {
     /// The keyboard moves on UIKit's own spring; this spring tracks it closely, so the thread and
     /// the composer arrive together instead of the composer overlapping.
     private func keyboardMoved(to inset: CGFloat) {
-        keyboardMovedAt = Date()
+        // Only a move: the window's geometry reports the inset as a chat opens too, with no
+        // keyboard, and stamped as one it held off the open's own landing (1.5 (23): a chat at
+        // rest went a screen past its end, blank, a moment after it opened).
+        if inset != keyboardInset { keyboardMovedAt = Date() }
         withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
             keyboardInset = inset
             if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
@@ -598,12 +607,17 @@ extension TranscriptView {
     }
 
     /// The thread came to rest past its end with no finger on it (not tracking, dragging or
-    /// decelerating). A small overshoot (rows that landed shorter, a status row gone) is landed
-    /// in the same update, so the last row stays where it was against the dock with no frame of
-    /// gap; a large one (the lazy stack's estimate) after a moment, once its rows have laid out,
-    /// eased; either waits while the keyboard's spring is carrying the thread.
+    /// decelerating). Locked to the end, or by a small overshoot (rows that landed shorter, a
+    /// status row gone), it is landed in the same update, so the last row stays where it was
+    /// against the dock with no frame of gap or of blank; a large one with the thread not
+    /// following after a moment, once its rows have laid out, eased; either waits while the
+    /// keyboard's spring is carrying the thread, and none meets an eased landing under way.
     private func landPastTheEnd(_ distance: CGFloat) {
-        guard distance >= -60, Date().timeIntervalSince(keyboardMovedAt) > 0.6 else { scheduleOverscrollFix(); return }
+        guard Date() > overscrollEaseUntil else { return }
+        // Locked, any size, once there is more thread than screen (a chat still empty or shorter
+        // than the screen reads as past its end until its rows come, and is no landing).
+        let locked = metrics.stickToBottom && metrics.contentHeight > metrics.containerHeight
+        guard distance >= -60 || locked, Date().timeIntervalSince(keyboardMovedAt) > 0.6 else { scheduleOverscrollFix(); return }
         Perf.tick("overscrollLand")
         var still = Transaction()
         still.disablesAnimations = true
@@ -626,6 +640,7 @@ extension TranscriptView {
             // than a screen past (a thread showing nothing) at once, as an animated scroll through
             // rows still being laid out glitched them (`jumpToBottom`).
             if -metrics.distanceFromBottom < metrics.containerHeight {
+                overscrollEaseUntil = Date().addingTimeInterval(0.25)
                 withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) }
             } else {
                 scrollPosition.scrollTo(edge: .bottom)
