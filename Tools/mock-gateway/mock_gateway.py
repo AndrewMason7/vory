@@ -739,6 +739,42 @@ RESTART: dict = {}
 PROFILE_RENAMES: list[dict] = []
 
 
+def create_profile(payload: dict) -> tuple[int, object]:
+    """POST /api/profiles: a new bot, named as Vory cleans it (#139's checks: create, edit,
+    rename and delete one bot from the Bots page)."""
+    name = str(payload.get("name") or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
+        return 400, {"detail": f"Invalid profile name {name!r}"}
+    if any(r["name"] == name for r in PROFILE_ROWS):
+        return 400, {"detail": f"Profile '{name}' already exists"}
+    PROFILE_ROWS.append({"name": name, "path": f"/home/hermes/.hermes-{name}", "is_default": False, "description": "", "skill_count": 0})
+    PROFILES[:] = [r["name"] for r in PROFILE_ROWS]
+    return 200, {"ok": True, "name": name}
+
+
+def delete_profile(name: str) -> tuple[int, object]:
+    """DELETE /api/profiles/{name}: the folder and its chats go; the default bot stays."""
+    row = next((r for r in PROFILE_ROWS if r["name"] == name), None)
+    if row is None:
+        return 404, {"detail": f"Profile '{name}' does not exist"}
+    if row.get("is_default"):
+        return 400, {"detail": "Cannot delete the default profile"}
+    PROFILE_ROWS.remove(row)
+    PROFILES[:] = [r["name"] for r in PROFILE_ROWS]
+    STORED_SESSIONS[:] = [s for s in STORED_SESSIONS if s.get("profile") != name]
+    return 200, {"ok": True}
+
+
+def put_profile(name: str, field: str, payload: dict) -> tuple[int, object]:
+    """PUT /api/profiles/{name}/description or /model: Edit Bot's Save."""
+    row = next((r for r in PROFILE_ROWS if r["name"] == name), None)
+    if row is None:
+        return 404, {"detail": f"Profile '{name}' does not exist"}
+    if field == "description":
+        row["description"] = str(payload.get("description") or "")
+    return 200, {"ok": True}
+
+
 def rename_profile(name: str, payload: dict) -> tuple[int, object]:
     """PATCH /api/profiles/{name}: what hermes_cli.profiles.rename_profile answers. The folder
     moves, the stored chats move with it, and the bot's sockets drop as its gateway stops and
@@ -1414,6 +1450,12 @@ def _process_request(connection, request):
         return Response(405, "Method Not Allowed", Headers([("Allow", "PATCH"), ("Content-Length", "0")]), body)
     elif method == "PATCH" and re.fullmatch(r"/api/profiles/[^/]+", base):
         result = rename_profile(unquote(base.split("/")[3]), body_json if isinstance(body_json, dict) else {})
+    elif method == "POST" and base == "/api/profiles":
+        result = create_profile(body_json if isinstance(body_json, dict) else {})
+    elif method == "DELETE" and re.fullmatch(r"/api/profiles/[^/]+", base):
+        result = delete_profile(unquote(base.split("/")[3]))
+    elif method == "PUT" and re.fullmatch(r"/api/profiles/[^/]+/(description|model)", base):
+        result = put_profile(unquote(base.split("/")[3]), base.split("/")[4], body_json if isinstance(body_json, dict) else {})
     elif method == "PATCH" and base.startswith("/api/sessions/"):
         # Title rename from the chat info sheet; the body is not readable here (websockets only
         # hands us headers), so echo a plausible title so the sheet's "saved" path is exercised.
