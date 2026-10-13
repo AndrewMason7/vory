@@ -18,6 +18,9 @@ struct BotsView: View {
     @State private var deleting: ProfileInfo?
     /// Rename bot… is offered only where the gateway has the route (#315).
     @State private var renameSupported = false
+    /// The … on each card (#139, judgement call #9). `defaults write <app id> bots.cardMenu.off
+    /// -bool YES` takes it away again: the menu is then behind press and hold only, as in 19.
+    @AppStorage("bots.cardMenu.off") private var cardMenuOff = false
     @State private var path = NavigationPath()
 
     @Environment(\.wideLayout) private var wide
@@ -92,6 +95,7 @@ struct BotsView: View {
                     .buttonStyle(.plain)
                     // Press and hold (a right-click on the Mac): what you would otherwise dig for.
                     .contextMenu { botActions(p, rt) }
+                    .overlay(alignment: .topTrailing) { if !cardMenuOff { cardMenu(p, rt) } }
                 }
             }
             .padding(.horizontal, 16).padding(.top, 18)
@@ -140,6 +144,26 @@ struct BotsView: View {
             Divider()
             Button(role: .destructive) { deleting = p } label: { Label("Delete bot…", systemImage: "trash") }
         }
+    }
+
+    /// The same menu from a … in the card's top corner, beside the bot's head, for whoever never
+    /// presses and holds. A plain symbol, not glass: one more glass view per card in a scrolling
+    /// grid costs frames. Its 44 pt target reaches 8 pt past the card's edge so it stays clear of
+    /// the 78 pt face (whose own tap would take the click) on a card as narrow as 150 pt.
+    private func cardMenu(_ p: ProfileInfo, _ rt: GatewayRuntime) -> some View {
+        Menu { botActions(p, rt) } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .offset(x: 8, y: -4)
+        .accessibilityLabel("Actions for \(p.label)")
+        .accessibilityIdentifier("bots.actions.\(p.name)")
     }
 
     private func delete(_ p: ProfileInfo) async {
