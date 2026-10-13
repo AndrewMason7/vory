@@ -1176,8 +1176,7 @@ struct TranscriptRow: View, Equatable {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
                             .foregroundStyle(.white)
-                            .background(AppTheme.current, in: MessageBubbleShape(side: .trailing, tailed: botShown && bubbleStyle == "tailed"))
-                            .contextMenu {
+                            .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed") {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                                 Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
@@ -1237,13 +1236,9 @@ struct TranscriptRow: View, Equatable {
                     }
                 }
                 .padding(.horizontal, bubbleStyle == "plain" ? 4 : 14).padding(.vertical, bubbleStyle == "plain" ? 4 : 9)
-                .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: botShown && bubbleStyle == "tailed"))
-                #if os(macOS)
-                // The whole bubble takes the right-click, padding and gaps too: on the words the
-                // Mac's selectable text gives its own menu, which has no Copy for the reply (#255).
-                .contentShape(.rect)
-                #endif
-                .contextMenu {
+                // On the Mac the whole bubble takes the right-click, padding and gaps too: on the
+                // words its selectable text gives its own menu, which has no Copy for the reply (#255).
+                .bubble(bubbleStyle == "plain" ? Color.clear : replyFill, side: .leading, tailed: botShown && bubbleStyle == "tailed", wholeOnMac: true) {
                     Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     Button { VoiceCoordinator.shared.toggleSpeaking(text) } label: {
                         Label(VoiceCoordinator.shared.isSpeaking(text) ? "Stop Speaking" : "Speak", systemImage: VoiceCoordinator.shared.isSpeaking(text) ? "speaker.slash" : "speaker.wave.2")
@@ -1271,8 +1266,7 @@ struct TranscriptRow: View, Equatable {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(Color(.systemGray4), in: MessageBubbleShape(side: .trailing))
-                        .contextMenu {
+                        .bubble(Color(.systemGray4), side: .trailing) {
                             Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                             Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
                         }
