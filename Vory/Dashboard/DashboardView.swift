@@ -90,10 +90,11 @@ struct DashboardView: View {
             let connection = runtime?.connection.id
             let key = "\(connection?.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)"
             guard Self.shouldLoad(pageLive: pageLive, connection: connection, loadedConnection: loadedConnection, key: key, loadedKey: loadedKey) else { return }
-            await load()
-            // Counted only when it ran to the end against a gateway: a load with none (Home mounted
-            // before activation) or one cut short by a hide loads again.
-            if !Task.isCancelled, runtime != nil { loadedKey = key; loadedConnection = connection }
+            let gotList = await load()
+            // Counted only when it ran to the end against a gateway and got the chat list: a load
+            // with none (Home mounted before activation), one cut short by a hide, or one the
+            // gateway did not answer (the launch load before the route is up) loads again.
+            if Self.counts(cancelled: Task.isCancelled, hasGateway: runtime != nil, gotList: gotList) { loadedKey = key; loadedConnection = connection }
         }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
         .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }
@@ -108,6 +109,8 @@ struct DashboardView: View {
     /// front before the gateway is up and its load also refreshes the Overview widget, and after a
     /// switch of gateway. Other changes made while it is hidden (another bot, the range) wait for its
     /// return, as does each new Mac visit (`key` counts them). Live, it loads whenever the key moved.
+    static func counts(cancelled: Bool, hasGateway: Bool, gotList: Bool) -> Bool { !cancelled && hasGateway && gotList }
+
     static func shouldLoad(pageLive: Bool, connection: UUID?, loadedConnection: UUID?, key: String, loadedKey: String) -> Bool {
         guard key != loadedKey else { return false }
         if pageLive { return true }
@@ -520,8 +523,9 @@ struct DashboardView: View {
         catch { return (nil, false) }
     }
 
-    private func load() async {
-        guard let rt = runtime else { return }
+    /// Whether the chat list arrived (a failed one may still leave the last list showing).
+    @discardableResult private func load() async -> Bool {
+        guard let rt = runtime else { return false }
         loading = true; defer { loading = false }
         // The gateway caps a page at 100 (a larger ask is refused outright).
         let allBots = homeAllBots
@@ -537,6 +541,7 @@ struct DashboardView: View {
             snap.save()
             WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
         }
+        return list != nil
     }
 }
 

@@ -33,6 +33,13 @@ import Testing
         #expect(DashboardView.shouldLoad(pageLive: true, connection: a, loadedConnection: a, key: key(a, visits: 1), loadedKey: key(a)))
     }
 
+    @Test func aLoadCountsOnlyWhenItGotTheChatList() {
+        #expect(DashboardView.counts(cancelled: false, hasGateway: true, gotList: true))
+        #expect(!DashboardView.counts(cancelled: false, hasGateway: true, gotList: false), "the gateway did not answer: load again")
+        #expect(!DashboardView.counts(cancelled: true, hasGateway: true, gotList: true), "cut short by a hide")
+        #expect(!DashboardView.counts(cancelled: false, hasGateway: false, gotList: false), "no gateway yet")
+    }
+
     @Test func liveWithNothingChangedDoesNotLoadAgain() {
         #expect(!DashboardView.shouldLoad(pageLive: true, connection: a, loadedConnection: a, key: key(a), loadedKey: key(a)))
     }
