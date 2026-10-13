@@ -99,6 +99,32 @@ import Testing
         #expect(M.overflow(contentWidth: 600, visibleMinX: 150, visibleMaxX: 450) == .init(leading: true, trailing: true))
         #expect(M.overflow(contentWidth: 600, visibleMinX: 300, visibleMaxX: 600) == .init(leading: true, trailing: false))
     }
+
+    @Test func measuredSizesAreKeptByWhatTheyWereMeasuredFrom() throws {
+        typealias L = MarkdownTableLayout
+        let t = try #require(onlyTable(Self.wide))
+        let key = L.SizeKey(table: t, font: .footnote, lineLimit: 3, headerInset: 22, typeSize: .large, bold: false, scale: 2)
+        var kept = L.Cache(key: key)
+        kept.natural = [70, 180, 120, 100, 160, 90]
+        kept.rows[[64, 180, 120, 100, 160, 90]] = [30, 44, 44]
+        L.SizeStore.shared.keep(kept)
+        // A row the lazy thread builds again finds them.
+        #expect(L.SizeStore.shared.cache(for: key).natural == kept.natural)
+        #expect(L.SizeStore.shared.cache(for: key).rows[[64, 180, 120, 100, 160, 90]] == [30, 44, 44])
+        // A cell that changed (a table still streaming), another text size or Bold Text measure afresh.
+        var edited = t
+        edited.rows[0][1] = "**Lab A — Model 1.1**"
+        var other = key
+        other.table = edited
+        #expect(L.SizeStore.shared.cache(for: other).natural == nil)
+        other = key
+        other.typeSize = .xLarge
+        #expect(L.SizeStore.shared.cache(for: other).natural == nil)
+        other = key
+        other.bold = true
+        #expect(L.SizeStore.shared.cache(for: other).natural == nil)
+        #expect(L.SizeStore.shared.cache(for: nil).key == nil)
+    }
 }
 
 /// The Reasoning card's markdown style: the reply's look is untouched, html stays code.
