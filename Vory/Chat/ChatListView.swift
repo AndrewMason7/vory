@@ -609,6 +609,13 @@ struct ChatListView: View {
         #endif
         // Wider rows: the card hugs the screen edges and the rows their card.
         .contentMargins(.horizontal, ChatRowStyle.cardInset, for: .scrollContent)
+        #if os(iOS)
+        // The tab bar's room at the list's end, its own and constant (it replaces the root's): the
+        // root's drops to 0 while a chat is up, and a list scrolled to its end had its offset
+        // clamped to the shorter content then, so after Back it sat that much lower, 59 pt, its
+        // last row under the bar (Matt on 1.5 (11): the list "drops" after a swipe back).
+        .contentMargins(.bottom, model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
+        #endif
         #if os(macOS)
         // The list runs a little way under the column's edge, which cut the scroll bar in half
         // down its length; the bar is brought back inside the column.
