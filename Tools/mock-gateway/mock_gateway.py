@@ -1332,11 +1332,27 @@ def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tu
 # Test only: /api/profiles answers this much later, as a real gateway over the network can (the
 # app's socket then opens before the bots are known: the cold-launch Chats check, 1.5 (21)).
 PROFILES_DELAY = [0.0]
+# Test only: the next N /api/profiles answer 500 (GET /mock/profiles-fail?count=N), with the
+# socket staying up: the Chats refresh has to ask for the bots again (#338).
+PROFILES_FAIL = [0]
 
 
 async def process_request(connection, request):
-    if PROFILES_DELAY[0] > 0 and request.path.split("?")[0] == "/api/profiles":
-        await asyncio.sleep(PROFILES_DELAY[0])
+    base = request.path.split("?")[0]
+    if base == "/mock/profiles-fail":
+        count = request.path.partition("count=")[2].split("&")[0]
+        PROFILES_FAIL[0] = int(count) if count.isdigit() else 1
+        print(f"[mock] the next {PROFILES_FAIL[0]} /api/profiles fail", flush=True)
+        body = json.dumps({"fail": PROFILES_FAIL[0]}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/api/profiles":
+        if PROFILES_DELAY[0] > 0:
+            await asyncio.sleep(PROFILES_DELAY[0])
+        if PROFILES_FAIL[0] > 0:
+            PROFILES_FAIL[0] -= 1
+            print(f"[mock] /api/profiles failed on purpose ({PROFILES_FAIL[0]} more)", flush=True)
+            body = json.dumps({"error": "mock: profiles failed on purpose"}).encode()
+            return Response(500, "Internal Server Error", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     return _process_request(connection, request)
 
 
