@@ -159,4 +159,54 @@ final class TabBarGapsUITests: XCTestCase {
         }
         XCTAssertTrue(chats["beside"]?.hasPrefix("row") == true, "a tap beside the bar no longer reaches the list (\(chats["beside"] ?? "none")): the bar took a strip")
     }
+
+    /// The elements lying on the bar, in tree order (the order a VoiceOver swipe takes), from one
+    /// snapshot of the app.
+    private func barTree(_ bar: CGRect) throws -> [String] {
+        var out: [String] = []
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.frame.width > 0, bar.contains(s.frame) {
+                out.append("type \(s.elementType.rawValue) id '\(s.identifier)' label '\(s.label)' frame \(s.frame)")
+            }
+            for c in s.children { walk(c) }
+        }
+        walk(try app.snapshot())
+        return out
+    }
+
+    /// The bar's touch margin is not something VoiceOver meets: an accessibility audit flags
+    /// nothing lying on the bar, on Chats, Bots, Home and Settings. The hit-only capsule behind
+    /// the bar's shapes read as an element with no description the size of the bar (1.5 (20)).
+    func testTabBarAuditClean() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "chats")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).firstMatch.waitForExistence(timeout: 40), "no chat rows")
+        pause(2)
+        for tab in ["chats", "bots", "dashboard", "settings"] {
+            if tab != "chats" { any("tab.\(tab)").tap(); pause(2) }
+            // The bar's shapes and their touch margin, a little over. Down the Duo's strip: its
+            // buttons' frames, the capsule's inset around them and the margin.
+            let parts = ["tab.dashboard", "tab.chats", "tab.bots", "tab.settings", "chats.voice", "chats.new"].map { any($0) }.filter { $0.exists }
+            let vertical = abs(any("tab.chats").frame.midX - any("tab.settings").frame.midX) < 2
+            let bar: CGRect
+            if vertical {
+                bar = parts.dropFirst().reduce(parts[0].frame) { $0.union($1.frame) }.insetBy(dx: -16, dy: -16)
+            } else {
+                let (cap, mic, new) = barShapes()
+                bar = cap.union(mic).union(new).insetBy(dx: -8, dy: -8)
+            }
+            print("TAB-BAR \(tab) \(bar) window \(app.frame.size)")
+            for line in try barTree(bar) { print("TAB-TREE \(tab) \(line)") }
+            var flagged: [String] = []
+            try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
+                guard let el = issue.element else { print("TAB-AUDIT \(tab) '\(issue.compactDescription)' no element"); return true }
+                let line = "'\(issue.compactDescription)' type \(el.elementType.rawValue) id '\(el.identifier)' label '\(el.label)' frame \(el.frame)"
+                print("TAB-AUDIT \(tab) \(line)")
+                // On the bar: lying within it. A row running under the bar is wider than it.
+                if bar.contains(el.frame) { flagged.append(line) }
+                return true
+            }
+            XCTAssertTrue(flagged.isEmpty, "\(tab): the audit flags the bar: \(flagged)")
+        }
+    }
 }

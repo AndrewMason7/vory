@@ -144,13 +144,7 @@ struct VoryTabBar: View {
         // capsule around the capsule and the circles, a little wider than what is drawn, under
         // them: the lens drag and the buttons sit on top and keep their touches. Only the
         // shapes, not a strip: beside the bar the list still answers.
-        .background {
-            Color.clear
-                .contentShape(Capsule())
-                .padding(-Self.touchMargin)
-                .onTapGesture {}
-                .accessibilityHidden(true)
-        }
+        .background { TouchCatcher().padding(-Self.touchMargin) }
         .padding(axis == .horizontal ? .horizontal : .vertical, axis == .horizontal ? sideMargin : 0)
         // Along the bottom: reserve only the part above the home-indicator area, like the
         // system bar group; the capsule itself is drawn overflowing into it. Down a strip: the
@@ -804,6 +798,31 @@ private struct PopToRootProbe: UIViewRepresentable {
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator { var seen = 0 }
+}
+
+/// Takes the touches inside the capsule of its bounds and does nothing with them: under the tab
+/// bar, the gaps and edges that miss its buttons. A UIKit view: SwiftUI's clear view with a tap
+/// gesture there read to VoiceOver as an element with no description the size of the bar,
+/// whatever hid it (accessibilityHidden, an empty representation), and without one a touch in a
+/// gap went to the nearest button (the next tab, a new chat). A UIView that hit-tests takes the
+/// touch by itself, with no recognizer, and stays out of the accessibility tree.
+private struct TouchCatcher: UIViewRepresentable {
+    func makeUIView(context: Context) -> CatcherView { CatcherView() }
+    func updateUIView(_ v: CatcherView, context: Context) {}
+
+    final class CatcherView: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isAccessibilityElement = false
+            accessibilityElementsHidden = true
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            UIBezierPath(roundedRect: bounds, cornerRadius: min(bounds.width, bounds.height) / 2).contains(point)
+        }
+    }
 }
 
 private extension UIView {
