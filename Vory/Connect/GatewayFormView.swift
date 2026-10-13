@@ -173,6 +173,11 @@ struct GatewayFormView: View {
         #endif
         .navigationTitle(existing == nil ? "Add Gateway" : "Edit Gateway")
         .navigationBarTitleDisplayMode(.inline)
+        // Pushed, the form's own Cancel is the way out: no system back arrow beside it (judgement
+        // call #11; the sites that push it say `pushedPage(ownCancel: true)`, onboarding's has
+        // this). On the iPhone that also turns off the edge swipe here, which would drop the
+        // edits unasked.
+        .navigationBarBackButtonHidden(true)
         .pageToolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(saveBlocker != nil).accessibilityIdentifier("gateway.save") }

@@ -183,13 +183,19 @@ extension View {
     /// morph bar owns Back, except on a page that `keepsOwnBar`: one with its own Cancel, Done or
     /// Save (a form) keeps the system bar, its items, title and back, and the morph bar steps
     /// aside while it is up (the root's probe reads the marker). The Mac ignores it.
-    @ViewBuilder func pushedPage(keepsOwnBar: Bool = false) -> some View {
+    /// `ownCancel`: a page that brings its own Cancel (the gateway form): no system back arrow
+    /// beside it on the iPhone (judgement call #11), said where the page is pushed, as Back is
+    /// decided there. The Mac keeps its toolbar Back: `navigationBarBackButtonHidden` does not take
+    /// it away from a page on show in the Mac's split (checked on Status › Sign-in, 2026-10-13).
+    @ViewBuilder func pushedPage(keepsOwnBar: Bool = false, ownCancel: Bool = false) -> some View {
         #if os(macOS)
         modifier(MacPushedPage())
         #else
         // One structure whether or not it is set, so a page whose answer changes (the Board, once
         // it knows it has several boards) keeps its state.
-        background { if keepsOwnBar { OwnBarMarker().frame(width: 0, height: 0).accessibilityHidden(true) } }
+        let marked = background { if keepsOwnBar { OwnBarMarker().frame(width: 0, height: 0).accessibilityHidden(true) } }
+        // Only ever hidden here, never shown: a page that hides its own Back keeps it hidden.
+        if ownCancel { marked.navigationBarBackButtonHidden(true) } else { marked }
         #endif
     }
 }
