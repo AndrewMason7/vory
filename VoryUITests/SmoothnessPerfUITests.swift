@@ -509,6 +509,14 @@ final class SmoothnessPerfUITests: XCTestCase {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token)
         waitForList()
+        // Rows show their bots only with All bots on (the launch argument arrives as a string,
+        // which the list's setting does not read): on through the chip's menu.
+        let chip = any("chats.profile")
+        if chip.waitForExistence(timeout: 5) {
+            chip.tap(); pause(1)
+            let all = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'All bots'")).firstMatch
+            if all.waitForExistence(timeout: 3) { all.tap(); pause(1.5) }
+        }
         openFirstChat(); pause(1.5)
         let composer = app.textViews["composer.text"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 10), "no composer")
