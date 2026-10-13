@@ -85,6 +85,10 @@ struct TranscriptView: View {
     /// object, not view state: writing view state per frame re-evaluated this whole body, and
     /// every row with it, on every frame of a flick.
     @State private var metrics = ScrollMetrics()
+    #if os(macOS)
+    /// Whether the thread is scrolling, read only by the rows' hit-test gate (`ThreadHitGate`).
+    @State private var hitGate = ThreadHitGate()
+    #endif
     /// While the chat is still settling after it opened (history arriving, header and dock
     /// measuring), every adjustment lands without animation; animated ones fought each other.
     @State private var openedAt = Date()
@@ -227,6 +231,9 @@ struct TranscriptView: View {
                 .frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity)
                 .onGeometryChange(for: CGFloat.self) { ($0.size.width / 20).rounded() * 20 } action: { columnWidth = $0 }
                 .frame(maxWidth: .infinity)
+                #if os(macOS)
+                .modifier(ThreadHitGate.Gate(gate: hitGate))
+                #endif
                 .dynamicTypeSize(ChatStyle.stepped(phoneTypeSize, textSize))
                 // No animation for the stack as a whole. One used to run whenever the row count
                 // changed, and it animated everything else that changed in the same update: when
@@ -320,6 +327,9 @@ struct TranscriptView: View {
                 let touching = phase == .tracking || phase == .interacting || phase == .decelerating
                 if touching, !metrics.userScrolling { metrics.touchStartDistance = metrics.distanceFromBottom }
                 metrics.userScrolling = touching
+                #if os(macOS)
+                if hitGate.scrolling != touching { hitGate.scrolling = touching }
+                #endif
                 // Shared with the lists: idle faces hold their blink while the thread moves.
                 BotAmbient.shared.scrolling = touching
                 if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
@@ -840,6 +850,20 @@ private struct ScrollViewProbe: UIViewRepresentable {
             while let x = s, !(x is UIScrollView) { s = x.superview }
             metrics?.scrollView = s as? UIScrollView
         }
+    }
+}
+#endif
+
+#if os(macOS)
+/// While the thread scrolls, its rows take no hit tests. AppKit routes every scroll event by a hit test, and SwiftUI
+/// answered by walking every row's content shape and every reply's two hover trackers: a third of the main thread
+/// during a drag on the Mac (1.5 (23), measured). The scroll view still gets its events; a click or a hover works
+/// again the moment the thread stops. Observable on its own so only the gate's modifier reads it, not the thread.
+@Observable final class ThreadHitGate {
+    var scrolling = false
+    struct Gate: ViewModifier {
+        let gate: ThreadHitGate
+        func body(content: Content) -> some View { content.allowsHitTesting(!gate.scrolling) }
     }
 }
 #endif
