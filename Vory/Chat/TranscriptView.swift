@@ -1631,12 +1631,23 @@ struct MarkdownView: View, Equatable {
     final class BlocksBox { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
     final class InlineBox { let text: AttributedString; init(_ t: AttributedString) { text = t } }
 
-    static func blocks(_ text: String) -> [MarkdownBlock] {
+    /// The settled parts of the replies parsed last (a streaming reply's among them): a reply's
+    /// next text starts with its settled part, so only the tail after it is parsed. The whole
+    /// reply was parsed on every token, a long one's growing with its length.
+    @MainActor private static var settled: [MarkdownParser.Settled] = []
+
+    @MainActor static func blocks(_ text: String) -> [MarkdownBlock] {
         let key = text as NSString
         if let hit = blockCache.object(forKey: key) { return hit.blocks }
-        let b = MarkdownParser.blocks(from: text)
-        blockCache.setObject(BlocksBox(b), forKey: key, cost: text.utf8.count)
-        return b
+        let prior = settled.indices.filter { settled[$0].isStart(of: text) }.max { settled[$0].text.utf8.count < settled[$1].text.utf8.count }
+        let parsed = MarkdownParser.blocks(from: text, after: prior.map { settled[$0] })
+        if let prior { settled.remove(at: prior) }
+        if let s = parsed.settled {
+            settled.append(s)
+            if settled.count > 16 { settled.removeFirst() }
+        }
+        blockCache.setObject(BlocksBox(parsed.blocks), forKey: key, cost: text.utf8.count)
+        return parsed.blocks
     }
     @MainActor static func inline(_ text: String) -> AttributedString {
         // Mentions are marked after the cache: they depend on the bots known now, not on the text.

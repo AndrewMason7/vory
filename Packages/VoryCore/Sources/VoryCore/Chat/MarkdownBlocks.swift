@@ -110,7 +110,47 @@ public enum MarkdownBlock: Hashable, Identifiable, Sendable {
 
 public enum MarkdownParser {
     public static func blocks(from text: String) -> [MarkdownBlock] {
+        parse(stripFrontMatter(text.replacingOccurrences(of: "\r\n", with: "\n")).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)).blocks
+    }
+
+    /// The settled part of a text that grows, and its blocks: everything through the last blank
+    /// line outside a code fence that has a line after it. That blank line flushes every open
+    /// block, so nothing written after it can change the blocks before it.
+    public struct Settled: Sendable {
+        public let text: String
+        public let blocks: [MarkdownBlock]
+
+        /// Whether `other` starts with this text, byte for byte. Compared in one call: a debug
+        /// build's `utf8.starts(with:)` walked the bytes one by one and cost as much as the parse
+        /// it saved.
+        public func isStart(of other: String) -> Bool {
+            var mine = text, other = other
+            return mine.withUTF8 { p in other.withUTF8 { t in t.count >= p.count && (p.isEmpty || memcmp(t.baseAddress!, p.baseAddress!, p.count) == 0) } }
+        }
+    }
+
+    /// `blocks(from:)` for a text that grows, as a streaming reply does: when `settled` is where
+    /// the text starts, only what follows it is parsed. A long reply was parsed whole on every
+    /// token. Returns the new settled part with the blocks, for the next call.
+    public static func blocks(from text: String, after settled: Settled?) -> (blocks: [MarkdownBlock], settled: Settled?) {
+        // Front matter is read off the whole text: such a text is parsed whole every time.
+        guard !text.hasPrefix("---"), !text.hasPrefix("\u{FEFF}") else { return (blocks(from: text), nil) }
+        let base = settled.flatMap { $0.isStart(of: text) ? $0 : nil }
+        let tail = base.map { String(text[text.utf8.index(text.startIndex, offsetBy: $0.text.utf8.count)...]) } ?? text
+        // Line ends written as CR LF are rewritten before the parse; nor is the parse split there.
+        guard !tail.utf8.contains(13) else { return (blocks(from: text), nil) }
+        let lines = tail.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let parsed = parse(lines)
+        let before = base?.blocks ?? []
+        guard parsed.settledLines > 0 else { return (before + parsed.blocks, base) }
+        let settledText = (base?.text ?? "") + lines[..<parsed.settledLines].joined(separator: "\n") + "\n"
+        return (before + parsed.blocks, Settled(text: settledText, blocks: before + parsed.blocks[..<parsed.settledBlocks]))
+    }
+
+    /// The blocks of `lines`, and how many lines and blocks lie up to the last settling blank line.
+    static func parse(_ lines: [String]) -> (blocks: [MarkdownBlock], settledLines: Int, settledBlocks: Int) {
         var out: [MarkdownBlock] = []
+        var settledLines = 0, settledBlocks = 0
         var paragraph: [String] = []
         var list: [MarkdownListItem] = []
         var listOrdered = false
@@ -168,7 +208,6 @@ public enum MarkdownParser {
             list.append(MarkdownListItem(depth: depth, marker: marker, text: body))
         }
 
-        let lines = stripFrontMatter(text.replacingOccurrences(of: "\r\n", with: "\n")).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var i = 0
         while i < lines.count {
             let line = lines[i]
@@ -194,7 +233,12 @@ public enum MarkdownParser {
                 code = []
                 continue
             }
-            if trimmed.isEmpty { flushAll(); continue }
+            if trimmed.isEmpty {
+                flushAll()
+                // Settled once a line follows: the last line may still be growing.
+                if i < lines.count { settledLines = i; settledBlocks = out.count }
+                continue
+            }
             if trimmed == "---" || trimmed == "***" || trimmed == "___" { flushAll(); out.append(.rule); continue }
             if trimmed.hasPrefix("#") {
                 let level = trimmed.prefix { $0 == "#" }.count
@@ -245,7 +289,7 @@ public enum MarkdownParser {
         }
         if let codeLines = code { out.append(.code(language: codeLang, text: codeLines.joined(separator: "\n"), closed: false)) }
         flushAll()
-        return out
+        return (out, settledLines, settledBlocks)
     }
 
     /// Inline markdown → AttributedString, falling back to plain text.
