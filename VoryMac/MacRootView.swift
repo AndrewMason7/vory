@@ -528,11 +528,19 @@ private struct GatewayFooter: View {
         .accessibilityHint("Edits the gateway.")
         .accessibilityIdentifier("rail.gateway")
         .disabled(model.store.active == nil)
-        .sheet(isPresented: $editing) {
-            NavigationStack { GatewayFormView(existing: model.store.active) }
-                .frame(minWidth: 520, minHeight: 640)
-                .withAppModel()
-        }
+        .sheet(isPresented: $editing) { GatewayFormSheet(existing: model.store.active) }
+    }
+}
+
+/// The gateway form as the Mac shows it everywhere: a sheet with its own Cancel and Save (the
+/// sidebar's gateway, Settings › Gateways, Status › Sign-in, Push setup's "Sign in again";
+/// judgement call #13), never pushed beside a toolbar Back.
+struct GatewayFormSheet: View {
+    var existing: GatewayConnection?
+    var body: some View {
+        NavigationStack { GatewayFormView(existing: existing) }
+            .frame(minWidth: 520, minHeight: 640)
+            .withAppModel()
     }
 }
 

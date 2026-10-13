@@ -597,6 +597,8 @@ struct CompanionUpdateRows: View {
 struct RestartCountdownRows: View {
     @Bindable var setup: PushSetupModel
     var runtime: GatewayRuntime
+    /// The gateway form, as a sheet on the Mac (judgement call #13).
+    @State private var signingIn = false
 
     var body: some View {
         if setup.restarting {
@@ -655,7 +657,12 @@ struct RestartCountdownRows: View {
             Button { Task { await setup.restartNow(runtime: runtime) } } label: { Label("Restart Gateway now", systemImage: "arrow.clockwise") }
             Button { Task { await setup.checkRestartNow(runtime: runtime) } } label: { Label("Check now", systemImage: "waveform.path.ecg") }
             if setup.restartError?.localizedCaseInsensitiveContains("expired") == true || setup.restartError?.localizedCaseInsensitiveContains("401") == true {
+                #if os(macOS)
+                Button { signingIn = true } label: { Label("Sign in again", systemImage: "person.badge.key") }
+                    .sheet(isPresented: $signingIn) { GatewayFormSheet(existing: runtime.connection) }
+                #else
                 NavigationLink { GatewayFormView(existing: runtime.connection).pushedPage(keepsOwnBar: true) } label: { Label("Sign in again", systemImage: "person.badge.key") }
+                #endif
                 Text("If the gateway already came back, Settings › Companion will show it running; sign in again and the restart is not needed.")
                     .font(.footnote).foregroundStyle(.secondary)
             }

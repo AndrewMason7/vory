@@ -1240,6 +1240,10 @@ async def speak_stream(ws):
 # answers session_expired, as a gateway does when its sessions end; GET /api/_mock/auth-log
 # lists the sign-ins and refreshes in order. Session-token requests are served as before.
 PASSWORD_AUTH = {"enabled": False, "username": "", "password": ""}
+# Test only: the browser sign-in approves at once (no login page): /auth/native/authorize with a
+# redirect_uri answers 302 to it with a code for the PKCE challenge, as a signed-in browser would
+# come back. POST /api/_mock/browser-auto {"enabled": true} (password auth on as well).
+BROWSER_AUTO = {"enabled": False}
 AUTH_PENDING: dict = {}
 AUTH_CODES: dict = {}
 ACCESS_TOKENS: set = set()
@@ -1270,11 +1274,22 @@ def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tu
         return 200, {"ok": True}
     if base == "/api/_mock/auth-log":
         return 200, {"log": AUTH_LOG}
+    if base == "/api/_mock/browser-auto" and method == "POST":
+        BROWSER_AUTO["enabled"] = bool(payload.get("enabled"))
+        return 200, {"ok": True, "enabled": BROWSER_AUTO["enabled"]}
     if base == "/api/auth/providers":
         enabled = PASSWORD_AUTH["enabled"]
         return 200, {"providers": [{"name": "basic", "display_name": "Username and password", "supports_password": True}] if enabled else []}
     if not PASSWORD_AUTH["enabled"]:
         return None
+    if base == "/auth/native/authorize" and BROWSER_AUTO["enabled"] and query.get("redirect_uri"):
+        code = "code-" + uuid.uuid4().hex
+        AUTH_CODES[code] = unquote(query.get("code_challenge", ""))
+        AUTH_LOG.append("browser-auto")
+        to = unquote(query["redirect_uri"]) + f"?code={code}&state={query.get('state', '')}"
+        return 302, {"location": to}
+    if base == "/auth/native/authorize" and BROWSER_AUTO["enabled"]:
+        return 400, {"detail": "code_challenge and redirect_uri are required"}
     if base == "/auth/native/authorize":
         # The real one sets its PKCE cookie and shows the login page; one sign-in at a time here.
         AUTH_PENDING.clear()
@@ -1399,6 +1414,8 @@ def process_request(connection, request):
         result = (200, {"room": room})
     else:
         result = rest(path, query)
+    if result and result[0] == 302 and isinstance(result[1], dict) and "location" in result[1]:
+        return Response(302, "Found", Headers([("Location", result[1]["location"]), ("Content-Length", "0")]), b"")
     return _json_response(*(result if result else (404, {"detail": "Not found"})))
 
 

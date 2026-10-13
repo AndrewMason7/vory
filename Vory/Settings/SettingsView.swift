@@ -178,6 +178,8 @@ struct GatewaysView: View {
     @Environment(AppModel.self) private var model
     @State private var showAdd = false
     @State private var pendingDelete: GatewayConnection?
+    /// The gateway whose form is open as a sheet: the Mac's way (judgement call #13).
+    @State private var editing: GatewayConnection?
 
     var body: some View {
         SettingsList {
@@ -200,7 +202,15 @@ struct GatewaysView: View {
                         }
                         .buttonStyle(.plain)
                         Spacer()
+                        #if os(macOS)
+                        // The Mac opens the form as a sheet, as the sidebar's gateway does: pushed,
+                        // its toolbar Back stood beside the form's own Cancel (judgement call #13).
+                        Button { editing = c } label: { Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                            .buttonStyle(.plain).frame(width: 20)
+                            .accessibilityLabel("Edit \(c.name)").accessibilityIdentifier("gateways.edit")
+                        #else
                         NavigationLink { GatewayFormView(existing: c).pushedPage(keepsOwnBar: true) } label: { EmptyView() }.frame(width: 20)
+                        #endif
                     }
                     .rowActions { Button(role: .destructive) { pendingDelete = c } label: { Label("Delete", systemImage: "trash") } }
                 }
@@ -239,6 +249,9 @@ struct GatewaysView: View {
         }
         .untitledPage()
         .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame().withAppModel() }
+        #if os(macOS)
+        .sheet(item: $editing) { c in GatewayFormSheet(existing: c) }
+        #endif
         .alert("Remove gateway?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Remove", role: .destructive) { if let c = pendingDelete { Task { await model.deleteConnection(c.id) } } }
             Button("Cancel", role: .cancel) {}
