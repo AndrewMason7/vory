@@ -1325,6 +1325,18 @@ def process_request(connection, request):
             query[k] = v
     method = getattr(request, "method", "GET") or "GET"
     base = path.split("?")[0]
+    if base in ("/mock/port-down", "/mock/port-up"):
+        # #283's two-address check: the same gateway (this process, its state) at two ports;
+        # one goes away and comes back, as a home address does when the phone leaves home.
+        port = int(query.get("port", "0") or 0)
+        ok = port in LISTEN_PORTS
+        if ok and base == "/mock/port-down" and port in SERVERS:
+            SERVERS.pop(port).close()
+        elif ok and base == "/mock/port-up" and port not in SERVERS:
+            asyncio.get_running_loop().create_task(listen(port))
+        print(f"[mock] {base[6:]} {port}: {'ok' if ok else 'not one of ours'}", flush=True)
+        body = json.dumps({"ok": ok, "up": sorted(SERVERS)}).encode()
+        return Response(200 if ok else 404, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     if base == "/mock/drop-sockets":
         # What iOS does to a suspended app's sockets after a while: they die under it, and the
         # app finds out only when it comes back (a UI test calls this while the app is away).
@@ -2459,9 +2471,19 @@ async def ws_handler(ws):
             live.members.discard(gw)
 
 
+SERVERS: dict = {}
+LISTEN_PORTS: list[int] = []
+LISTEN_HOST = "127.0.0.1"
+
+
+async def listen(port: int) -> None:
+    SERVERS[port] = await serve(ws_handler, LISTEN_HOST, port, process_request=process_request, max_size=None)
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9119)
+    ap.add_argument("--port2", type=int, default=None, help="the same gateway (one process, one state) on a second port, for #283's two addresses")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="mock-token")
     # Read at import time (VOICE_LIVE, NEUTRAL_MODELS); declared so the parser accepts them.
@@ -2497,9 +2519,13 @@ async def main() -> None:
     if args.password_auth:
         user, _, password = args.password_auth.partition(":")
         PASSWORD_AUTH.update(enabled=True, username=user, password=password)
-    print(f"mock Hermes gateway on http://{args.host}:{args.port}  (session token: {TOKEN})", flush=True)
-    async with serve(ws_handler, args.host, args.port, process_request=process_request, max_size=None) as server:
-        await server.serve_forever()
+    global LISTEN_HOST
+    LISTEN_HOST = args.host
+    LISTEN_PORTS[:] = [args.port] + ([args.port2] if args.port2 else [])
+    print(f"mock Hermes gateway on http://{args.host}:{args.port}" + (f" and :{args.port2}" if args.port2 else "") + f"  (session token: {TOKEN})", flush=True)
+    for port in LISTEN_PORTS:
+        await listen(port)
+    await asyncio.Future()
 
 
 if __name__ == "__main__":
