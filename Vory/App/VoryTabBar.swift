@@ -563,7 +563,9 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
                     }
                 } else {
                     Perf.stamp("root probe \(tab.rawValue): pop seen (button)")
-                    state.pop()
+                    // Next turn: this runs inside SwiftUI's own update for the pop, where the
+                    // morph's animation was dropped (the bar changed only once the page had gone).
+                    DispatchQueue.main.async { MorphState.shared.pop() }
                 }
             }
             c.animate(alongsideTransition: nil) { [weak self] _ in
@@ -584,9 +586,12 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             guard active else { return }
             hideChrome(of: vc)
             guard first else { return }
-            let state = MorphState.shared
-            Perf.stamp("root probe \(tab.rawValue): push seen, chat \(state.chat == nil ? "nil" : "set")")
-            if state.pushedTab == nil { state.pushPage(tab) }
+            Perf.stamp("root probe \(tab.rawValue): push seen")
+            // Next turn: this runs inside SwiftUI's own update for the push (the root's appearance
+            // changes there), where the morph's animation was dropped and the bar jumped to the
+            // Back circle in one frame. The page's own Back is hidden above, before it shows.
+            let tab = self.tab
+            DispatchQueue.main.async { if MorphState.shared.pushedTab == nil { MorphState.shared.pushPage(tab) } }
         }
 
         /// Once the transition that just ended has let go of the stack (UIKit may still report

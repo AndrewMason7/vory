@@ -65,8 +65,11 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     }
     func pushPage(_ tab: AppModel.AppTab) {
         guard chat == nil else { return }
-        pushedTab = tab
-        toAway()
+        // The page and its morph in one transaction: set apart, the bar went over to the pushed
+        // page unanimated and jumped to the Back circle in one frame while the page slid (in (17)
+        // too), where the pop morphs back over its slide (Matt on 18: "the reverse of going out").
+        if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { pushedTab = tab; t = 0 } }
+        else { withAnimation(.spring(duration: 0.32, bounce: 0)) { pushedTab = tab; t = 0 } }
     }
     private func toAway() {
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = 0 } }
