@@ -563,9 +563,10 @@ struct MorphTopBar: View {
 
 /// A seen capsule's frame, glass and place. The title's capsule widens here for the pull's wheel
 /// (as wide as the wheel and its gap, grown to the right so the title keeps its leading edge),
-/// in its own view: the wheel opens with the finger, and only this capsule follows it frame for
-/// frame. Measured into the bar's state instead, the whole bar ran again on every frame of a
-/// pull and the phone hitched (a fast pull on Home, 10 ms/s).
+/// in its own view, so a pull never runs the bar again: with the wheel inside the measured title,
+/// every frame of a pull went through the bar's state. It opens in one snappy step, as the
+/// wheel's slot does; grown with the finger, the glass resized on every frame and fast pulls
+/// hitched on the phone.
 private struct CapsuleFrame: ViewModifier {
     let frame: CGRect
     let present: Bool
@@ -573,15 +574,14 @@ private struct CapsuleFrame: ViewModifier {
     /// The wheel's side, as PullRefreshWheel's: it grows with the title's type.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
     func body(content: Content) -> some View {
-        let openness: CGFloat = pull.map { $0.refreshing ? 1 : min(1, $0.shown) } ?? 0
         let open = pull.map { $0.refreshing || $0.shown > 0 } ?? false
-        let width = present ? frame.width + side * 1.4 * openness : 0
+        let width = present ? frame.width + (open ? side * 1.4 : 0) : 0
         content
             .frame(width: width, height: present ? frame.height : 0)
             .clipShape(.capsule)
             .glassEffect(present ? .regular : .identity, in: .capsule)
             .position(x: present ? frame.minX + width / 2 : frame.midX, y: frame.midY)
-            // As the wheel's own slot: with the finger while dragging, a snappy close after.
+            // With the wheel's own slot: one snappy step open, and closed after the refresh.
             .animation(.snappy(duration: 0.3), value: open)
     }
 }
