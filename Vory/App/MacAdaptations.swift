@@ -292,3 +292,81 @@ struct MenuLabel: View {
     }
 }
 #endif
+
+// MARK: Cards and chips pressed (judgement call #22)
+
+/// Glass that answers a press itself (`.interactive()`) answered it wherever a finger came down
+/// over it, through the tab bar or the composer too: a group chat's card under the tab bar grew
+/// while a tab was held (Matt on 1.5 (20)). On the phone the cards' and chips' glass is still, and
+/// each takes the top bar's press look on its own press instead: it lights up and grows a little
+/// (Reduce Motion: the light only). The Mac keeps its interactive glass; a pointer presses only
+/// what it is over. A judgement call made while Matt was out: `-vory-interactive-glass` brings
+/// the phone's interactive glass back.
+enum PressLook {
+    static let interactiveGlass = ProcessInfo.processInfo.arguments.contains("-vory-interactive-glass")
+    /// The glass for a card or chip that can be pressed.
+    static func glass(_ base: Glass) -> Glass {
+        #if os(iOS)
+        interactiveGlass ? base.interactive() : base
+        #else
+        base.interactive()
+        #endif
+    }
+}
+
+private struct PressLookPressedKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// The card or chip this view sits in is being pressed (PressLookStyle).
+    var pressLookPressed: Bool {
+        get { self[PressLookPressedKey.self] }
+        set { self[PressLookPressedKey.self] = newValue }
+    }
+}
+
+/// A pressed card or chip grows to the top bar's 1.05 (MorphPressStyle.pressedScale) and tells its
+/// glass to light (`pressLookFill`). Through `pressLookButtonStyle()`, on the phone only.
+struct PressLookStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Pressed(configuration: configuration) }
+
+    private struct Pressed: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        var body: some View {
+            let pressed = configuration.isPressed
+            configuration.label
+                .environment(\.pressLookPressed, pressed)
+                .scaleEffect(pressed && !reduceMotion ? 1.05 : 1)
+                .animation(.easeOut(duration: pressed ? 0.08 : 0.2), value: pressed)
+        }
+    }
+}
+
+extension View {
+    /// A card's or chip's button: the press look on the phone; the plain button on the Mac, and on
+    /// the phone with its interactive glass back.
+    @ViewBuilder func pressLookButtonStyle() -> some View {
+        #if os(iOS)
+        if PressLook.interactiveGlass { buttonStyle(.plain) } else { buttonStyle(PressLookStyle()) }
+        #else
+        buttonStyle(.plain)
+        #endif
+    }
+
+    /// Where a card's or chip's glass is: the press look's light, in the glass's own shape (the top
+    /// bar's fill: black 12% in light, white 16% in dark).
+    func pressLookFill<S: Shape>(in shape: S) -> some View { modifier(PressLookFill(shape: shape)) }
+}
+
+private struct PressLookFill<S: Shape>: ViewModifier {
+    let shape: S
+    @Environment(\.pressLookPressed) private var pressed
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content.overlay {
+            shape.fill(scheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.12))
+                .opacity(pressed ? 1 : 0)
+                .animation(.easeOut(duration: pressed ? 0.08 : 0.2), value: pressed)
+                .allowsHitTesting(false)
+        }
+    }
+}

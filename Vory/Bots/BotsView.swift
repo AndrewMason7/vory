@@ -100,7 +100,7 @@ struct BotsView: View {
                                 working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
                                 slot: i, slots: rt.profiles.count)
                     }
-                    .buttonStyle(.plain)
+                    .pressLookButtonStyle()
                     // Press and hold (a right-click on the Mac): what you would otherwise dig for.
                     .contextMenu { botActions(p, rt) }
                     .overlay(alignment: .topTrailing) { if !cardMenuOff { cardMenu(p, rt) } }
@@ -121,7 +121,7 @@ struct BotsView: View {
                             .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
                     }
                     ForEach(rooms) { room in
-                        NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain)
+                        NavigationLink(value: room) { RoomCard(room: room) }.pressLookButtonStyle()
                     }
                     Text("Start one from the compose button on Chats by adding more than one bot.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
@@ -234,7 +234,8 @@ struct BotCard: View {
             }
             .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 7)
             .frame(maxWidth: .infinity)
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .glassEffect(PressLook.glass(.regular), in: .capsule)
+            .pressLookFill(in: Capsule())
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -346,7 +347,8 @@ struct RoomCard: View {
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(14)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+        .glassEffect(PressLook.glass(.regular), in: .rect(cornerRadius: 18))
+        .pressLookFill(in: RoundedRectangle(cornerRadius: 18))
         .padding(.horizontal, 16)
     }
 }

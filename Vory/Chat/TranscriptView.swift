@@ -1536,9 +1536,10 @@ struct BotMessageNotice: View {
                     if pending { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .glassEffect(PressLook.glass(.regular), in: .capsule)
+                .pressLookFill(in: Capsule())
             }
-            .buttonStyle(.plain)
+            .pressLookButtonStyle()
             .accessibilityLabel("\(headline). Opens \(label)'s chat")
             if let text = body_, !text.isEmpty {
                 Button { withAnimation(.snappy) { open.toggle() } } label: {
