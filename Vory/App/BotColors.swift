@@ -162,8 +162,14 @@ struct BotAvatar: View {
                     if !liveDrawn {
                         Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme)).resizable().frame(width: size, height: size)
                     }
+                    // Drawn but not shown until it takes over: the body is painted a little
+                    // translucent, so for the moment both were up the still showed through it
+                    // and the face read darker (a ~65 ms flash as a green bot started work on the
+                    // Mac, 1.5 (21)). Not quite 0, so it renders and is ready the frame it shows;
+                    // two frames are enough, and the start of a working morph stays in view.
                     BotFaceView(spec: choice.spec(hex: hex), size: size, active: active, drawn: drawn, mood: effectiveMood)
-                        .task { try? await Task.sleep(for: .milliseconds(100)); if !Task.isCancelled { liveDrawn = true } }
+                        .opacity(liveDrawn ? 1 : 0.001)
+                        .task { try? await Task.sleep(for: .milliseconds(34)); if !Task.isCancelled { liveDrawn = true } }
                         .onDisappear { liveDrawn = false }
                 }
             } else {
