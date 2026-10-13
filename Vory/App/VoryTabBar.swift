@@ -56,6 +56,8 @@ struct VoryTabBar: View {
     /// Between the capsule and the circles, and between the circles: half what it was (the
     /// bar had a gap on each side of the mic that read as empty space).
     private let circleGap: CGFloat = 6
+    /// How far past the drawn capsule and circles a touch still lands on the bar, not behind it.
+    static let touchMargin: CGFloat = 4
     /// The window's bottom safe-area inset, read from the window as it is now (`WindowGeometry`):
     /// 34 pt on phones with a home indicator, 0 on a home-button phone (iPhone SE), which iOS 26
     /// still runs on, and whatever the window has after a fold or a resize.
@@ -135,6 +137,19 @@ struct VoryTabBar: View {
                 .accessibilityHint("Tap to \(ComposeAction.tap(tapRaw).spoken); press and hold to \(ComposeAction.hold(holdRaw).spoken)")
                 .accessibilityIdentifier("chats.new")
             }
+        }
+        // The bar's own shape takes the touches that miss its buttons: in the gaps between the
+        // capsule and the circles, or at the glass's edge, they reached the page behind and
+        // opened the row there (Matt on (18): "I can tap it when touching the nav bar"). One
+        // capsule around the capsule and the circles, a little wider than what is drawn, under
+        // them: the lens drag and the buttons sit on top and keep their touches. Only the
+        // shapes, not a strip: beside the bar the list still answers.
+        .background {
+            Color.clear
+                .contentShape(Capsule())
+                .padding(-Self.touchMargin)
+                .onTapGesture {}
+                .accessibilityHidden(true)
         }
         .padding(axis == .horizontal ? .horizontal : .vertical, axis == .horizontal ? sideMargin : 0)
         // Along the bottom: reserve only the part above the home-indicator area, like the
