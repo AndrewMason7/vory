@@ -593,12 +593,14 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
                 if c.isInteractive {
                     // The finger has it: the bar follows the page's slide frame by frame.
                     fingerHasPop = true
+                    MorphState.shared.rootPopInFlight = true
                     startLink()
                     c.notifyWhenInteractionChanges { [weak self] ctx in
                         self?.fingerHasPop = false
                         self?.stopLink()
                         let remaining = max(0.12, ctx.transitionDuration * Double(1 - ctx.percentComplete))
                         MorphState.shared.release(ctx.isCancelled ? 0 : 1, over: remaining)
+                        MorphState.shared.rootPopInFlight = false
                     }
                 } else {
                     Perf.stamp("root probe \(tab.rawValue): pop seen (button)")
@@ -608,6 +610,7 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
                 }
             }
             c.animate(alongsideTransition: nil) { [weak self] _ in
+                MorphState.shared.rootPopInFlight = false
                 guard let self else { return }
                 self.fingerHasPop = false
                 self.stopLink()

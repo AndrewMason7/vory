@@ -492,6 +492,42 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(plus.waitForExistence(timeout: 5) && plus.isHittable, "Back did not go to the Bots page")
     }
 
+    /// A swipe back from a page three deep (a bot's Profile) to the one under it (the bot's page)
+    /// leaves the bar's Back circle: the bar follows only a swipe to the root (it went to the root's
+    /// title and stayed there). The next swipe, to the root, still morphs the bar to the root.
+    func testSwipeBackFromDepthThree() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "bots")
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        func swipeBack() {
+            let y = app.frame.height * 0.55
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 2, dy: y))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.width * 0.85, dy: y)), withVelocity: .default, thenHoldForDuration: 0)
+            pause(1.5)
+        }
+        let plus = any("bots.newBot")
+        XCTAssertTrue(plus.waitForExistence(timeout: 10), "no + on the Bots page")
+        pause(2)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.26, dy: 0.30)).press(forDuration: 1.2)
+        let chats = app.buttons.matching(NSPredicate(format: "label == 'Chats' AND identifier != 'tab.chats'")).firstMatch
+        XCTAssertTrue(chats.waitForExistence(timeout: 5), "no card menu")
+        chats.tap()
+        XCTAssertTrue(any("page.back").waitForExistence(timeout: 5), "the bot's page has no Back capsule")
+        pause(1.5)
+        let profile = try XCTUnwrap(app.staticTexts.matching(NSPredicate(format: "label == 'Profile'")).allElementsBoundByIndex
+            .filter { $0.isHittable }.min { $0.frame.minY < $1.frame.minY }, "no Profile row")
+        profile.tap(); pause(1.5)
+        XCTAssertTrue(any("page.back").exists, "the Profile page has no Back capsule")
+        // Depth 3 back to 2 by a swipe: the Back circle stays.
+        swipeBack(); shot("depth3-swiped-to-2")
+        XCTAssertTrue(any("page.back").exists && any("page.back").isHittable, "a swipe from depth 3 took the bar's Back away")
+        XCTAssertFalse(plus.exists && plus.isHittable, "the swipe from depth 3 went past the bot's page")
+        // Depth 2 back to the root by a swipe: the bar is the root's again.
+        swipeBack(); shot("depth2-swiped-to-root")
+        XCTAssertTrue(plus.waitForExistence(timeout: 5) && plus.isHittable, "the swipe to the root did not bring the Bots + back")
+        XCTAssertFalse(any("page.back").exists, "the Back circle stayed at the root")
+    }
+
     /// A sheet from a root and back (Bots' and Projects' +, then Cancel): the probes take the
     /// presentation for no push, so the bar stays at the root (its +, no Back) and nothing is recorded.
     /// No root presents a full-screen cover; these sheets are the roots' only presentations.

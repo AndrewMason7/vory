@@ -50,6 +50,11 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     var t: CGFloat = 1
     /// The finger has the pop: `t` follows it and nothing is tappable.
     var scrubbing = false
+    /// A swipe back to a tab's root page is under way (its root probe saw it start). Only that
+    /// swipe, or a chat's, is the bar's to follow: a swipe from a page three deep back to the one
+    /// under it moved the bar to the root's title and left it there, over a page still pushed
+    /// (the full-screen pan reports every swipe, whatever its depth).
+    @ObservationIgnored var rootPopInFlight = false
     /// The tabs whose page in front keeps its own bar: a form with its own Cancel, Done or Save
     /// (`.pushedPage(keepsOwnBar: true)`), or a page pushed from one. The bar steps aside there,
     /// as it does over a group chat on Chats: the morph Back stood over Edit Gateway's Cancel
@@ -115,7 +120,7 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
         }
     }
     func scrub(_ fraction: CGFloat) {
-        guard away else { return }
+        guard away, chat != nil || rootPopInFlight else { return }
         scrubbing = true
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = fraction >= 0.5 ? 1 : 0 } }
         else { var tr = Transaction(); tr.disablesAnimations = true; withTransaction(tr) { t = fraction } }
@@ -123,7 +128,7 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// The swipe let go: finish to the list (fraction 1) or back to the chat (0) over what is
     /// left of the transition.
     func release(_ fraction: CGFloat, over duration: Double) {
-        guard away else { return }
+        guard away, chat != nil || rootPopInFlight else { return }
         scrubbing = false
         // With the page: the bar finishing ahead of the slide made the list's controls land
         // before the list (Matt, 2026-10-12: "the nav bar reappears weirdly").
