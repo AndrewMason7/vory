@@ -53,9 +53,11 @@ struct NewBotSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .disabled(editing != nil)
                         .foregroundStyle(editing != nil ? .secondary : .primary)
+                        .accessibilityIdentifier("botSheet.name")
                     if editing == nil, !name.isEmpty, cleanName != name { Text("Saved as \(cleanName)").font(.caption).foregroundStyle(.secondary) }
                     if editing == nil, runtime.profiles.contains(where: { $0.name == cleanName }) { Text("A bot with this name already exists.").font(.caption).foregroundStyle(.red) }
                     TextField("Description", text: $description, axis: .vertical).lineLimit(1...3)
+                        .accessibilityIdentifier("botSheet.description")
                     if let e = editing, renameSupported, e.isDefault != true {
                         Button { renamingBot = true } label: { Label("Rename bot…", systemImage: "folder.badge.gearshape") }
                             .disabled(busy)
