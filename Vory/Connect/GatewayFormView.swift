@@ -298,7 +298,10 @@ struct GatewayFormView: View {
                 switch authMode {
                 case .sessionToken:
                     SecureField("Session token", text: $sessionToken)
-                        .textContentType(.password).autocorrectionDisabled()
+                        // A token, not a password: marked as a one-time code so neither the iPhone
+                        // nor the Mac offers to save it to Passwords (which syncs it outside Vory's
+                        // own Keychain) or to fill a saved password in here. It stays a secure entry.
+                        .textContentType(.oneTimeCode).autocorrectionDisabled()
                         .accessibilityIdentifier("gateway.sessionToken")
                         .focused($field, equals: .token)
                     Text("The dashboard's HERMES_DASHBOARD_SESSION_TOKEN. Used when the gateway has no auth gate (loopback / trusted network).")
