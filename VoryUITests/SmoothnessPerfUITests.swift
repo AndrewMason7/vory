@@ -312,11 +312,12 @@ final class SmoothnessPerfUITests: XCTestCase {
         launch(url: url, token: token, tab: "settings")
         pause(4)
         func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
-        // A Settings row pushes its page; the bar's title capsule is the "Settings" static text
-        // (the pushed page's own Back button carries the same word, as a button).
+        // A Settings row pushes its page; the bar's title capsule is `morph.title`. Not the word:
+        // the tab bar's selected tab carries "Settings" too, under the gear, and stays over a
+        // pushed page (the first match was the bar's unseen measuring copy until it left the tree).
         let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'settings.row.'")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no settings row")
-        let title = app.staticTexts["Settings"].firstMatch
+        let title = any("morph.title")
         XCTAssertTrue(title.waitForExistence(timeout: 5) && title.isHittable, "no Settings title capsule at the root")
         func openRow() { for _ in 0..<3 { row.tap(); if any("page.back").firstMatch.waitForExistence(timeout: 3) { break } }; pause(1.5) }
         openRow(); shot("settings-pushed")
@@ -999,7 +1000,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(record.exists && record.label.contains("push animated=true coordinator=true"), "the push was not animated: \(record.exists ? record.label : "no record")")
         XCTAssertFalse(app.navigationBars.buttons.matching(identifier: "BackButton").firstMatch.exists, "the system's back button still shows on the pushed page")
         back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5); shot("settings-root-again")
-        XCTAssertTrue(app.staticTexts["Settings"].firstMatch.waitForExistence(timeout: 5), "the Settings title capsule is not back")
+        XCTAssertTrue(any("morph.title").waitForExistence(timeout: 5), "the Settings title capsule is not back")
     }
 
     /// A bot's page pushed from the Bots grid (Matt on 1.5 (17): "the back button leave behind a
