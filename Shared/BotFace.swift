@@ -92,14 +92,7 @@ public enum BotFace {
             // wedge where it met the body (their windings cancelled there, and the rim and the
             // glass drew the ellipse's edge across the tail; Matt on 1.5 (17): "Message bubble
             // bot shape is also broken").
-            let w = r.width, h = r.height
-            let body = Path(ellipseIn: CGRect(x: r.minX + w * 0.06, y: r.minY + h * 0.14, width: w * 0.88, height: h * 0.60))
-            var tail = Path()
-            tail.move(to: CGPoint(x: r.minX + w * 0.30, y: r.minY + h * 0.62))
-            tail.addLine(to: CGPoint(x: r.minX + w * 0.16, y: r.minY + h * 0.92))
-            tail.addLine(to: CGPoint(x: r.minX + w * 0.48, y: r.minY + h * 0.72))
-            tail.closeSubpath()
-            return body.union(tail)
+            return bubblePath(in: r)
         case "cloud":
             var p = Path()
             let w = r.width, h = r.height
@@ -735,6 +728,30 @@ public enum BotFace {
             out.addPath(g.path.applying(CGAffineTransform(translationX: g.box.midX, y: g.box.midY).scaledBy(x: sx, y: sy).translatedBy(x: -g.box.midX, y: -g.box.midY)))
         }
         return out
+    }
+
+    nonisolated(unsafe) private static var bubbleCache: [String: Path] = [:]
+    private static let bubbleLock = NSLock()
+
+    /// The Bubble's outline, the ellipse and its tail as one path, memoised by size: the union is
+    /// a path boolean, and a working face's Canvas draws its body on every frame.
+    private static func bubblePath(in r: CGRect) -> Path {
+        let key = "\(r.width)x\(r.height)"
+        bubbleLock.lock(); let hit = bubbleCache[key]; bubbleLock.unlock()
+        if let hit { return hit.offsetBy(dx: r.minX, dy: r.minY) }
+        let w = r.width, h = r.height
+        let body = Path(ellipseIn: CGRect(x: w * 0.06, y: h * 0.14, width: w * 0.88, height: h * 0.60))
+        var tail = Path()
+        tail.move(to: CGPoint(x: w * 0.30, y: h * 0.62))
+        tail.addLine(to: CGPoint(x: w * 0.16, y: h * 0.92))
+        tail.addLine(to: CGPoint(x: w * 0.48, y: h * 0.72))
+        tail.closeSubpath()
+        let path = body.union(tail)
+        bubbleLock.lock()
+        if bubbleCache.count > 64 { bubbleCache.removeAll() }
+        bubbleCache[key] = path
+        bubbleLock.unlock()
+        return path.offsetBy(dx: r.minX, dy: r.minY)
     }
 
     /// Where each shape's bottom edge sits, as a fraction of the square (the blob reaches
