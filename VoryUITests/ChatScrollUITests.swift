@@ -62,8 +62,22 @@ final class ChatScrollUITests: XCTestCase {
         guard let snap = try? app.snapshot() else { return nil }
         let window = app.windows.firstMatch.frame
         var candidates: [(label: String, y: CGFloat)] = []
+        // Every text in the thread, counted: the row held must be found again by its words, so a
+        // line the report repeats ("Action: rotate the log and watch it", in most shards) cannot
+        // be it. Picked, it was found again a hundred rows up, and read as the thread having moved
+        // 11,165 pt.
+        var seen: [String: Int] = [:]
+        func count(_ s: XCUIElementSnapshot) {
+            if s.elementType == .staticText { seen[s.label.lowercased(), default: 0] += 1 }
+            for c in s.children { count(c) }
+        }
+        count(snap)
+        func unique(_ label: String) -> Bool {
+            let l = label.lowercased()
+            return seen.filter { $0.key.contains(l) }.values.reduce(0, +) == 1
+        }
         func walk(_ s: XCUIElementSnapshot) {
-            if s.elementType == .staticText {
+            if s.elementType == .staticText, unique(s.label) {
                 let f = s.frame
                 // A row's own words, not a status that comes and goes ("Running terminal…").
                 if s.label.count >= 12, !s.label.contains("…"), f.minY > window.minY + 120, f.maxY < window.maxY - 160 {
@@ -136,7 +150,12 @@ final class ChatScrollUITests: XCTestCase {
         let end = text("Everything else looked healthy")
         XCTAssertFalse(end.firstMatch.exists, "the report had already finished: too short to scroll during")
 
-        // 1. Up the thread while it streams: the words on screen stay put until the end.
+        // 1. Up the thread while it streams: the words on screen stay put until the end. The
+        // keyboard is still up from typing the prompt, and a drag on the thread works on it first
+        // (it dismisses interactively): without a swipe of its own the scroll-up could leave the
+        // thread at its end, where it rightly followed the reply.
+        if app.keyboards.firstMatch.exists { app.swipeDown(velocity: .slow); RunLoop.current.run(until: Date().addingTimeInterval(0.6)) }
+        print("CHAT-SCROLL keyboard after dismissing: \(app.keyboards.firstMatch.exists)")
         app.swipeDown(velocity: .slow)
         app.swipeDown(velocity: .slow)
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
