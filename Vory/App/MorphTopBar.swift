@@ -274,10 +274,7 @@ struct MorphTopBar: View {
             // the one modifier so its identity holds.
             // Absent on this page: shrunk to nothing where it was (a view's opacity does not
             // fade glass, so the capsule also drops its glass there, in the one modifier).
-            .frame(width: present ? f.width : 0, height: present ? f.height : 0)
-            .clipShape(.capsule)
-            .glassEffect(present ? .regular : .identity, in: .capsule)
-            .position(x: f.midX, y: f.midY)
+            .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil))
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
             .animation(goesAtOnce ? nil : .snappy(duration: 0.22), value: present)
@@ -480,18 +477,14 @@ struct MorphTopBar: View {
         // row of 44 pt circles, Bots' sat 4 pt below Settings' bare one).
         return HStack(spacing: 10) {
             if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
-            HStack(spacing: 0) {
-                Text(model.selectedTab.title).font(.headline).fixedSize()
-                PullRefreshWheel(hosting: false, fromBelow: model.pullStates[model.selectedTab])
-            }
+            // The title alone: the pull's wheel widens the seen capsule itself (CapsuleFrame), so
+            // a pull never changes what is measured here.
+            Text(model.selectedTab.title).font(.headline).fixedSize()
             // A set height, not the text's measured one: measured afresh on each tab switch it
             // came out a few points taller for a moment and the capsule breathed (Matt,
             // 2026-10-12: "the height of the bubble from bot to settings seems to change").
             .padding(.horizontal, 12).frame(height: titleHeight)
-            // While a pull is dragged the capsule follows the finger, frame for frame: animated,
-            // it chased the wheel a 0.22 s spring behind (layout follows the finger; only looks
-            // spring). The open and the close after the release keep the snappy move.
-            .measured(.mid, into: $listFrames, last: $lastListFrames, animated: model.pullStates[model.selectedTab]?.dragging != true)
+            .measured(.mid, into: $listFrames, last: $lastListFrames)
             Spacer(minLength: 0)
             switch chrome.trail {
             case .chatActions: actions.measured(.trail, into: $listFrames, last: $lastListFrames)
@@ -568,18 +561,42 @@ struct MorphTopBar: View {
     }
 }
 
+/// A seen capsule's frame, glass and place. The title's capsule widens here for the pull's wheel
+/// (as wide as the wheel and its gap, grown to the right so the title keeps its leading edge),
+/// in its own view: the wheel opens with the finger, and only this capsule follows it frame for
+/// frame. Measured into the bar's state instead, the whole bar ran again on every frame of a
+/// pull and the phone hitched (a fast pull on Home, 10 ms/s).
+private struct CapsuleFrame: ViewModifier {
+    let frame: CGRect
+    let present: Bool
+    var pull: PullRefreshState?
+    /// The wheel's side, as PullRefreshWheel's: it grows with the title's type.
+    @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
+    func body(content: Content) -> some View {
+        let openness: CGFloat = pull.map { $0.refreshing ? 1 : min(1, $0.shown) } ?? 0
+        let open = pull.map { $0.refreshing || $0.shown > 0 } ?? false
+        let width = present ? frame.width + side * 1.4 * openness : 0
+        content
+            .frame(width: width, height: present ? frame.height : 0)
+            .clipShape(.capsule)
+            .glassEffect(present ? .regular : .identity, in: .capsule)
+            .position(x: present ? frame.minX + width / 2 : frame.midX, y: frame.midY)
+            // As the wheel's own slot: with the finger while dragging, a snappy close after.
+            .animation(.snappy(duration: 0.3), value: open)
+    }
+}
+
 private extension View {
     /// Reports this view's frame in the bar's space under its slot. A change after the first
     /// measurement animates (a tab switch moves and resizes the capsules: the morph); a slot
     /// that goes away leaves its last frame so its capsule can fade out where it was.
-    func measured(_ slot: MorphSlot, into frames: Binding<[MorphSlot: CGRect]>, last: Binding<[MorphSlot: CGRect]>? = nil, animated: Bool = true) -> some View {
+    func measured(_ slot: MorphSlot, into frames: Binding<[MorphSlot: CGRect]>, last: Binding<[MorphSlot: CGRect]>? = nil) -> some View {
         onGeometryChange(for: CGRect.self) { $0.frame(in: .named("morph")) } action: { f in
             guard frames.wrappedValue[slot] != f else { return }
-            if animated, frames.wrappedValue[slot] != nil || last?.wrappedValue[slot] != nil {
+            if frames.wrappedValue[slot] != nil || last?.wrappedValue[slot] != nil {
                 withAnimation(.snappy(duration: 0.22)) { frames.wrappedValue[slot] = f }
             } else {
-                var tr = Transaction(); tr.disablesAnimations = true
-                withTransaction(tr) { frames.wrappedValue[slot] = f }
+                frames.wrappedValue[slot] = f
             }
             last?.wrappedValue[slot] = f
         }
