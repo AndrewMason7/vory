@@ -1643,11 +1643,16 @@ struct MarkdownView: View, Equatable {
     }
     @MainActor static func inline(_ text: String) -> AttributedString {
         // Mentions are marked after the cache: they depend on the bots known now, not on the text.
-        Mentions.mark(inlineCached(text), names: Mentions.names)
+        // Most paragraphs mention nobody: those skip the walk over their runs, which ran over every
+        // paragraph of a streaming reply on each token.
+        let a = inlineCached(text)
+        guard text.utf8.contains(UInt8(ascii: "@")) else { return a }
+        return Mentions.mark(a, names: Mentions.names)
     }
     /// The inline text as a view, bot mentions drawn as chips (#321).
     @MainActor static func inlineText(_ text: String) -> some View {
-        Mentions.text(inline(text)).textRenderer(MentionChipRenderer())
+        let a = inline(text)
+        return (text.utf8.contains(UInt8(ascii: "@")) ? Mentions.text(a) : Text(a)).textRenderer(MentionChipRenderer())
     }
     static func inlineCached(_ text: String) -> AttributedString {
         let key = text as NSString

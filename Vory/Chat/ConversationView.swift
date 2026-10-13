@@ -72,11 +72,15 @@ struct ConversationView: View {
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
-                    .onAppear { model.visibleChatID = chat.storedID; model.visibleChat = chat; LocalNotifier.clearDelivered(for: chat.storedID) }
+                    .onAppear {
+                        model.visibleChatID = chat.storedID; model.visibleChat = chat; LocalNotifier.clearDelivered(for: chat.storedID)
+                        Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
+                    }
                     // What arrived for this chat while it was away is read now: its notifications
                     // leave Notification Center (a tester: "notifications won't stop even after
-                    // attending to chat").
-                    .onChange(of: chat.items.count) { _, _ in if model.visibleChatID == chat.storedID { LocalNotifier.clearDelivered(for: chat.storedID) } }
+                    // attending to chat"). In a view of its own: read here, the items made the whole
+                    // page run again on every streamed token.
+                    .background { ClearsDelivered(chat: chat) }
                     .onReceive(NotificationCenter.default.publisher(for: .hermesNewChatRequested)) { n in
                         guard model.visibleChatID == chat.storedID else { return }
                         model.composeProfile = (n.userInfo?["profile"] as? String) ?? chat.profileName
@@ -414,6 +418,23 @@ struct ConversationView: View {
     }
 }
 
+/// Clears the chat's delivered notifications as its items arrive while it is in front. Its own
+/// view so only it depends on the items: a reply writes them on every streamed token, and read in
+/// ConversationView's body they ran the whole page again each time (14 times a second on a long
+/// reply, with its sheets, alerts and the dock re-evaluated).
+private struct ClearsDelivered: View {
+    @Environment(AppModel.self) private var model
+    let chat: ChatSession
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+            .onChange(of: chat.items.count) { old, new in
+                guard model.visibleChatID == chat.storedID else { return }
+                LocalNotifier.clearDelivered(for: chat.storedID)
+                Perf.stamp("notifications: cleared for \(chat.storedID) (items \(old) → \(new) while shown)")
+            }
+    }
+}
+
 /// Composer + queue + cards, in one glass container so the composer morphs into an approval card.
 struct BottomDock: View {
     @Bindable var chat: ChatSession
@@ -655,6 +676,7 @@ struct ChatMenuItems: View {
     var onClose: () -> Void
 
     var body: some View {
+        let _ = Perf.tick("chat-menu-items")
         Menu {
             ModelMenuContent(chat: chat)
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
