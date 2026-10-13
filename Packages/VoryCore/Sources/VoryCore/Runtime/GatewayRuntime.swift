@@ -358,10 +358,15 @@ public final class GatewayRuntime {
         if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
     }
 
+    /// Whether the gateway has answered for its bots yet (an empty list counts): until then
+    /// `profiles` is empty because nothing is known, not because there are none.
+    public private(set) var profilesLoaded = false
+
     public func loadProfiles() async {
         do {
             let r: ProfilesResponse = try await api.get("/api/profiles")
             profiles = r.profiles
+            profilesLoaded = true
             if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
             else if selectedProfile == nil || !profiles.contains(where: { $0.name == selectedProfile }) {
                 let active: ActiveProfileResponse? = try? await api.get("/api/profiles/active")

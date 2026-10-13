@@ -325,6 +325,9 @@ struct ChatListView: View {
             .task(id: runtime?.connection.id) { await load() }
             .task(id: runtime?.selectedProfile) { await load() }
             .task(id: prefs.allBots) { await load() }
+            // The bots arriving (an empty list too) or changing, a rename included: All bots lists
+            // each one's chats.
+            .onChange(of: loadedBotNames) { _, _ in Task { await load() } }
             // The socket coming up is when the gateway becomes reachable; do not wait for a pull.
             .onChange(of: runtime?.socketState) { _, s in if case .open? = s { Task { await load() } } }
             .onReceive(NotificationCenter.default.publisher(for: .hermesSessionsChanged)) { _ in Task { await load() } }
@@ -770,6 +773,17 @@ struct ChatListView: View {
         await load()
     }
 
+    /// The gateway's bot names once it has answered for them, nil before: the list's reload
+    /// trigger when they arrive or change.
+    private var loadedBotNames: [String]? {
+        guard let runtime, runtime.profilesLoaded else { return nil }
+        return runtime.profiles.map(\.name)
+    }
+
+    /// Whether the gateway can be asked for the list: with All bots, only once the gateway has
+    /// answered for its bots (an empty answer counts: such a gateway lists no chats).
+    static func canList(allBots: Bool, botsLoaded: Bool) -> Bool { !allBots || botsLoaded }
+
     private func load(attempt: Int = 0) async {
         guard let runtime else { return }
         let cacheProfile = prefs.allBots ? "*" : runtime.selectedProfile
@@ -778,6 +792,11 @@ struct ChatListView: View {
             // A cold launch before the bot is known: any list for this gateway beats a blank page.
             if sessions.isEmpty { sessions = SessionCache.loadAny(connection: runtime.connection.id) }
         }
+        // All bots before the bots are known (a cold launch: every trigger, the socket's opening
+        // included, can come before /api/profiles answers): nothing to ask for yet, and the empty
+        // answer wiped the list until another page loaded it again (Matt on 1.5 (20)). The list
+        // loads once the bots arrive (the `profiles` trigger above).
+        guard Self.canList(allBots: prefs.allBots, botsLoaded: runtime.profilesLoaded) else { return }
         loading = sessions.isEmpty; defer { loading = false }
         Task {
             await runtime.projects.refresh()
