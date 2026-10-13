@@ -110,6 +110,46 @@ Here is the disk use before and after:
 MEDIA:/home/hermes/.hermes/images/disk-before-after.png"""
 
 
+def digest_history(rounds: int, end: float) -> list[dict]:
+    """A long working chat (MOCK_DIGEST): `rounds` rounds of a question, a short answer with its
+    reasoning, tool rows and a long markdown digest, oldest first, ending at `end`. Generic hosts
+    and teams only."""
+    hosts = ["web-01", "web-02", "db-01", "cache-01", "build-01", "edge-02"]
+    tools = [("terminal", "systemctl status nginx --no-pager"), ("search files", "auth.log failed password"),
+             ("read file", "/etc/nginx/sites-enabled/default"), ("web extract", "https://status.example.com"),
+             ("tool search", "Searching tools · message agent")]
+    out, rid = [], 1
+    for r in range(rounds):
+        t0 = end - (rounds - r) * 900
+        h = hosts[r % len(hosts)]
+        out.append({"role": "user", "text": f"Morning check on {h}: anything I should know?", "timestamp": t0, "row_id": rid}); rid += 1
+        out.append({"role": "assistant", "text": f"Looking at {h} now.", "reasoning": f"Start with the service state on {h}, then the auth log for failed logins, then compare with yesterday's numbers before writing it up.", "timestamp": t0 + 5, "row_id": rid}); rid += 1
+        for k in range(3 + r % 3):
+            name, ctx = tools[(r + k) % len(tools)]
+            out.append({"role": "tool", "name": name, "context": ctx, "timestamp": t0 + 10 + k})
+        image = f"\n\nTraffic over the last day:\nMEDIA:/home/hermes/.hermes/images/disk-before-after.png" if r % 5 == 4 else ""
+        body = (f"## Daily digest: {h}\n\n"
+                f"**Status:** all services up, {12 + r % 7} warnings since yesterday, none new.\n\n"
+                f"### What changed\n\n"
+                f"- Failed logins: {40 + r * 3} from {3 + r % 4} addresses, all blocked by the rate limit\n"
+                f"- Disk on `/var` at {55 + r % 30}%, up {r % 4} points; rotation runs nightly\n"
+                f"- Two package updates are waiting: `openssl` and `curl`, neither marked urgent\n"
+                f"- Certificate for the edge proxy renews in {30 - r % 20} days\n\n"
+                f"### Numbers\n\n"
+                f"| Check | Today | Yesterday | Trend |\n|---|---|---|---|\n"
+                f"| Requests | {120 + r}k | {118 + r}k | up |\n| Errors | {r % 9} | {(r + 3) % 9} | flat |\n"
+                f"| p95 latency | {180 + r % 40} ms | {175 + r % 40} ms | flat |\n| Blocked IPs | {3 + r % 4} | {2 + r % 4} | up |\n\n"
+                f"### Next\n\n"
+                f"1. Apply the two package updates in the Thursday window\n"
+                f"2. Keep an eye on the failed-login count; it has risen for three days\n"
+                f"3. No action needed on the disk yet\n\n"
+                f"The command I used for the login count:\n\n"
+                f"```bash\ngrep -c 'Failed password' /var/log/auth.log\njournalctl -u nginx --since yesterday | tail -n 20\n```\n\n"
+                f"Say the word if you want the updates applied now instead.{image}")
+        out.append({"role": "assistant", "text": body, "timestamp": t0 + 30, "row_id": rid}); rid += 1
+    return out
+
+
 DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper and pull the answers together."""
 
 DELEGATE_PART_2 = """Both are back. The nginx side has one stale block, `staging.example`, pointing at an
@@ -2306,6 +2346,12 @@ class Gateway:
                         {"role": "assistant", "text": REPLY_PART_1 + REPLY_PART_2 + "\n\n" + REPLY_PART_3,
                          "timestamp": row["last_active"], "row_id": 2},
                     ]
+                    # MOCK_DIGEST=n: a long working chat for the thread's scroll checks (1.5 (23)): n rounds of
+                    # a question, a reply with its reasoning, three to five tool rows and a long digest
+                    # (headings, lists, a code block, a table, an image every fifth round). Generic names.
+                    digest = int(os.environ.get("MOCK_DIGEST", "0") or 0)
+                    if digest > 0:
+                        live.history = digest_history(digest, row["last_active"])
                     # MOCK_LONG=n: the same exchange n times over, for scroll-performance checks.
                     reps = int(os.environ.get("MOCK_LONG", "1") or 1)
                     if reps > 1:
