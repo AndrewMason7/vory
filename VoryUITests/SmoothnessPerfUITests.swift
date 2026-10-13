@@ -492,6 +492,29 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(plus.waitForExistence(timeout: 5) && plus.isHittable, "Back did not go to the Bots page")
     }
 
+    /// A sheet from a root and back (Bots' and Projects' +, then Cancel): the probes take the
+    /// presentation for no push, so the bar stays at the root (its +, no Back) and nothing is recorded.
+    /// No root presents a full-screen cover; these sheets are the roots' only presentations.
+    func testRootSheetKeepsBar() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token, tab: "bots", extra: ["-vory-geometry-probe"])
+        func shot(_ name: String) { let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a) }
+        let pushRecord = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'probe push '")).firstMatch
+        for (tab, id) in [("bots", "bots.newBot"), ("projects", "projects.new")] {
+            let slot = any("tab.\(tab)")
+            guard slot.waitForExistence(timeout: 3) else { print("ROOT-SHEET no \(tab) tab"); continue }
+            slot.tap(); pause(1.5)
+            let plus = any(id)
+            XCTAssertTrue(plus.waitForExistence(timeout: 10), "no + on \(tab)")
+            plus.tap()
+            XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5), "\(tab)'s sheet did not open")
+            pause(0.5); app.buttons["Cancel"].tap(); pause(1.5); shot("\(tab)-after-sheet")
+            XCTAssertFalse(any("page.back").exists, "\(tab) shows a Back after its sheet closed")
+            XCTAssertTrue(plus.exists && plus.isHittable, "\(tab)'s + is gone after its sheet closed")
+            XCTAssertFalse(pushRecord.exists, "\(tab)'s sheet was taken for a push: \(pushRecord.exists ? pushRecord.label : "")")
+        }
+    }
+
     /// A page pushed on Settings, then Chats and back: the pushed page's Back belongs to its tab
     /// (Chats shows its own title and no Back), and it is there again back on Settings.
     func testPushedPageTabSwitch() throws {

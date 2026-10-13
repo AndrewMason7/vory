@@ -392,10 +392,10 @@ struct TabRoot: ViewModifier {
 /// push from it starts) and uncovered (a pop back to it starts), with the transition's
 /// coordinator; each page pushed gets one of its own (`PageProbe`), which hears the next push
 /// from it, so a page at any depth hides its own Back; and a display link runs only while a
-/// finger has a pop back to the root, for the scrub. Nothing runs at rest (the battery rule, #248; the 60 Hz poll this replaced cost 1.3%
-/// CPU on a root at rest). Not the stack's delegate: wrapped in a forwarder, SwiftUI pushed every
-/// page without its slide (1.5 (18), Matt: "there's no longer an animation when clicking into
-/// panes").
+/// finger has a pop back to the root, for the scrub. Nothing runs at rest (the battery rule, #248;
+/// the 60 Hz poll this replaced cost 1.3% CPU on a root at rest). Not the stack's delegate:
+/// wrapped in a forwarder, SwiftUI pushed every page without its slide (1.5 (18), Matt: "there's
+/// no longer an animation when clicking into panes").
 struct RootArrivalProbe: UIViewControllerRepresentable {
     /// The last decision, for the geometry probe's banner (a UI test reads it; observable, so the
     /// banner follows a push past the root, which changes nothing else on screen).
