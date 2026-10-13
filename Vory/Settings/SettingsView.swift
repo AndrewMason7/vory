@@ -209,7 +209,12 @@ struct GatewaysView: View {
                             .buttonStyle(.plain).frame(width: 20)
                             .accessibilityLabel("Edit \(c.name)").accessibilityIdentifier("gateways.edit")
                         #else
-                        NavigationLink { GatewayFormView(existing: c).pushedPage(keepsOwnBar: true) } label: { EmptyView() }.frame(width: 20)
+                        // Its chevron where it was, with a 44 pt target and a name (an audit found a
+                        // 7 × 12 button with none); the row's own tap still makes the gateway active.
+                        NavigationLink { GatewayFormView(existing: c).pushedPage(keepsOwnBar: true) } label: { EmptyView() }
+                            .frame(width: 44, height: 44, alignment: .trailing)
+                            .contentShape(.rect)
+                            .accessibilityLabel("Edit \(c.name)")
                         #endif
                     }
                     .rowActions { Button(role: .destructive) { pendingDelete = c } label: { Label("Delete", systemImage: "trash") } }
