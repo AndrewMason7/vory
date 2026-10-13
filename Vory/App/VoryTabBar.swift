@@ -530,7 +530,7 @@ struct RootArrivalProbe: UIViewRepresentable {
             guard active else { return }
             let state = MorphState.shared
             if deep {
-                if let top = nav.topViewController, top.navigationItem.hidesBackButton == false { hideChrome(of: top) }
+                if let top = nav.topViewController { hideChrome(of: top) }
                 // Pushed without a transition (a restored path): the Back at once.
                 if !was, state.pushedTab == nil { state.pushPage(tab) }
             } else if was, state.pushedTab == tab, !state.scrubbing, state.t < 1 {
@@ -577,14 +577,22 @@ struct RootArrivalProbe: UIViewRepresentable {
         private var keepsTitle: Bool { true }
 
         /// The pushed page keeps its content and its title; its system back button is the bar's.
+        /// A page without a title gets an empty title view all the same: with its back button gone
+        /// its bar had nothing in it, and an empty bar collapses (a Settings page's content rose
+        /// under the Back circle after a cancelled swipe). Again once its title is known.
         private func hideChrome(of vc: UIViewController) {
-            vc.navigationItem.hidesBackButton = true
-            if !keepsTitle { vc.navigationItem.titleView = UIView() }
+            let item = vc.navigationItem
+            item.hidesBackButton = true
+            let titled = keepsTitle && !(item.title ?? "").isEmpty
+            if !titled, !(item.titleView is BarHolder) { item.titleView = BarHolder() }
+            else if titled, item.titleView is BarHolder { item.titleView = nil }
         }
+        /// An empty title view: holds an untitled pushed page's bar at its height.
+        private final class BarHolder: UIView {}
 
         private func showChrome(of vc: UIViewController) {
             vc.navigationItem.hidesBackButton = false
-            vc.navigationItem.titleView = nil
+            if vc.navigationItem.titleView is BarHolder { vc.navigationItem.titleView = nil }
         }
 
         func popOnePage() {
