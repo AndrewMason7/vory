@@ -659,7 +659,7 @@ struct RestartCountdownRows: View {
             if setup.restartError?.localizedCaseInsensitiveContains("expired") == true || setup.restartError?.localizedCaseInsensitiveContains("401") == true {
                 #if os(macOS)
                 Button { signingIn = true } label: { Label("Sign in again", systemImage: "person.badge.key") }
-                    .sheet(isPresented: $signingIn) { GatewayFormSheet(existing: runtime.connection) }
+                    .sheet(isPresented: $signingIn) { GatewayFormSheet(existing: runtime.connection).withAppModel() }
                 #else
                 NavigationLink { GatewayFormView(existing: runtime.connection).pushedPage(keepsOwnBar: true) } label: { Label("Sign in again", systemImage: "person.badge.key") }
                 #endif

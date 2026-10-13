@@ -43,7 +43,7 @@ struct StatusView: View {
                     Button { signingIn = true } label: { HStack { rowLabel("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(.rect) }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Sign-in: \(signInDetail(s, rt))").accessibilityIdentifier("status.signIn")
-                        .sheet(isPresented: $signingIn) { GatewayFormSheet(existing: rt.connection) }
+                        .sheet(isPresented: $signingIn) { GatewayFormSheet(existing: rt.connection).withAppModel() }
                     #else
                     row("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)) { GatewayFormView(existing: rt.connection).pushedPage(keepsOwnBar: true) }
                     #endif

@@ -250,7 +250,7 @@ struct GatewaysView: View {
         .untitledPage()
         .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame().withAppModel() }
         #if os(macOS)
-        .sheet(item: $editing) { c in GatewayFormSheet(existing: c) }
+        .sheet(item: $editing) { c in GatewayFormSheet(existing: c).withAppModel() }
         #endif
         .alert("Remove gateway?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Remove", role: .destructive) { if let c = pendingDelete { Task { await model.deleteConnection(c.id) } } }

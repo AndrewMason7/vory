@@ -528,7 +528,7 @@ private struct GatewayFooter: View {
         .accessibilityHint("Edits the gateway.")
         .accessibilityIdentifier("rail.gateway")
         .disabled(model.store.active == nil)
-        .sheet(isPresented: $editing) { GatewayFormSheet(existing: model.store.active) }
+        .sheet(isPresented: $editing) { GatewayFormSheet(existing: model.store.active).withAppModel() }
     }
 }
 
@@ -540,7 +540,6 @@ struct GatewayFormSheet: View {
     var body: some View {
         NavigationStack { GatewayFormView(existing: existing) }
             .frame(minWidth: 520, minHeight: 640)
-            .withAppModel()
     }
 }
 
