@@ -212,6 +212,11 @@ import Testing
         let bot = "arrival-test-bot"
         defer { a.tapped[bot] = nil }
         a.markArrival(profile: bot)
+        #if os(macOS)
+        // The Mac has no tap reaction and no arrival (Matt, 2026-10-13): nothing is held back.
+        #expect(!a.arrivalWaits(profile: bot) && !a.arrive(profile: bot), "the Mac kept an arrival")
+        #expect(!BotMotionModel.Reaction.plays, "a tap plays on the Mac")
+        #else
         let now = Date()
         // A face mounting on the arriving page holds its reaction until the landing.
         #expect(a.arrivalWaits(profile: bot) && !a.arrivalWaits(profile: "another-bot") && !a.arrivalWaits(profile: nil))
@@ -225,6 +230,7 @@ import Testing
         #expect(!a.arrivalWaits(profile: bot), "a stale arrival was not dropped")
         a.markArrival(profile: bot)
         #expect(!a.arrive(profile: bot, now: Date().addingTimeInterval(4)), "a stale arrival played")
+        #endif
     }
 
     @Test func snappingIsAStillFrameOfTheState() {

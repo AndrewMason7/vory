@@ -1058,8 +1058,14 @@ public final class BotAmbient {
     /// still (the tapped face still reacts).
     public static let arrivalOff = ProcessInfo.processInfo.arguments.contains("-vory-tap-arrival-off")
     public func markArrival(profile: String) {
+        // The Mac has no tap reaction (Matt, 2026-10-13), so no arrival either: its pages never
+        // reported their landing, and a waiting arrival only held faces back.
+        #if os(macOS)
+        return
+        #else
         guard !Self.arrivalOff else { return }
         pendingArrival = (profile, Date())
+        #endif
     }
     /// Whether a face mounting now holds its reaction for the landing: an arrival is waiting for
     /// its bot, so the page it sits on is still coming in (it plays at `arrive`, not mid-slide).
