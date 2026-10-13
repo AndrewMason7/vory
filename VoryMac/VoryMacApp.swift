@@ -199,6 +199,10 @@ struct VoryMacApp: App {
         } label: {
             // A waveform while a voice session is live, else the turns and approvals.
             Image(systemName: voiceSession.isActive ? "waveform.badge.mic" : board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
+                // VoiceOver read the symbol's own name ("Mostly Cloudy" for the cloud): the app's
+                // name instead, with what is going on, in the words the panel and the rail use (a
+                // separate value does not reach the status item, so it rides in the name).
+                .accessibilityLabel(voiceSession.isActive ? "Vory, voice mode" : board.attention > 0 ? "Vory, \(board.attention) need\(board.attention == 1 ? "s" : "") you" : board.running > 0 ? "Vory, \(board.running) working" : "Vory")
         }
         .menuBarExtraStyle(.window)
 
