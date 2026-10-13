@@ -334,31 +334,31 @@ final class TabBarGapsUITests: XCTestCase {
         let worst = pressWatching(barButtons) {
             if app != nil, app.state == .runningForeground { app.terminate() }
             launch(url: url, token: token, tab: "bots")
-            XCTAssertTrue(any("bots.actions.default").waitForExistence(timeout: 15), "no Bots page")
+            XCTAssertTrue(any("bots.card.default").waitForExistence(timeout: 15), "no Bots page")
             pause(2)
             let cap = barShapes().capsule
             // A card is about 120 pt: its top 80 pt over the bar puts its pill under the buttons.
             let target = cap.minY - 80
-            let menus = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'bots.actions.'"))
-            var menu: XCUIElement?
+            let cards = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'bots.card.'"))
+            var card: XCUIElement?
             for _ in 0..<9 {
-                // A card's top is its … less its 4 pt lift; the nearest one below the spot.
-                guard let m = menus.allElementsBoundByIndex.filter({ $0.exists && $0.frame.minY + 4 >= target - 2 }).min(by: { $0.frame.minY < $1.frame.minY }) else { break }
-                menu = m
-                let delta = target - (m.frame.minY + 4)
+                // The nearest card below the spot.
+                guard let c = cards.allElementsBoundByIndex.filter({ $0.exists && $0.frame.minY >= target - 2 }).min(by: { $0.frame.minY < $1.frame.minY }) else { break }
+                card = c
+                let delta = target - c.frame.minY
                 if abs(delta) < 3 { break }
                 let step = max(-480, abs(delta) < 25 ? delta - 40 : delta - 10)
                 let start = CGPoint(x: app.frame.midX, y: step > 0 ? 260 : 660)
                 at(start).press(forDuration: 0.1, thenDragTo: at(CGPoint(x: start.x, y: start.y + step)), withVelocity: .slow, thenHoldForDuration: 0.6)
                 pause(1.2)
             }
-            guard let menu, menu.frame.minY + 4 < cap.minY - 40 else { XCTFail("no bot card brought to the bar"); return nil }
-            let top = menu.frame.minY + 4
+            guard let card, card.frame.minY < cap.minY - 40 else { XCTFail("no bot card brought to the bar"); return nil }
+            let top = card.frame.minY
             print("TAB-PRESS bot card at \(top) bar \(cap)")
             // The card's name pill, the glass that grew (its face above is not glass): its part over
-            // the bar, the card's grid column wide (the …'s right edge is 8 pt past the card).
+            // the bar, the card's width.
             let pillTop = top + 60
-            return CGRect(x: menu.frame.maxX - 8 - 178 - 8, y: pillTop - 4, width: 178 + 16, height: cap.minY - 4 - (pillTop - 4))
+            return CGRect(x: card.frame.minX - 8, y: pillTop - 4, width: card.frame.width + 16, height: cap.minY - 4 - (pillTop - 4))
         }
         for (id, d) in worst.sorted(by: { $0.key < $1.key }) {
             XCTAssertLessThan(d, pressedChange, "pressing \(id) showed the bot card behind the bar pressed (\(String(format: "%.1f", d * 100))% of its visible part changed)")

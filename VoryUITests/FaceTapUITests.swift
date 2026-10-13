@@ -40,13 +40,10 @@ final class FaceTapUITests: XCTestCase {
     func testACardsFaceOpensTheBot() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token, tab: "bots")
-        let actions = any("bots.actions.work")
-        XCTAssertTrue(actions.waitForExistence(timeout: 30), "no work card on Bots")
+        // The card; the face is the 78 pt square at its top, centred.
+        let card = any("bots.card.work")
+        XCTAssertTrue(card.waitForExistence(timeout: 30), "no work card on Bots")
         pause(2)
-        // The card: its combined label starts with the bot's name; the face is the 78 pt square
-        // at its top, centred.
-        let card = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'work, ' AND NOT (identifier BEGINSWITH 'bots.actions')")).firstMatch
-        XCTAssertTrue(card.exists, "no work card")
         let f = card.frame
         print("FACE-TAP card \(f)")
         at(f.midX, f.minY + 39).tap(); pause(1.5); shot("card-face-tap")
