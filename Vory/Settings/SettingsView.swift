@@ -200,7 +200,7 @@ struct GatewaysView: View {
                         }
                         .buttonStyle(.plain)
                         Spacer()
-                        NavigationLink { GatewayFormView(existing: c).pushedPage(keepsOwnBar: true, ownCancel: true) } label: { EmptyView() }.frame(width: 20)
+                        NavigationLink { GatewayFormView(existing: c).pushedPage(keepsOwnBar: true) } label: { EmptyView() }.frame(width: 20)
                     }
                     .rowActions { Button(role: .destructive) { pendingDelete = c } label: { Label("Delete", systemImage: "trash") } }
                 }
@@ -232,7 +232,7 @@ struct GatewaysView: View {
                     Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
                     if case .authRejected(let why) = rt.socketState {
                         Text(why).font(.footnote).foregroundStyle(.red)
-                        NavigationLink("Sign in again") { GatewayFormView(existing: rt.connection).pushedPage(keepsOwnBar: true, ownCancel: true) }
+                        NavigationLink("Sign in again") { GatewayFormView(existing: rt.connection).pushedPage(keepsOwnBar: true) }
                     }
                 }
             }

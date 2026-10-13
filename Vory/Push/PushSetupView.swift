@@ -655,7 +655,7 @@ struct RestartCountdownRows: View {
             Button { Task { await setup.restartNow(runtime: runtime) } } label: { Label("Restart Gateway now", systemImage: "arrow.clockwise") }
             Button { Task { await setup.checkRestartNow(runtime: runtime) } } label: { Label("Check now", systemImage: "waveform.path.ecg") }
             if setup.restartError?.localizedCaseInsensitiveContains("expired") == true || setup.restartError?.localizedCaseInsensitiveContains("401") == true {
-                NavigationLink { GatewayFormView(existing: runtime.connection).pushedPage(keepsOwnBar: true, ownCancel: true) } label: { Label("Sign in again", systemImage: "person.badge.key") }
+                NavigationLink { GatewayFormView(existing: runtime.connection).pushedPage(keepsOwnBar: true) } label: { Label("Sign in again", systemImage: "person.badge.key") }
                 Text("If the gateway already came back, Settings › Companion will show it running; sign in again and the restart is not needed.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
