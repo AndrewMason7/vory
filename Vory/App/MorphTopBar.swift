@@ -874,6 +874,8 @@ private struct CapsuleFrame: ViewModifier {
         let width = present ? frame.width + (open ? side * 1.4 * widen : 0) : 0
         content
             .frame(width: width, height: present ? frame.height : 0)
+            // The page's glass under the capsule stays still when it is touched (#344).
+            .barShieldShape()
             .clipShape(.capsule)
             .glassEffect(present ? .regular : .identity, in: .capsule)
             .position(x: present ? frame.minX + width / 2 : frame.midX, y: frame.midY)
