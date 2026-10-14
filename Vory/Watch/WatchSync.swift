@@ -83,10 +83,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
     /// route does not reach the gateway. `sendMessage` wakes this app in the background; the
     /// background task keeps it awake until the answer is sent.
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-        let reply = UncheckedBox(replyHandler)
+        let hold = WatchRequestHold(reply: replyHandler)
         let incoming = UncheckedBox(message)
         Task { @MainActor in
-            let hold = WatchRequestHold(reply: reply.value)
             hold.finish(await WatchSync.handle(incoming.value))
         }
     }
@@ -260,24 +259,37 @@ enum RelayParts {
 /// A watch request in flight: keeps the phone awake until the answer is sent, and answers
 /// with an error if the system ends the background time first (the app was killed for a task
 /// left running). The watch gets exactly one answer.
-@MainActor
-final class WatchRequestHold {
+///
+/// The time is a `BackgroundTime` (held off the main thread), taken as the message arrives
+/// rather than once the main actor gets to it: the expiry answers the watch and gives the time
+/// back from the activity's queue, so a main thread busy with a long turn's events cannot keep
+/// the app holding time it no longer has (#371).
+final class WatchRequestHold: @unchecked Sendable {
     private let reply: ([String: Any]) -> Void
-    private var task = UIBackgroundTaskIdentifier.invalid
+    private let lock = NSLock()
     private var answered = false
+    private var time: BackgroundTime?
 
-    init(reply: @escaping ([String: Any]) -> Void) {
+    init(reply: @escaping ([String: Any]) -> Void, start: BackgroundTime.Start = BackgroundTime.system) {
         self.reply = reply
-        task = UIApplication.shared.beginBackgroundTask(withName: "watch-request") { [weak self] in
-            MainActor.assumeIsolated { self?.finish(RelayWire.unavailable("The iPhone ran out of background time.")) }
+        time = BackgroundTime("watch-request", start: start) { [weak self] in
+            self?.answer(RelayWire.unavailable("The iPhone ran out of background time."))
         }
     }
 
     func finish(_ result: [String: Any]) {
-        if !answered { answered = true; reply(result) }
-        if task != .invalid { UIApplication.shared.endBackgroundTask(task); task = .invalid }
+        answer(result)
+        time?.end()
+    }
+
+    private func answer(_ result: [String: Any]) {
+        let first = lock.withLock { () -> Bool in
+            defer { answered = true }
+            return !answered
+        }
+        if first { reply(result) }
     }
 }
 
-/// WCSession's reply handler is not Sendable; it is invoked exactly once from the main actor.
+/// For what WCSession hands over that is not Sendable (a message), passed on to the main actor once.
 final class UncheckedBox<T>: @unchecked Sendable { let value: T; init(_ v: T) { value = v } }
