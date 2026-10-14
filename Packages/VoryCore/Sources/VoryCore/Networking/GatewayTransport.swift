@@ -85,11 +85,15 @@ public struct GatewayTransport: Sendable {
     /// The pipe a socket reads and writes frames on, for a request to open it. The session is
     /// one the caller keeps for its sockets (the board's), or nil.
     public var makeFramePipe: @Sendable (URLRequest, URLSession?) -> any GatewayFramePipe
+    /// The runtime has stopped: what the transport holds for it goes (the demo's binding of its requests to its gateway).
+    public var stop: @Sendable () -> Void
 
     public init(makeHTTPSession: @escaping @Sendable () -> URLSession,
-                makeFramePipe: @escaping @Sendable (URLRequest, URLSession?) -> any GatewayFramePipe) {
+                makeFramePipe: @escaping @Sendable (URLRequest, URLSession?) -> any GatewayFramePipe,
+                stop: @escaping @Sendable () -> Void = {}) {
         self.makeHTTPSession = makeHTTPSession
         self.makeFramePipe = makeFramePipe
+        self.stop = stop
     }
 
     /// A gateway on the network, as every connection has always been reached.

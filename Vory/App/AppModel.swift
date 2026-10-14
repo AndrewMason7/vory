@@ -308,6 +308,8 @@ final class AppModel {
         // next turn of the run loop, when this model exists).
         #if DEBUG
         DemoMode.addGateway(to: store)
+        // `-vory-demo`: start on the built-in demo gateway (#392), before the welcome screen has its button.
+        if ProcessInfo.processInfo.arguments.contains("-vory-demo") { store.activeConnectionID = GatewayConnection.demoID }
         #endif
         // The bots' own names (#315) before anything reads a label.
         BotNames.install()
@@ -331,7 +333,7 @@ final class AppModel {
         #endif
     }
 
-    var hasConnections: Bool { !store.connections.isEmpty }
+    var hasConnections: Bool { !store.connections.isEmpty || store.demo != nil }
 
     #if DEBUG
     /// `-vory-show-signin`: the gateway in use is treated as needing a sign-in, so the banner
@@ -405,8 +407,9 @@ final class AppModel {
             await rt.stop()
         }
         store.activeConnectionID = connection.id
-        let rt = GatewayRuntime(connection: connection, store: store)
-        rt.pushRegistrar = push
+        // The demo (#392) runs on its own gateway inside the app, and registers nowhere for push.
+        let rt = GatewayRuntime(connection: connection, store: store, transport: connection.isDemo ? .demo(DemoGateway()) : .network)
+        if !rt.isEphemeral { rt.pushRegistrar = push }
         rt.cardNotifier = LocalCardNotifier()
         #if os(iOS)
         rt.activityReporterFactory = { LiveActivityController() }

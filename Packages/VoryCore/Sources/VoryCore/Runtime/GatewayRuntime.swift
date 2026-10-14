@@ -364,6 +364,7 @@ public final class GatewayRuntime {
         globalEventTask?.cancel()
         kanban.stopEvents()
         await socket.disconnect()
+        transport.stop()
     }
 
     public func reconnectNow() async {
