@@ -109,4 +109,25 @@ final class ChatRestUITests: XCTestCase {
         open("marathon")
         check("one-screen")
     }
+
+    /// #172 (a tester on build 21: "The contents keep scrolling below the input box"): a short new
+    /// chat whose turn's only output is reasoning with its stats footer (the mock's "power
+    /// rankings", where the gateway files the whole answer as reasoning). At rest the last row,
+    /// the footer, sits over the composer with the designed margin, as the turn ends and when the
+    /// chat is opened again, and a small drag in the band does not move it.
+    func testAReasoningOnlyReplyRestsAndHolds() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        launch(url: url, token: token)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup'")).firstMatch.waitForExistence(timeout: 40), "no chat rows")
+        any("chats.new").tap()
+        let composer = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 20), "no composer")
+        composer.tap(); composer.typeText("open-weight power rankings, please"); pause(0.5)
+        any("composer.send").tap()
+        XCTAssertTrue(app.buttons["Dictate"].firstMatch.waitForExistence(timeout: 60), "the reply did not end")
+        check("reasoning-only")
+        any("chat.back").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(2)
+        open("power rankings")
+        check("reasoning-only-reopened")
+    }
 }
