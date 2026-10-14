@@ -59,6 +59,7 @@ struct VoryApp: App {
                         LocalNotifier.isForeground = true
                         // A reply that streamed while the app was away is drawn now, once.
                         model.runtime?.isAway = false
+                        BotAmbient.shared.displayAsleep = false
                         BotMotionSource.shared.apply(active: true)
                         model.lock.willEnterForeground()
                         // "Last checked" moves every time the app comes forward, and the day's
@@ -96,6 +97,9 @@ struct VoryApp: App {
                         model.runtime?.isAway = true
                         CloudBackupTask.schedule()
                         AwayWatch.shared.left(runtime: model.runtime)
+                        // Every face holds still out of sight, as on a sleeping Mac: a working bot's
+                        // face redrew the chat's header at the display's rate in the background (#371).
+                        BotAmbient.shared.displayAsleep = true
                         BotMotionSource.shared.apply(active: false)
                         LocalNotifier.isForeground = false
                         model.lock.didEnterBackground()
