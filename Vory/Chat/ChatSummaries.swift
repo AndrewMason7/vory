@@ -172,6 +172,8 @@ final class ChatSummarizer {
         draining = true
         let job = pending.removeFirst()
         Task(priority: .utility) {
+            // Away, the on-device model waits for the return (#371): the queue keeps its place.
+            while AppModel.shared.runtime?.isAway == true { try? await Task.sleep(for: .seconds(2)) }
             switch job {
             case .session(let session, let runtime, let profile):
                 await generate(session, runtime: runtime, profile: profile)

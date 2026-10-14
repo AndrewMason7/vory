@@ -104,6 +104,10 @@ final class ChatGoals {
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, let rt = self.runtime else { return }
+                // Away, no goal lines: each look walks every working chat's transcript and may
+                // start the on-device model, on a main thread the system wants quiet in the
+                // background (#371). The card keeps its line until the return.
+                if rt.isAway { try? await Task.sleep(for: .seconds(2)); continue }
                 let working = rt.chats.filter { $0.isRunning && !$0.storedID.isEmpty }.map { Working($0, earlier: self.goals[$0.storedID]?.text) }
                 self.tick(working) { [weak rt] id in
                     rt?.chatForStored(id).flatMap { $0.isRunning ? ChatGoals.turnKey($0.items) : nil }
