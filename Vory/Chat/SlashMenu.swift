@@ -105,7 +105,13 @@ enum SlashMenu {
     /// lists the commands A to Z, then the skills most used first, leaving out the bundled skills
     /// nobody has used (the gateway's menus do the same; a search still finds them). A search
     /// ranks by the score, commands before skills on a tie, then use, then name.
-    static func commandItems(_ catalog: CommandsCatalog, query: String) -> [Item] {
+    /// The commands that act on a chat's own state or a turn under way: there is neither before
+    /// the chat exists, so a draft's list (the New Message sheet) leaves them out. The rest
+    /// (models, reasoning, a title, skills, plugin and quick commands) go out as its first turn.
+    static let notBeforeAChat: Set<String> = ["stop", "approve", "deny", "new", "reset", "clear", "undo", "retry",
+                                              "compress", "usage", "history", "queue", "steer"]
+
+    static func commandItems(_ catalog: CommandsCatalog, query: String, draft: Bool = false) -> [Item] {
         let meta = Dictionary((catalog.commands ?? [:]).map { (key($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
         let skills = Dictionary((catalog.skills ?? [:]).map { (key($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
         struct Row { var item: Item; var usage: Int; var unusedBundled: Bool }
@@ -115,6 +121,7 @@ enum SlashMenu {
             let name = pair.name.hasPrefix("/") ? String(pair.name.dropFirst()) : pair.name
             let k = key(name)
             guard !k.isEmpty, seen.insert(k).inserted else { continue }
+            if draft, notBeforeAChat.contains(k) { continue }
             if let s = skills[k] {
                 rows.append(Row(item: Item(kind: .skill, name: name, detail: pair.description),
                                 usage: s.usage ?? 0, unusedBundled: s.origin == "bundled" && (s.usage ?? 0) == 0))

@@ -4,6 +4,28 @@ import SwiftUI
 import UniformTypeIdentifiers
 import VoryCore
 
+/// What a composer is for: a chat's own, or the New Message sheet's first message (#27), on a
+/// draft (`ChatSession.isDraft`): its send starts the chat, its mic starts voice mode while the
+/// message is empty (Matt, 2026-10-13: the sheet's mic as it was), and to several bots (a group
+/// chat) it takes words and "@" only, since a group starts with words and each bot keeps its model.
+enum ComposerRole {
+    case chat
+    case newMessage(NewMessage)
+
+    struct NewMessage {
+        /// Several bots in To:.
+        var group: Bool
+        /// A bot is chosen: until then nothing can be written.
+        var enabled: Bool
+        var placeholder: String
+        /// The words to start the chat with (the draft holds the files and the picks).
+        var send: (String) -> Void
+        var voice: () -> Void
+        /// Changed when a bot is added in To:: the cursor goes to the message.
+        var focus: Int = 0
+    }
+}
+
 struct ComposerView: View {
     @Bindable var chat: ChatSession
     @Binding var text: String
@@ -12,6 +34,10 @@ struct ComposerView: View {
     /// The dock's morph namespace: the text capsule (alone, not the whole stack — the steer strip
     /// and the command list come and go under it) is what an approval card morphs from.
     var namespace: Namespace.ID
+    var role: ComposerRole = .chat
+    private var newMessage: ComposerRole.NewMessage? { if case .newMessage(let n) = role { n } else { nil } }
+    /// Several bots: no + panel, no "/" list, no model chip.
+    private var group: Bool { newMessage?.group == true }
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
@@ -120,7 +146,7 @@ struct ComposerView: View {
 
     /// The chooser above the field: the gateway's commands and skills while a "/word" is typed,
     /// its models after "/model " (see SlashMenu).
-    private var menuContext: SlashMenu.Context? { showingRecalled ? nil : SlashMenu.context(for: text) }
+    private var menuContext: SlashMenu.Context? { showingRecalled || group ? nil : SlashMenu.context(for: text) }
 
     /// The chooser's context while it is open (not closed with Escape).
     private var openMenuContext: SlashMenu.Context? { menuDismissed ? nil : menuContext }
@@ -128,9 +154,9 @@ struct ComposerView: View {
     private var menuItems: [SlashMenu.Item] {
         guard let ctx = openMenuContext else { return [] }
         switch ctx.kind {
-        case .command: return catalog.map { SlashMenu.commandItems($0, query: ctx.query) } ?? []
+        case .command: return catalog.map { SlashMenu.commandItems($0, query: ctx.query, draft: chat.isDraft) } ?? []
         case .model:
-            return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, currentProvider: chat.info?.provider, query: ctx.query) } ?? []
+            return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, currentProvider: chat.providerSlug, query: ctx.query) } ?? []
         }
     }
 
@@ -421,13 +447,13 @@ struct ComposerView: View {
         // The model list behind the chip, fetched before its first open.
         .task { await chat.warmModelOptions() }
         // The cursor comes back after a layout switch rebuilt the chat (`ChatViewMemory`).
-        .onAppear { if ChatViewMemory.focused.contains(ChatViewMemory.key(for: chat)) { focused = true } }
-        .onDisappear { ChatViewMemory.setFocused(focused, for: chat) }
+        .onAppear { if !chat.isDraft, ChatViewMemory.focused.contains(ChatViewMemory.key(for: chat)) { focused = true } }
+        .onDisappear { if !chat.isDraft { ChatViewMemory.setFocused(focused, for: chat) } }
         #endif
         #if os(macOS)
         // A new chat on the Mac (⌘N, the list's button, an intent) opens with the cursor in
         // the box, ready to type, as the box is after a message goes out (#212).
-        .onAppear { if chat.items.isEmpty { focused = true } }
+        .onAppear { if chat.items.isEmpty, !chat.isDraft { focused = true } }
         #endif
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
@@ -446,7 +472,8 @@ struct ComposerView: View {
     /// The field itself (its own view: the body's one expression grew past what the compiler
     /// types in reasonable time).
     private var textField: some View {
-        ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, maxLines: visibleLines, accessibilityID: "composer.text",
+        ComposerTextView(text: $text, placeholder: newMessage?.placeholder ?? "Type / for commands", focused: $focused, maxLines: visibleLines,
+                         accessibilityID: newMessage != nil ? "newchat.text" : "composer.text",
                          onSend: { Task { await send() } },
                          onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
                          onArrow: { moveSelection($0) || recallHistory($0) },
@@ -457,7 +484,10 @@ struct ComposerView: View {
                          onEscape: { dismissMenu() })
             .padding(.horizontal, 4).padding(.top, 2)
             .frame(minHeight: 30)
-            .task { catalog = await chat.commandsCatalog() }
+            .task(id: chat.profile) { if !group { catalog = await chat.commandsCatalog() } }
+            // Another bot in the New Message sheet's To: is another draft: its own model list.
+            .onChange(of: ObjectIdentifier(chat)) { _, _ in modelOptions = nil; menuMark = nil }
+            .onChange(of: newMessage?.focus) { _, f in if f != nil, newMessage?.enabled == true { focused = true } }
             // The model list loads when "/model " is first typed, and is kept for this chat.
             .task(id: menuContext?.kind == .model) { if menuContext?.kind == .model { await loadModelOptions() } }
             // A new word (or the model list after "/model") opens a dismissed chooser again,
@@ -525,15 +555,19 @@ struct ComposerView: View {
                     .transition(.opacity)
             } else {
                 textField
+                    // The New Message sheet: nothing to write until a bot is chosen.
+                    .disabled(newMessage?.enabled == false)
                     #if os(iOS)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { fieldFrame = $0 }
                     #endif
             }
             HStack(alignment: .center, spacing: 8) {
-                attachMenu.layoutPriority(1)
-                // The chip gives way first: at the accessibility sizes it shortened to its
-                // level alone and the send button was cut by the card's edge.
-                modelChip
+                if !group {
+                    attachMenu.layoutPriority(1).disabled(newMessage?.enabled == false)
+                    // The chip gives way first: at the accessibility sizes it shortened to its
+                    // level alone and the send button was cut by the card's edge.
+                    modelChip
+                }
                 Spacer(minLength: 0)
                 contextRing
                 trailingControl.layoutPriority(1)
@@ -635,7 +669,7 @@ struct ComposerView: View {
                     Text(chat.modelName.isEmpty ? "Model" : Self.shortModel(chat.modelName)).lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(.primary.opacity(0.85))
                 }
-                Text(ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "medium")).lineLimit(1)
+                Text(ReasoningEffort.name(of: chat.reasoningEffort ?? "medium")).lineLimit(1)
                     .foregroundStyle(.secondary)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
             }
@@ -652,7 +686,7 @@ struct ComposerView: View {
         .onHover { chipHovered = $0 }
         #endif
         .accessibilityIdentifier("composer.modelChip")
-        .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.name(of: chat.info?.reasoningEffort ?? "medium"))")
+        .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.name(of: chat.reasoningEffort ?? "medium"))")
     }
 
     static func shortModel(_ m: String) -> String {
@@ -711,7 +745,9 @@ struct ComposerView: View {
     }
 
     @ViewBuilder private var trailingControl: some View {
-        if dictation.isListening {
+        if let newMessage {
+            newMessageControl(newMessage)
+        } else if dictation.isListening {
             TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
         } else if dictation.isTranscribing {
             // The recording is being turned into words (on the gateway or here).
@@ -761,7 +797,7 @@ struct ComposerView: View {
                 .frame(width: 36, height: 36)
                 .glassEffect(.regular.interactive(), in: .circle)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { attachButtonFrame = $0 }
-            .accessibilityIdentifier("composer.attach")
+            .accessibilityIdentifier(newMessage != nil ? "newchat.attach" : "composer.attach")
         }
         .buttonStyle(.plain)
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
@@ -789,7 +825,9 @@ struct ComposerView: View {
         items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
         // Not while voice mode has the microphone: the recorder would reset the session under it.
         items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red, disabled: HandsFreeSession.shared.isActive) { showRecorder = true })
-        items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) })
+        items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) {
+            if let newMessage { newMessage.voice() } else { HandsFreeSession.shared.start(chat: chat) }
+        })
         items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
         items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
         return AttachPanel(items: items, surface: false, cap: attachCap) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
@@ -807,7 +845,35 @@ struct ComposerView: View {
         #endif
     }
 
+    /// The New Message sheet's slot: the mic while nothing is written (voice mode with the bot
+    /// chosen, after whatever is attached), the send arrow once there are words or files.
+    @ViewBuilder private func newMessageControl(_ n: ComposerRole.NewMessage) -> some View {
+        // A group starts with words only: its files do not count toward sending.
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, n.group || chat.staged.isEmpty {
+            Button { n.voice() } label: {
+                Image(systemName: "mic.fill").font(.body.weight(.semibold))
+                    .foregroundStyle(n.enabled && !n.group ? Color.primary : Color.secondary)
+                    .frame(width: 28, height: 28).contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .disabled(!n.enabled || n.group)
+            .accessibilityLabel("Voice mode")
+            .accessibilityIdentifier("newchat.voice")
+        } else {
+            Button { Task { await send() } } label: {
+                Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
+                    .frame(width: 28, height: 28).background(n.enabled ? AnyShapeStyle(Color.vory) : AnyShapeStyle(.tertiary), in: .circle)
+            }
+            .buttonStyle(.plain)
+            .disabled(!n.enabled)
+            .accessibilityLabel("Send")
+            .accessibilityIdentifier("newchat.send")
+        }
+    }
+
     private func send() async {
+        // The New Message sheet starts the chat with the words; the draft holds the rest.
+        if let newMessage { newMessage.send(text); return }
         var t = text
         Perf.stamp("slash: send \(t.prefix(30))")
         if !quote.isEmpty {

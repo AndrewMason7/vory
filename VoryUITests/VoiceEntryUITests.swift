@@ -88,11 +88,42 @@ final class VoiceEntryUITests: XCTestCase {
         let attach = app.buttons["newchat.attach"].firstMatch
         XCTAssertTrue(attach.waitForExistence(timeout: 5))
         XCTAssertTrue(attach.isEnabled, "no bot was chosen, so the + button stayed off")
-        XCTAssertTrue(app.buttons["newchat.voice"].firstMatch.exists, "no mic beside Send")
+        XCTAssertTrue(app.buttons["newchat.voice"].firstMatch.exists, "no mic in the empty message")
         attach.tap()
         XCTAssertTrue(app.buttons["attach.voice-mode"].firstMatch.waitForExistence(timeout: 5), "no Voice mode row in the + panel")
         XCTAssertFalse(app.buttons["attach.message-history"].firstMatch.isEnabled, "Message History should be greyed before a chat exists")
         shot("voice-entry-sheet-panel")
+    }
+
+    /// The New Message composer's one slot (#27, Matt, 2026-10-13): the mic while nothing is
+    /// written, the send arrow once there are words, the mic again when they are cleared; the mic
+    /// starts voice mode with the bot chosen.
+    func testNewMessageMicBecomesSendAndBack() throws {
+        guard env != nil else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        guard let compose = hittable(app.buttons.matching(identifier: "chats.new"), timeout: 30) else { return XCTFail("no compose circle") }
+        compose.press(forDuration: 0.8)
+        let to = app.textFields["Bot name"].firstMatch
+        XCTAssertTrue(to.waitForExistence(timeout: 10), "the New Message sheet did not open")
+        // Return in the empty To: field takes the first bot listed.
+        to.tap()
+        to.typeText("\n")
+        let mic = app.buttons["newchat.voice"].firstMatch
+        let send = app.buttons["newchat.send"].firstMatch
+        XCTAssertTrue(mic.waitForExistence(timeout: 5), "no mic in the empty message")
+        XCTAssertFalse(send.exists, "a send arrow with nothing written")
+        let field = app.textViews["newchat.text"].firstMatch
+        field.tap()
+        field.typeText("hello")
+        XCTAssertTrue(send.waitForExistence(timeout: 3), "no send arrow once there are words")
+        XCTAssertFalse(mic.exists, "the mic stayed beside the words")
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
+        XCTAssertTrue(mic.waitForExistence(timeout: 3), "the mic did not come back when the words were cleared")
+        XCTAssertFalse(send.exists, "the send arrow stayed with nothing written")
+        shot("newmessage-mic")
+        mic.tap()
+        let end = app.buttons["End voice mode"].firstMatch
+        XCTAssertTrue(end.waitForExistence(timeout: 20), "the mic did not start voice mode")
+        end.tap()
     }
 
     /// In a chat: its Back button on screen, and its composer or a waiting card at the bottom.

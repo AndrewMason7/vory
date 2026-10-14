@@ -67,6 +67,19 @@ import VoryCore
         skills: ["/code-review": .init(usage: 42, origin: "bundled"), "/incident-writeup": .init(usage: 7, origin: "hub"),
                  "/academic-paper-acquisition": .init(usage: 7, origin: "local"), "/spreadsheet-tools": .init(usage: 0, origin: "bundled")])
 
+    /// The New Message sheet's draft (#27): what acts on a chat's own state or a running turn
+    /// is not offered before the chat exists; models, skills and the rest are.
+    @Test func aDraftLeavesOutWhatNeedsAChat() {
+        let names = Set(M.commandItems(Self.catalog, query: "", draft: true).map(\.name))
+        #expect(!names.contains("compress"))
+        #expect(!names.contains("new"))
+        #expect(!names.contains("approve"))
+        #expect(names.contains("model"))
+        #expect(names.contains("status"))
+        #expect(names.contains("code-review"))
+        #expect(Set(M.commandItems(Self.catalog, query: "", draft: false).map(\.name)).contains("compress"))
+    }
+
     @Test func aBareSlashListsTheCommandsAToZThenTheSkillsMostUsedFirst() {
         let items = M.commandItems(Self.catalog, query: "")
         #expect(items.map(\.name) == ["approve", "compress", "model", "my-quick", "new", "status",

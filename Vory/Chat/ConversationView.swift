@@ -249,7 +249,18 @@ struct ConversationView: View {
             // Stored chats return at once with the cached transcript and sync behind the header.
             // The chat keeps the bot it belongs to for as long as it is open, whatever is selected later.
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
-            else { chat = try await runtime.newChat(cwd: route.cwd) }
+            else {
+                let fresh = try await runtime.newChat(cwd: route.cwd)
+                // The compose sheet's model and reasoning level (#27), set before the chat shows
+                // and before its first message goes, so that message runs on them.
+                if let m = route.initialModel {
+                    do { try await fresh.setModel(provider: m.provider, model: m.model) } catch { fresh.banner = error.localizedDescription }
+                }
+                if let r = route.initialReasoning {
+                    do { try await fresh.setReasoning(r) } catch { fresh.banner = error.localizedDescription }
+                }
+                chat = fresh
+            }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
             #if DEBUG
             // For a UI test: `-vory-test-stage <name>.pdf` stages a small PDF of that name in

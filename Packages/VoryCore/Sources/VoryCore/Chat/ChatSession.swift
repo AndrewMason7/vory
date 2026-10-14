@@ -386,6 +386,34 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         if told { _$observationRegistrar.didSet(self, keyPath: keyPath) }
     }
 
+    // MARK: A draft (the New Message sheet)
+
+    /// A chat that is not one yet: the New Message sheet's composer runs on it (its card, its
+    /// files, the "/" and "@" lists, the model chip) and nothing of it reaches the gateway; sent,
+    /// the sheet starts the chat with what the draft holds. Never registered with the runtime.
+    public private(set) var isDraft = false
+
+    /// A model picked on a draft, by provider and name.
+    public struct ModelPick: Hashable, Sendable {
+        public var provider: String?
+        public var model: String
+    }
+    /// The model and reasoning level picked on a draft: set on the chat once it exists, before its
+    /// first message. A draft is one bot's: another bot in To: is a new draft, without them.
+    public private(set) var pendingModel: ModelPick?
+    public private(set) var pendingReasoning: String?
+
+    public static func draft(runtime: GatewayRuntime, profile: String?) -> ChatSession {
+        let s = ChatSession(runtime: runtime, storedID: nil, title: nil, profile: profile)
+        s.isDraft = true
+        return s
+    }
+
+    /// The reasoning level shown: a draft's pick, else the session's.
+    public var reasoningEffort: String? { pendingReasoning ?? info?.reasoningEffort }
+    /// The model's provider: a draft's pick, else the session's.
+    public var providerSlug: String? { pendingModel?.provider ?? info?.provider }
+
     public var profileName: String { profile ?? info?.profileName ?? runtime.selectedProfile ?? "default" }
 
     /// The runtime's call with this chat's bot attached.
@@ -402,7 +430,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// attach brings `info`: the chip said "Model" for the first frames of every reopened chat
     /// (Matt, 2026-10-11). The bot's default is read live: the profiles may land after the open.
     private var cachedModel: String?
-    public var modelName: String { info?.model ?? cachedModel ?? runtime.profiles.first { $0.name == profileName }?.model ?? "" }
+    public var modelName: String { pendingModel?.model ?? info?.model ?? cachedModel ?? runtime.profiles.first { $0.name == profileName }?.model ?? "" }
     public var subtitle: String {
         let m = modelName.isEmpty ? "no model" : (modelName.split(separator: "/").last.map(String.init) ?? modelName)
         // Model and context first: on a phone the subtitle truncates at the end, and the profile
@@ -1062,7 +1090,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public private(set) var catalogCache: CommandsCatalog?
 
     public func commandsCatalog() async -> CommandsCatalog? {
-        let c: CommandsCatalog? = try? (await rpc("commands.catalog", ["session_id": .string(runtimeID)])).decode()
+        // A draft has no session: the catalog is the gateway's own, asked for without one.
+        let c: CommandsCatalog? = try? (await rpc("commands.catalog", runtimeID.isEmpty ? [:] : ["session_id": .string(runtimeID)])).decode()
         if let c { catalogCache = c }
         return c
     }
@@ -1084,6 +1113,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The model for this chat, from a typed `/model name` or the composer's model chooser:
     /// the session-scoped switch, then a line in the thread saying so (or what went wrong).
     public func switchModel(provider: String?, model: String) async {
+        if isDraft { pendingModel = ModelPick(provider: provider, model: model); return }
         do { try await setModel(provider: provider, model: model); systemLine("Model set to \(model)", symbol: "cpu") }
         catch { items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/model: \(error.localizedDescription)"))) }
     }
@@ -1205,6 +1235,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     // MARK: Model / effort / fast / yolo (session-scoped)
 
     public func setModel(provider: String?, model: String) async throws {
+        if isDraft { pendingModel = ModelPick(provider: provider, model: model); return }
         var value = model
         if let provider, !provider.isEmpty { value += " --provider \(provider)" }
         value += " --session"
@@ -1219,6 +1250,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func setReasoning(_ effort: String) async throws {
+        if isDraft { pendingReasoning = effort; return }
         _ = try await rpc("config.set", ["key": "reasoning", "value": .string(effort), "session_id": .string(runtimeID), "scope": "session"])
     }
 

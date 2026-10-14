@@ -20,6 +20,10 @@ struct ChatRoute: Hashable, Codable {
     /// Voice mode as soon as the chat exists (the Chats page's mic, the sheet's Voice mode),
     /// after the first message if there is one.
     var startVoice: Bool = false
+    /// The model and reasoning level picked in the compose sheet: set on the new chat before its
+    /// first message (#27). Not restored, as the picked files are not.
+    var initialModel: ChatSession.ModelPick? = nil
+    var initialReasoning: String? = nil
 
     /// Saved and restored without the picked files: `AttachmentPreview` carries local file
     /// URLs and is not Codable, and a route is only ever restored for a chat that exists.
@@ -316,7 +320,9 @@ struct ChatListView: View {
                         sheetStarted = true
                         let back = model.composeReturnTab
                         switch start {
-                        case .chat(let profile, let text, let attachments, let cwd, let voice): open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd, startVoice: voice), returningTo: back)
+                        case .chat(let profile, let text, let attachments, let cwd, let voice, let model, let reasoning):
+                            open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd, startVoice: voice,
+                                           initialModel: model, initialReasoning: reasoning), returningTo: back)
                         case .group(let room, let text): rooms.insert(room, at: 0); open(RoomRoute(room: room, initialText: text), returningTo: back)
                         }
                     }

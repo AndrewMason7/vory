@@ -125,7 +125,7 @@ struct ModelMenuContent: View {
     }
 
     private var currentCapabilities: ModelCapabilities? {
-        options?.providers.first { $0.slug == chat.info?.provider }?.capabilities?[chat.modelName]
+        options?.providers.first { $0.slug == chat.providerSlug }?.capabilities?[chat.modelName]
     }
 
     private func load(refresh: Bool) async {
@@ -213,18 +213,18 @@ struct ReasoningEffortMenu: View {
                             do { try await chat.setReasoning(level) } catch { chat.banner = error.localizedDescription }
                         }
                     } label: {
-                        if chat.info?.reasoningEffort == level { MenuLabel(ReasoningEffort.name(of: level), systemImage: "checkmark") } else { Text(ReasoningEffort.name(of: level)) }
+                        if chat.reasoningEffort == level { MenuLabel(ReasoningEffort.name(of: level), systemImage: "checkmark") } else { Text(ReasoningEffort.name(of: level)) }
                     }
                 }
             } label: {
-                MenuLabel(ReasoningEffort.title(current: chat.info?.reasoningEffort), systemImage: "brain")
+                MenuLabel(ReasoningEffort.title(current: chat.reasoningEffort), systemImage: "brain")
             }
             .accessibilityIdentifier("chat.reasoning")
             .task {
                 guard !loaded else { return }
                 loaded = true
                 if let o = try? await chat.modelOptions() {
-                    capabilities = o.providers.first { $0.slug == chat.info?.provider }?.capabilities?[chat.modelName]
+                    capabilities = o.providers.first { $0.slug == chat.providerSlug }?.capabilities?[chat.modelName]
                 }
                 let profile = ChatSession.modelOptionsProfile(chat: chat.profile, selected: chat.runtime.selectedProfile)
                 do {
