@@ -149,10 +149,12 @@ private struct SelectableTextView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let v = scroll.documentView as? NSTextView else { return }
         if v.string != text { v.string = text }
-        v.font = monospaced ? .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
-                            : .preferredFont(forTextStyle: .body)
-        v.textColor = .labelColor
-        v.setAccessibilityLabel(label)
+        // Only when it changes: setting the font lays the whole text out again (100 KB on a Show all sheet).
+        let font: NSFont = monospaced ? .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
+                                      : .preferredFont(forTextStyle: .body)
+        if v.font != font { v.font = font }
+        if v.textColor != .labelColor { v.textColor = .labelColor }
+        if v.accessibilityLabel() != label { v.setAccessibilityLabel(label) }
     }
 }
 #else

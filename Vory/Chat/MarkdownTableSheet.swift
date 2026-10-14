@@ -74,10 +74,15 @@ extension MarkdownTable {
 
 /// "Copy Cell" on a long press, on the table's sheet only (in a reply the long press keeps the reply's own menu).
 private struct CopyCellMenu: ViewModifier {
-    var text: String?
+    /// The table on its sheet; nil in a reply.
+    var table: MarkdownTable?
+    var row: Int
+    var column: Int
     func body(content: Content) -> some View {
-        if let text {
-            content.contextMenu { Button { UIPasteboard.general.string = text } label: { Label("Copy Cell", systemImage: "doc.on.doc") } }
+        if let table {
+            content.contextMenu {
+                Button { UIPasteboard.general.string = MarkdownTable.plain(table.cell(row: row, column: column)) } label: { Label("Copy Cell", systemImage: "doc.on.doc") }
+            }
         } else {
             content
         }
@@ -271,7 +276,7 @@ struct MarkdownTableGrid: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment(c))
             .overlay(alignment: .top) { hairline }
-            .modifier(CopyCellMenu(text: opaqueHeader ? MarkdownTable.plain(table.cell(row: r, column: c)) : nil))
+            .modifier(CopyCellMenu(table: opaqueHeader ? table : nil, row: r, column: c))
     }
 
     private func text(_ markdown: String, column c: Int, header: Bool) -> some View {

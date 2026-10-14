@@ -1251,12 +1251,12 @@ struct TranscriptRow: View, Equatable {
         case .user(let text, let attachments) where attachments.isEmpty && InjectedNote.parse(text) != nil:
             // The gateway speaking in the user's seat (a background process reporting in): a
             // folded notice, not a blue bubble of the person's own words.
-            InjectedNoteRow(note: InjectedNote.parse(text)!)
+            InjectedNoteRow(note: InjectedNote.parse(text)!, onShowAll: onShowAll)
         case .user(let text, let attachments) where attachments.isEmpty && AgentMessage.parse(text) != nil:
             // Another bot wrote in: a compact notice with the words folded under it, not a
             // bubble of ours.
             let m = AgentMessage.parse(text)!
-            BotMessageNotice(handle: m.key, label: m.sender, headline: "Message from \(m.sender)", body: m.body, pending: false, onOpen: onOpenBot)
+            BotMessageNotice(handle: m.key, label: m.sender, headline: "Message from \(m.sender)", body: m.body, pending: false, onOpen: onOpenBot, onShowAll: onShowAll)
         case .user(let text, let attachments):
             HStack {
                 Spacer(minLength: 56)
@@ -1379,9 +1379,9 @@ struct TranscriptRow: View, Equatable {
             // A message to another bot: "Messaging X…", then "Messaged X", then X's answer.
             let d = act.delivery!
             VStack(spacing: 4) {
-                BotMessageNotice(handle: d.target, label: d.target, headline: act.status == .running ? "Messaging \(d.target)…" : "Messaged \(d.target)", body: d.message, pending: act.status == .running, onOpen: onOpenBot)
+                BotMessageNotice(handle: d.target, label: d.target, headline: act.status == .running ? "Messaging \(d.target)…" : "Messaged \(d.target)", body: d.message, pending: act.status == .running, onOpen: onOpenBot, onShowAll: onShowAll)
                 if let reply = act.deliveryReply {
-                    BotMessageNotice(handle: d.target, label: d.target, headline: "Message from \(d.target)", body: reply, pending: false, onOpen: onOpenBot)
+                    BotMessageNotice(handle: d.target, label: d.target, headline: "Message from \(d.target)", body: reply, pending: false, onOpen: onOpenBot, onShowAll: onShowAll)
                 }
             }
         case .tool(let act):
@@ -1506,6 +1506,8 @@ struct SubagentRow: View {
 
 struct InjectedNoteRow: View {
     var note: InjectedNote
+    /// The whole output on the Select Text sheet, under the note's title, when the note shows only its start.
+    var onShowAll: ((_ title: String, _ text: String) -> Void)? = nil
     @State private var open = false
     /// The pill's own width and the row's: the glass animates between the two.
     @State private var pillWidth: CGFloat = 0
@@ -1533,7 +1535,7 @@ struct InjectedNoteRow: View {
             let body = TextPieces.capped(note.body)
             VStack(alignment: .leading, spacing: 4) {
                 LongText(body.text, code: true).font(.caption.monospaced()).textSelection(.enabled)
-                if body.more > 0 { MoreTextNote(more: body.more) }
+                if body.more > 0 { MoreTextNote(more: body.more, action: onShowAll.map { f in { f(note.title, note.body) } }) }
             }
                 .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
                 .frame(width: max(rowWidth, pillWidth), alignment: .leading)
@@ -1624,10 +1626,14 @@ struct BotMessageNotice: View {
     var body_: String?
     var pending: Bool
     var onOpen: (String) -> Void
+    /// The whole message on the Select Text sheet, under its headline, when the notice shows only its start.
+    var onShowAll: ((_ title: String, _ text: String) -> Void)?
     @State private var open = false
 
-    init(handle: String, label: String, headline: String, body: String?, pending: Bool, onOpen: @escaping (String) -> Void) {
+    init(handle: String, label: String, headline: String, body: String?, pending: Bool, onOpen: @escaping (String) -> Void,
+         onShowAll: ((_ title: String, _ text: String) -> Void)? = nil) {
         self.handle = handle; self.label = label; self.headline = headline; self.body_ = body; self.pending = pending; self.onOpen = onOpen
+        self.onShowAll = onShowAll
     }
 
     var body: some View {
@@ -1652,7 +1658,7 @@ struct BotMessageNotice: View {
                     let shown = TextPieces.capped(text)
                     VStack(alignment: .leading, spacing: 4) {
                         LongText(shown.text).font(.footnote).textSelection(.enabled)
-                        if shown.more > 0 { MoreTextNote(more: shown.more) }
+                        if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(headline, text) } }) }
                     }
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(maxWidth: 360, alignment: .leading)
