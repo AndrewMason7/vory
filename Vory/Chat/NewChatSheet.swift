@@ -175,9 +175,10 @@ struct NewChatSheet: View {
             if let draft {
                 VStack(spacing: 6) {
                     if chosen.count > 1, !draft.staged.isEmpty {
-                        Text("Attachments go with a chat to one bot; a group chat starts with text only.")
+                        Text(Self.groupFilesNote(count: draft.staged.count))
                             .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 6)
+                            .accessibilityIdentifier("newchat.groupFiles")
                     }
                     ComposerView(chat: draft, text: $text, quote: $quote, namespace: composerSpace,
                                  role: .newMessage(.init(group: chosen.count > 1, enabled: !chosen.isEmpty && !busy,
@@ -243,6 +244,13 @@ struct NewChatSheet: View {
         query = mark
         focus = nil
         messageFocus += 1
+    }
+
+    /// Under a group's first message with files staged: they stay behind, and how to send them.
+    static func groupFilesNote(count: Int) -> String {
+        count == 1
+            ? "Group chats start with text only, so this file won't be sent. Remove a bot to send it."
+            : "Group chats start with text only, so these files won't be sent. Remove a bot to send them."
     }
 
     private func remove(_ p: ProfileInfo) {

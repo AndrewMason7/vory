@@ -8,6 +8,9 @@ import VoryCore
 /// along the bottom edge and a remove button on the top corner.
 struct StagedCard: View {
     var attachment: AttachmentPreview
+    /// It won't go with the message (a group chat starts with text only): the picture dims, the
+    /// × stays as it is so the file can still be taken out.
+    var notSent = false
     var onOpen: () -> Void
     var onRemove: () -> Void
     @State private var thumbnail: UIImage?
@@ -72,7 +75,9 @@ struct StagedCard: View {
                 }
             }
             .buttonStyle(.plain)
+            .opacity(notSent ? 0.4 : 1)
             .accessibilityLabel("\(label): \(attachment.name)")
+            .accessibilityValue(notSent ? "Not sent in a group chat" : "")
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))

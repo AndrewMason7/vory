@@ -47,4 +47,11 @@ import Testing
         #expect(sent != nil)
         #expect(sent?["session_id"] == nil)
     }
+
+    /// A group starts with words only (#32): the line under its message says the files stay behind
+    /// and how to send them, in the singular for one.
+    @Test func aGroupSaysItsFilesStayBehind() {
+        #expect(NewChatSheet.groupFilesNote(count: 1) == "Group chats start with text only, so this file won't be sent. Remove a bot to send it.")
+        #expect(NewChatSheet.groupFilesNote(count: 3) == "Group chats start with text only, so these files won't be sent. Remove a bot to send them.")
+    }
 }

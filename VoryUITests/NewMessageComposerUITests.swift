@@ -92,11 +92,28 @@ final class NewMessageComposerUITests: XCTestCase {
         try choose("default")
         try choose("work")
         XCTAssertTrue(app.staticTexts["New Group Chat"].firstMatch.waitForExistence(timeout: 5), "two bots did not make a group")
-        // Words and "@" only: no +, no model chip, and the staged file is said to stay behind.
+        // Words and "@" only: no +, no model chip, and the staged file is said to stay behind (#32):
+        // the line says how to send it, the card is dimmed and says so to VoiceOver, and its ×
+        // still takes it out.
         XCTAssertFalse(app.buttons["newchat.attach"].firstMatch.exists, "a + on a group's message")
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "composer.modelChip").firstMatch.exists, "a model chip on a group's message")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attachments go with a chat to one bot")).firstMatch.exists,
-                      "no word that the file stays behind")
+        let note = app.staticTexts["newchat.groupFiles"].firstMatch
+        XCTAssertTrue(note.exists, "no word that the file stays behind")
+        XCTAssertEqual(note.label, "Group chats start with text only, so this file won't be sent. Remove a bot to send it.")
+        // The card itself (its × is "Remove brief.pdf").
+        let staged = app.buttons["PDF: brief.pdf"].firstMatch
+        XCTAssertEqual(staged.value as? String, "Not sent in a group chat", "the staged file does not say it stays behind")
+        XCTAssertTrue(app.buttons["Remove brief.pdf"].firstMatch.isHittable, "the staged file's × cannot be tapped in a group")
+        shot("newmessage-group-file")
+        // Remove a bot, as the line says: one bot again, the file goes with the message.
+        let workChip = try XCTUnwrap(hittable(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH[c] %@", "work,")), timeout: 5),
+                                     "no work chip in To:")
+        workChip.tap()
+        XCTAssertTrue(note.waitForNonExistence(timeout: 5), "the line stayed with one bot")
+        XCTAssertTrue(app.buttons["newchat.attach"].firstMatch.waitForExistence(timeout: 5), "no + with one bot again")
+        XCTAssertNotEqual(staged.value as? String, "Not sent in a group chat", "the file still says it stays behind with one bot")
+        try choose("work")
+        XCTAssertTrue(note.waitForExistence(timeout: 5), "no line when the group came back")
         let field = app.textViews["newchat.text"].firstMatch
         field.tap()
         field.typeText("@all what is the plan for the release?")

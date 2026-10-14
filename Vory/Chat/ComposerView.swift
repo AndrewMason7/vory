@@ -595,7 +595,8 @@ struct ComposerView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(chat.staged) { a in
-                    StagedCard(attachment: a, onOpen: { stagedPreview = a.localURL },
+                    // In a group's first message the files stay behind (the sheet says so): dimmed.
+                    StagedCard(attachment: a, notSent: group, onOpen: { stagedPreview = a.localURL },
                                onRemove: { withAnimation(.snappy) { chat.removeStaged(a.id) } })
                         .transition(.scale(scale: 0.9).combined(with: .opacity))
                 }
