@@ -20,6 +20,12 @@ struct NewChatSheet: View {
     var initialProjectID: String? = nil
     var onStart: (Start) -> Void
     @Environment(\.dismiss) private var dismiss
+    #if os(macOS)
+    /// The bots list is shorter than one of its rows (see the list's `onGeometryChange`).
+    @State private var listSqueezed = false
+    /// A bot's row in the list: its 40 pt face and 10 pt above and below.
+    private static let botRowHeight: CGFloat = 60
+    #endif
     @State private var query = ""
     @State private var chosen: [ProfileInfo] = []
     /// While bots are chosen, an invisible mark sits at the start of the To: field. The
@@ -148,6 +154,14 @@ struct NewChatSheet: View {
                 .padding(.top, 6)
             }
             .scrollDismissesKeyboard(.interactively)
+            #if os(macOS)
+            // Squeezed by a tall first message (its "/" list open), the bots that match showed one row cut in
+            // half above "In:". Under a row's height the list steps aside until there is room for it again.
+            .onGeometryChange(for: Bool.self) { $0.size.height < Self.botRowHeight } action: { listSqueezed = $0 }
+            .opacity(listSqueezed ? 0 : 1)
+            .allowsHitTesting(!listSqueezed)
+            .accessibilityHidden(listSqueezed)
+            #endif
             .onAppear { if let initialProjectID, projectID.isEmpty { projectID = initialProjectID } }
 
             if chosen.count <= 1, runtime.projects.available == true, !runtime.projects.open.isEmpty {
