@@ -80,5 +80,18 @@ import Testing
         let back = try JSONDecoder().decode(AppRestore.Saved.self, from: try JSONEncoder().encode(s))
         #expect(back == s)
     }
+
+    /// The title rides along for the reopened header (#378); a record saved before it had one reads nil.
+    @Test func theTitleIsSavedAndAnOlderRecordStillReads() throws {
+        var s = saved(minutesAgo: 5)
+        s.title = "Rewrite the nightly export job"
+        let back = try JSONDecoder().decode(AppRestore.Saved.self, from: try JSONEncoder().encode(s))
+        #expect(back.title == "Rewrite the nightly export job")
+        var old = try JSONSerialization.jsonObject(with: try JSONEncoder().encode(saved(minutesAgo: 5))) as! [String: Any]
+        old["title"] = nil
+        let older = try JSONDecoder().decode(AppRestore.Saved.self, from: try JSONSerialization.data(withJSONObject: old))
+        #expect(older.storedID == "20261013_101500_abc123")
+        #expect(older.title == nil)
+    }
 }
 #endif

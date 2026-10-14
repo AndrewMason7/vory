@@ -25,6 +25,8 @@ enum AppRestore {
         /// The gateway's address too: the demo copy adds its gateway afresh at every launch.
         var gateway: String?
         var leftAt: Date
+        /// The chat's title, for its header as it reopens (a record from before it reads nil).
+        var title: String?
     }
 
     nonisolated static let savedKey = "restore.openChat"
@@ -89,8 +91,9 @@ enum AppRestore {
             defaults.removeObject(forKey: savedKey)
             return
         }
-        let saved = Saved(storedID: id, profile: model.visibleChat?.profileName ?? rt.selectedProfile, connectionID: rt.connection.id,
-                          gateway: rt.connection.gateway.description, leftAt: Date())
+        let chat = model.visibleChat?.storedID == id ? model.visibleChat : nil
+        let saved = Saved(storedID: id, profile: chat?.profileName ?? rt.selectedProfile, connectionID: rt.connection.id,
+                          gateway: rt.connection.gateway.description, leftAt: Date(), title: chat?.title)
         if let data = try? JSONEncoder().encode(saved) { defaults.set(data, forKey: savedKey) }
     }
 
@@ -114,7 +117,7 @@ enum AppRestore {
               let chat = reopening(saved, now: Date(), connection: model.runtime?.connection.id, gateway: model.runtime?.connection.gateway.description,
                                    shortLaunches: defaults.integer(forKey: shortLaunchesKey)),
               sceneAgrees(chat, sceneChat: sceneChatAtLaunch) else { return }
-        model.openStoredChat(id: chat.storedID, profile: chat.profile)
+        model.openStoredChat(id: chat.storedID, profile: chat.profile, title: chat.title)
     }
 }
 
