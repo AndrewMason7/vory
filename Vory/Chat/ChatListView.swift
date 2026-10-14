@@ -358,7 +358,8 @@ struct ChatListView: View {
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
                 guard model.visibleChatID != r.storedSessionID else { return }
-                open(ChatRoute(storedID: r.storedSessionID, title: r.kind == "readonly" ? "Bot Chat" : nil, profile: r.profile, readOnly: r.kind == "readonly"))
+                open(ChatRoute(storedID: r.storedSessionID, title: r.title ?? (r.kind == "readonly" ? "Bot Chat" : nil), profile: r.profile, readOnly: r.kind == "readonly"),
+                     returningTo: r.returnTab)
             }
             .alert("Delete group chat?", isPresented: Binding(get: { pendingRoomDelete != nil }, set: { if !$0 { pendingRoomDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let r = pendingRoomDelete { Task { await deleteRoom(r) } } }

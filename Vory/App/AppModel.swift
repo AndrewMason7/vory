@@ -24,6 +24,10 @@ struct PendingRoute: Hashable, Sendable {
     var action: String?
     /// The card this app posted the notification for (`LocalNotifier`), beside `requestID`.
     var cardID: String?
+    /// The chat's title when the opener knows it, so its header does not read "New chat" first.
+    var title: String?
+    /// The tab to go back to when this chat closes (the way the compose circle's chats do).
+    var returnTab: AppModel.AppTab?
 
     /// What Approve or Deny answers (`ChatSession.approvalToAnswer(named:)`): that and nothing
     /// else, or with none the chat's approval when it has just one.
@@ -192,10 +196,12 @@ final class AppModel {
         }
     }
 
-    /// One of the recent chats, from Siri, a Shortcut or Spotlight (#310).
-    func openStoredChat(id: String, profile: String?) {
+    /// One of the recent chats, from Siri, a Shortcut or Spotlight (#310), or from Home's Pick up
+    /// (#378), which comes back to Home when the chat closes.
+    func openStoredChat(id: String, profile: String?, title: String? = nil, returningTo back: AppTab? = nil) {
         selectedTab = .chats
-        pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil)
+        pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil,
+                                    title: title, returnTab: back)
     }
 
     /// Next (+1) or previous (−1) chat in the list, from the Mac's Chat menu.

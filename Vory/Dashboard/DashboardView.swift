@@ -421,22 +421,34 @@ struct DashboardView: View {
                 Text(loading ? "Loading…" : (error == nil ? "No chats yet. Start one from the Chats tab." : "The chat list did not load. Pull down to try again.")).font(.subheadline).foregroundStyle(.secondary)
             }
             ForEach(list) { s in
-                NavigationLink(value: ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile)) {
-                    HStack(spacing: 10) {
-                        BotAvatar(profile: s.profile ?? runtime?.selectedProfile ?? "default", size: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(s.displayTitle).font(.subheadline.weight(.medium)).lineLimit(1)
-                            Text(s.preview ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        if let d = s.lastDate { Text(d, format: .relative(presentation: .named)).font(.caption2).foregroundStyle(.tertiary) }
-                        Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
-                    }
-                    .contentShape(Rectangle())
+                // Under the phone's morph bar a chat has its bar (its bot, its actions, the morph)
+                // on Chats only: pushed here it got the page Back alone and late, and with a chat
+                // left open on Chats a bar stuck on Home's title with no Back (#378). It opens on
+                // Chats as from the list, and its Back comes back to Home. Elsewhere (the Mac, a
+                // wide window) the chat's own header stands over it here.
+                if MorphTopBar.active(model) {
+                    Button { model.openStoredChat(id: s.id, profile: s.profile, title: s.displayTitle, returningTo: .dashboard) } label: { pickUpRow(s) }
+                        .buttonStyle(.plain)
+                } else {
+                    NavigationLink(value: ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile)) { pickUpRow(s) }
+                        .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         })
+    }
+
+    private func pickUpRow(_ s: StoredSession) -> some View {
+        HStack(spacing: 10) {
+            BotAvatar(profile: s.profile ?? runtime?.selectedProfile ?? "default", size: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(s.displayTitle).font(.subheadline.weight(.medium)).lineLimit(1)
+                Text(s.preview ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            if let d = s.lastDate { Text(d, format: .relative(presentation: .named)).font(.caption2).foregroundStyle(.tertiary) }
+            Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
     }
 
     // MARK: Since you were here
