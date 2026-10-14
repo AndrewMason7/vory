@@ -189,9 +189,39 @@ final class LongTextUITests: XCTestCase {
             mark("no tool card")
         }
 
+        // A long paragraph with a link, drawn in pieces read as one element: the link is still a link to VoiceOver.
+        send("huge link 6")
+        let link = app.links.matching(NSPredicate(format: "label CONTAINS[c] 'status page'")).firstMatch
+        mark("long paragraph's link reachable: \(link.waitForExistence(timeout: 5))")
+        shot("link")
+
         let px = tallestPixels()
         mark("final")
         XCTAssertTrue(px.isFinite, "the probe did not report (\(probe()))")
         XCTAssertLessThan(px, textureLimit, "a text was drawn taller than the graphics card allows: \(probe())")
+    }
+
+    /// An ordinary chat pictured for a pixel compare between two builds (short text is still one Text, so it must
+    /// match): the showcase chat's end (lists, a bash block), a table reply, a reply with mention chips. Frames go to
+    /// HERMES_E2E_SHOTS with the tag in HERMES_E2E_TAG.
+    func testAnOrdinaryChatPictured() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        continueAfterFailure = true
+        let tag = ProcessInfo.processInfo.environment["HERMES_E2E_TAG"] ?? "run"
+        let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"] ?? ""
+        app = bundle.isEmpty ? XCUIApplication() : XCUIApplication(bundleIdentifier: bundle)
+        app.launchArguments = ["-companionPromptShown", "YES", "-colorSchemePreference", "light"]
+        if !bundle.isEmpty { app.launchArguments += ["-vory-demo-gateway", url, token, "Workshop"] }
+        app.launch()
+        let row = text("Disk cleanup on the log host").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 40))
+        row.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(4))
+        if let deny = hittable(app.buttons.matching(identifier: "Deny"), timeout: 3) { deny.tap(); RunLoop.current.run(until: Date().addingTimeInterval(3)) }
+        shot("\(tag)-showcase")
+        send("table of the shards please")
+        shot("\(tag)-table")
+        send("mention the others")
+        shot("\(tag)-mention")
     }
 }

@@ -1923,7 +1923,7 @@ class Gateway:
 
     async def _huge_turn(self, s: Session, prompt: str) -> None:
         """One piece of text too big to draw in one go (#371 candidate 3, test only), streamed in
-        large chunks: `huge reasoning 100` a single-paragraph reasoning of that many KB, then a
+        large chunks (`huge link 6`: one paragraph of that many KB with a link in it): `huge reasoning 100` a single-paragraph reasoning of that many KB, then a
         short answer; `huge code 2000` a reply with a code block of that many lines; `huge tool
         60000` a tool call with that many characters of output, then a short answer."""
         words = prompt.strip().lower().split()
@@ -1940,6 +1940,22 @@ class Gateway:
                 await asyncio.sleep(0.01)
 
         answer = "Done: every shard is checked and the export is complete."
+        if kind == "link":
+            # One paragraph of about N KB with a link in its middle (a long paragraph drawn in pieces must
+            # keep its link where VoiceOver's links rotor finds it).
+            size = max(4, min(400, n or 6)) * 1024
+            words, k = [], 0
+            while sum(len(w) + 1 for w in words) < size:
+                k += 1
+                words.append(sentence.format(k).strip())
+                if k == 12:
+                    words.append("The details are on the [status page](https://status.example.com/shards).")
+            text = " ".join(words)[:size].rstrip()
+            await chunks(text, "message.delta")
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
         if kind == "code":
             lines = max(10, min(20000, n or 2000))
             code = "\n".join(f"{k + 1:05d}  2026-10-13 04:{k % 60:02d}:{k * 7 % 60:02d} shard-{k % 97:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms" for k in range(lines))
