@@ -311,6 +311,8 @@ final class AppModel {
         NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.store.remembered.reload() }
         }
+        // A runtime started away (a launch in the background) is in front once the app is.
+        AwayAtLaunch.clearOnActive { [weak self] in self?.runtime }
         #endif
     }
 
@@ -397,6 +399,10 @@ final class AppModel {
         rt.activityReporterFactory = { MenuBarTurnReporter() }   // the menu-bar item is the Mac's Live Activity
         #endif
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
+        #if os(iOS)
+        // Started in the background (no scene to say so): away until the app is active.
+        rt.isAway = AwayAtLaunch.startsAway(UIApplication.shared.applicationState)
+        #endif
         // A session that runs out for good signs in again by itself, after Face ID, when this
         // device remembers the gateway's sign-in; otherwise the person is asked, as before.
         rt.signInAgain = { [weak self] c, s in await self?.rememberedSignIn.signInAgain(c, access: s.access) }
