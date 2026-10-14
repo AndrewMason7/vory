@@ -38,6 +38,8 @@ struct VoryApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                // The open chat in the scene's storage, for a cold launch after a system end (#371).
+                .modifier(RestoreSceneKeeper(model: model))
                 .tint(AppTheme.accent(accentID).color)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
                 .onOpenURL { url in model.open(url) }
@@ -48,6 +50,9 @@ struct VoryApp: App {
                     // read which gateways have a remembered sign-in; the window opens unlocked.
                     model.store.remembered.reload()
                     await model.activateSavedConnection()
+                    // A cold launch after the system ended the app in the background: the chat
+                    // that was open, as it was left (#371).
+                    AppRestore.reopenIfDue(model)
                     await model.refreshCompanionUpdateFlag()
                 }
                 .onChange(of: model.lock.isLocked) { _, locked in
@@ -57,6 +62,8 @@ struct VoryApp: App {
                     switch phase {
                     case .active:
                         LocalNotifier.isForeground = true
+                        AppRestore.reopenIfDue(model)
+                        AppRestore.cameToFront()
                         // A reply that streamed while the app was away is drawn now, once.
                         model.runtime?.isAway = false
                         BotAmbient.shared.displayAsleep = false
@@ -95,6 +102,7 @@ struct VoryApp: App {
                     case .background:
                         // Out of sight: streaming replies stop redrawing (see GatewayRuntime.isAway).
                         model.runtime?.isAway = true
+                        AppRestore.leftFront(model)
                         CloudBackupTask.schedule()
                         AwayWatch.shared.left(runtime: model.runtime)
                         // Every face holds still out of sight, as on a sleeping Mac: a working bot's
