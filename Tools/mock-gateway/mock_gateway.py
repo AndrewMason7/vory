@@ -1633,6 +1633,41 @@ if len(STORED_SESSIONS) > 1:
 LIVE: dict[str, Session] = {}   # by runtime id
 GATEWAYS: set = set()           # every connected JSON-RPC socket, for /mock/drop-sockets
 
+# MOCK_SESSIONS_CHANGED=1: the gateway's change watcher during a turn (tui_gateway/change_watcher.py).
+# A turn's messages and tool rows move the sessions table, and every connected client gets a
+# session-less sessions.changed at most every 2 s, the trailing edge included: a long turn sends
+# one every 2 s for as long as it runs (#371, the app's work per list refresh while away).
+SESSIONS_CHANGED_FLOOR = 2.0 if os.environ.get("MOCK_SESSIONS_CHANGED") else 0.0
+SESSIONS_CHANGED = {"at": 0.0, "pending": False, "sent": 0}
+
+
+def note_sessions_moved() -> None:
+    if not SESSIONS_CHANGED_FLOOR or SESSIONS_CHANGED["pending"]:
+        return
+    SESSIONS_CHANGED["pending"] = True
+    wait = SESSIONS_CHANGED["at"] + SESSIONS_CHANGED_FLOOR - time.monotonic()
+
+    async def fire() -> None:
+        if wait > 0:
+            await asyncio.sleep(wait)
+        SESSIONS_CHANGED.update(pending=False, at=time.monotonic(), sent=SESSIONS_CHANGED["sent"] + 1)
+        if SESSIONS_CHANGED["sent"] % 10 == 1:
+            print(f"[mock] sessions.changed #{SESSIONS_CHANGED['sent']} to {len(GATEWAYS)} socket(s)", flush=True)
+        frame = neutral(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {"type": "sessions.changed", "session_id": "", "payload": {}}}))
+        for gw in list(GATEWAYS):
+            try:
+                await gw.ws.send(frame)
+            except Exception:  # noqa: BLE001
+                pass
+
+    asyncio.get_running_loop().create_task(fire())
+
+
+# The marathon's pace and output (#371's background checks): MOCK_MARATHON_STEP_S seconds per tool
+# call (0.04 by default) and MOCK_MARATHON_LINES lines of output each (40).
+MARATHON_STEP_S = float(os.environ.get("MOCK_MARATHON_STEP_S") or 0.04)
+MARATHON_LINES = int(os.environ.get("MOCK_MARATHON_LINES") or 40)
+
 
 class Gateway:
     def __init__(self, ws) -> None:
@@ -1655,6 +1690,8 @@ class Gateway:
             elif kind == "tool.complete":
                 live.history.append({"role": "tool", "name": (payload or {}).get("name", "tool"), "text": (payload or {}).get("summary", ""),
                                      "timestamp": time.time(), "row_id": len(live.history) + 1})
+        if kind in ("message.start", "tool.complete", "message.complete"):
+            note_sessions_moved()
         targets = list(live.members) if live is not None and live.members else [self]
         for m in targets:
             try:
@@ -1852,9 +1889,9 @@ class Gateway:
             tool_id = f"t-{uuid.uuid4().hex[:8]}"
             cmd = f"grep -c ERROR /var/log/app/shard-{i + 1:03d}.log && tail -n 40 /var/log/app/shard-{i + 1:03d}.log"
             await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd[:80], "args": {"command": cmd}})
-            await asyncio.sleep(0.04)
+            await asyncio.sleep(MARATHON_STEP_S)
             lines = "\n".join(f"2026-10-0{1 + k % 5} 0{k % 10}:{k:02d}:1{k % 10} shard-{i + 1:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms"
-                              for k in range(40))
+                              for k in range(MARATHON_LINES))
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.04,
                                                       "summary": f"{(i * 37) % 11} errors", "result_text": lines})
             if i % 25 == 24:
@@ -1883,6 +1920,64 @@ class Gateway:
         rows = [s.store("user", prompt, timestamp=s.turn_started_at)]
         rows += [s.store(step.pop("role"), step.pop("content"), **step) for step in steps]
         s.history += resume_rows(rows)
+
+    async def _huge_turn(self, s: Session, prompt: str) -> None:
+        """One piece of text too big to draw in one go (#371 candidate 3, test only), streamed in
+        large chunks: `huge reasoning 100` a single-paragraph reasoning of that many KB, then a
+        short answer; `huge code 2000` a reply with a code block of that many lines; `huge tool
+        60000` a tool call with that many characters of output, then a short answer."""
+        words = prompt.strip().lower().split()
+        kind = words[1] if len(words) > 1 else "reasoning"
+        m = re.search(r"\d+", prompt)
+        n = int(m.group()) if m else 0
+        sentence = "The export retried shard {} after the checksum on the backups disk came back different from the source, and the second pass matched. "
+        await self.event("message.start", s.sid)
+
+        async def chunks(text: str, kind_: str) -> None:
+            for i in range(0, len(text), 2048):
+                await self.event(kind_, s.sid, {"text": text[i:i + 2048]})
+                s.output_tokens += 512
+                await asyncio.sleep(0.01)
+
+        answer = "Done: every shard is checked and the export is complete."
+        if kind == "code":
+            lines = max(10, min(20000, n or 2000))
+            code = "\n".join(f"{k + 1:05d}  2026-10-13 04:{k % 60:02d}:{k * 7 % 60:02d} shard-{k % 97:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms" for k in range(lines))
+            text = f"Here is the whole log:\n\n```text\n{code}\n```\n\n{answer}"
+            await chunks(text, "message.delta")
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if kind == "tool":
+            size = max(1000, min(2_000_000, n or 60000))
+            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            cmd = "cat /var/log/app/export.log"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
+            out, k = [], 0
+            while sum(len(x) + 1 for x in out) < size:
+                out.append(f"{k + 1:05d}  shard-{k % 97:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms")
+                k += 1
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.3,
+                                                      "summary": f"{k} lines", "result_text": "\n".join(out)[:size]})
+            await chunks(answer, "message.delta")
+            self.store_turn(s, prompt, [1, answer])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": answer, "status": "complete", "usage": usage(s.output_tokens, 2)})
+            return
+        size = max(1, min(4000, n or 100)) * 1024
+        reasoning, k = "", 0
+        while len(reasoning) < size:
+            k += 1
+            reasoning += sentence.format(k)
+        reasoning = reasoning[:size].rstrip()
+        await chunks(reasoning, "reasoning.delta")
+        await chunks(answer, "message.delta")
+        await self.echo_reasoning(s, answer)
+        self.file_reasoning_turn(s, prompt, [
+            {"role": "assistant", "content": answer, "finish_reason": "stop", "reasoning": reasoning, "reasoning_content": reasoning}])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": answer, "usage": usage(s.output_tokens, 1), "status": "complete", "reasoning": reasoning})
 
     async def _thinking_turn(self, s: Session, prompt: str) -> None:
         """A model that thinks before it answers: its thinking as reasoning.delta (the real
@@ -2019,6 +2114,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
             await self._card_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("huge"):
+            await self._huge_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)
