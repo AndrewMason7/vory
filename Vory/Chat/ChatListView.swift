@@ -61,8 +61,11 @@ struct ChatListView: View {
     @State private var movingUntil = Date.distantPast
     /// How long a row's swipe action, or its menu's preview, takes to close: the row moves after.
     /// Moved while its swipe was still closing, it went with its actions out and its place blank
-    /// but for faint Pin and Archive circles, then popped in (#372, Matt on 24).
-    static let closeBeforeMove: Duration = .milliseconds(400)
+    /// but for faint Pin and Archive circles, then popped in (#372, Matt on 24). 400 ms was set
+    /// while the move itself also left a blank slot; with a pinned row leaving and arriving
+    /// (`listRowID`) the circles are gone about 0.1 s after the tap and the row is back by about
+    /// 0.3 s, so the move starts as the swipe settles (1.5 (26); two clean runs at 250).
+    static let closeBeforeMove: Duration = .milliseconds(250)
     /// The move itself (a snappy spring), for `movingUntil`.
     static let moveLength: TimeInterval = 0.4
     /// Chats the user deleted here, so a pinned row is not kept alive from memory afterwards.
@@ -71,6 +74,9 @@ struct ChatListView: View {
     #if os(macOS)
     @FocusState private var searchFocused: Bool
     #endif
+    /// The chat VoiceOver is on after a pin or an unpin: the row it was on leaves (`listRowID`),
+    /// and focus follows the chat to where it arrives.
+    @AccessibilityFocusState private var spokenRow: String?
     @State private var searchResults: [StoredSession] = []
     @State private var loading = false
     @State private var errorText: String?
@@ -733,7 +739,7 @@ struct ChatListView: View {
             Section {
                 if !folded {
                     let visible = shown(g)
-                    ForEach(visible) { s in sessionRow(s, runtime: runtime, showProject: false) }
+                    ForEach(visible, id: \.listRowID) { s in sessionRow(s, runtime: runtime, showProject: false) }
                     if visible.count < g.sessions.count {
                         Button { withAnimation(.snappy) { _ = shownInFull.insert(g.id) } } label: {
                             Text("Show all \(g.sessions.count)").font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
@@ -964,7 +970,7 @@ struct ChatListView: View {
     /// A row of the list: a chat, or a group chat when the filter lets them in.
     enum ListEntry: Identifiable {
         case session(StoredSession), room(Room)
-        var id: String { switch self { case .session(let s): return s.id; case .room(let r): return "room:" + r.roomId } }
+        var id: String { switch self { case .session(let s): return s.listRowID; case .room(let r): return "room:" + r.roomId } }
         var pinned: Bool { if case .session(let s) = self { return s.pinned ?? false }; return false }
         var date: Double { switch self { case .session(let s): return s.lastActive ?? 0; case .room(let r): return r.updatedAt } }
     }
@@ -1070,6 +1076,7 @@ struct ChatListView: View {
                         .task(id: "\(s.id)-\(s.lastActive ?? 0)-\(aiSummaries)") { if aiSummaries { summarizer.refresh(s, runtime: runtime, profile: prefs.allBots ? s.profile : nil) } }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
+                .accessibilityFocused($spokenRow, equals: s.id)
                 #if os(macOS)
                 // A firm press on the trackpad peeks the conversation, as the long press does on the phone.
                 .onForceClick { peeking = s }
@@ -1223,6 +1230,11 @@ struct ChatListView: View {
                 if let archived { sessions[i].archived = archived }
             }
         }
+        // A pin moves the chat to a new row: VoiceOver goes with it once it has arrived, instead of
+        // wherever the system puts focus when the row it was on leaves (nothing without VoiceOver).
+        if pinned != nil, archived == nil {
+            Task { try? await Task.sleep(for: .seconds(Self.moveLength)); spokenRow = s.id }
+        }
         do {
             _ = try await sent
         } catch HermesAPIError.http(let status, _) where status == 404 {
@@ -1239,6 +1251,16 @@ struct ChatListView: View {
         }
         await load()
     }
+}
+
+extension StoredSession {
+    /// A chat's row identity in the list, which changes with its pin: List animates a move by
+    /// sliding the row underneath the opaque rows it passes, so a pinned row vanished from its
+    /// place, a blank slot opened at the top and the row popped into it, and an unpinned one flew
+    /// up over the search field before landing (Matt on 1.5 (25): "a really weird animation").
+    /// As one row leaving and another arriving, each place animates on its own: the row fades
+    /// out where it was while the rows close up, and fades in where it goes as they open.
+    var listRowID: String { (pinned == true ? "pinned:" : "") + id }
 }
 
 struct SessionRow: View {
