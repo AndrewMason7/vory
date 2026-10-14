@@ -31,6 +31,10 @@ struct DashboardView: View {
     @Environment(\.macPageShown) private var pageShown
     @State private var visits = 0
     @State private var loadedKey = ""
+    /// The range changed: its load's numbers count over and the card's height glides (#377).
+    @State private var rangeMoved = false
+    /// The range moves under the title at the accessibility sizes.
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// The gateway the last finished load ran against (see `shouldLoad`).
     @State private var loadedConnection: UUID?
 
@@ -84,7 +88,7 @@ struct DashboardView: View {
         .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
-        .reloadable { await Task { await load() }.value }
+        .reloadable { await Task { await load(); await summarizeSince(force: true) }.value }
         // See `shouldLoad`. The rows and numbers are replaced in place, so a return shows no reload.
         .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)|\(pageLive)") {
             let connection = runtime?.connection.id
@@ -102,6 +106,7 @@ struct DashboardView: View {
             if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { lastVisit = max(lastVisit, visitStart); editingHome = false }
         }
         .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).pushedPage() }
+        .onChange(of: rangeDays) { _, _ in rangeMoved = true }
     }
 
     /// Whether Home loads now. Hidden (the phone's other tab in front, or another Mac page), it loads
@@ -263,11 +268,15 @@ struct DashboardView: View {
 
     private func overviewCard(full: Bool) -> some View {
         cardBackground(VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Overview").font(.headline)
-                Spacer()
-                GlassSegments(options: [(7, "7d"), (30, "30d"), (90, "90d")], spoken: ["7 days", "30 days", "90 days"], selection: $rangeDays)
-                    .accessibilityLabel("Range")
+            // The range beside the title where it fits at its own size; on a row of its own under
+            // it at the accessibility sizes, or wherever it does not fit (planner's call #35).
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) { Text("Overview").font(.headline); rangePicker }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text("Overview").font(.headline); Spacer(); rangePicker.fixedSize() }
+                    VStack(alignment: .leading, spacing: 10) { Text("Overview").font(.headline); rangePicker }
+                }
             }
             let t = usage?.totals
             let tokens = (t?.totalInput ?? 0) + (t?.totalOutput ?? 0) + (t?.totalCacheRead ?? 0)
@@ -298,6 +307,20 @@ struct DashboardView: View {
         })
     }
 
+    /// The system's segmented control (#377, call #35): its glass thumb slides to the range, and
+    /// a finger can drag it along. Ours snapped: its lens jumped from one option to the next. The
+    /// short labels are spoken in full. The numbers that hang on the range alone move with it.
+    /// "Range" names the group for VoiceOver; the Mac drew it beside the segments as well.
+    private var rangePicker: some View {
+        Picker("Range", selection: $rangeDays.animation(.snappy(duration: 0.3))) {
+            Text("7d").accessibilityLabel("7 days").tag(7)
+            Text("30d").accessibilityLabel("30 days").tag(30)
+            Text("90d").accessibilityLabel("90 days").tag(90)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
     /// What each tile counts, for a tap on it.
     private static let tileNotes: [String: String] = [
         "Sessions": "Chats started in the period, as the gateway's analytics count them. On a gateway without the analytics API it is the chats in the list instead.",
@@ -316,6 +339,8 @@ struct DashboardView: View {
             Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Text(value).font(isText ? .subheadline.weight(.semibold) : .title3.weight(.semibold).monospacedDigit())
                 .lineLimit(isText ? 2 : 1).minimumScaleFactor(0.6).fixedSize(horizontal: false, vertical: true)
+                // A change of range counts the number over (#377).
+                .contentTransition(.numericText())
         }
         .frame(minHeight: 58, alignment: .top)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -465,8 +490,8 @@ struct DashboardView: View {
             HStack {
                 Text(lastVisit > 0 ? "Since you were here" : "The last day").font(.headline)
                 Spacer()
+                // A pull on Home sums it up afresh; the card's own refresh button is gone (#377).
                 if summarizing { ProgressView().controlSize(.small) }
-                else { Button { Task { await summarizeSince(force: true) } } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain).foregroundStyle(.secondary) }
             }
             if let sinceSummary {
                 Text(sinceSummary).font(.subheadline).lineLimit(full ? nil : 3)
@@ -544,9 +569,16 @@ struct DashboardView: View {
         async let u: (UsageAnalytics?, keep: Bool) = Self.usage(rt, days: rangeDays)
         async let s: [StoredSession]? = try? Self.chats(rt, allBots: allBots)
         let (usageResult, list) = await (u, s)
-        if let a = usageResult.0 { usage = a } else if !usageResult.keep { usage = nil }
-        if let list { sessions = list; error = nil }
-        else if sessions.isEmpty { error = "Could not load the chat list." }
+        // After a change of range the numbers count over, the grid's blocks fade to their new
+        // shades and the card's height glides, so the cards below move with it instead of jumping
+        // (#377). Any other load lands at once, as before.
+        let animated = rangeMoved
+        rangeMoved = false
+        withAnimation(animated ? .snappy(duration: 0.4) : nil) {
+            if let a = usageResult.0 { usage = a } else if !usageResult.keep { usage = nil }
+            if let list { sessions = list; error = nil }
+            else if sessions.isEmpty { error = "Could not load the chat list." }
+        }
         // The Overview widget and complications draw from the shared snapshot.
         if let a = usageResult.0, var snap = WidgetSnapshot.load() {
             snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list, previous: snap.usage)
@@ -622,48 +654,6 @@ enum Format {
         case ..<1_000_000: return String(format: "%.1fk", Double(n) / 1000)
         case ..<1_000_000_000: return String(format: "%.1fM", Double(n) / 1_000_000)
         default: return String(format: "%.2fB", Double(n) / 1_000_000_000)
-        }
-    }
-}
-
-
-/// A small choice drawn the way the tab bar is: labels on a glass capsule, a clear lens sliding
-/// under the chosen one (the lens morphs between positions inside the container).
-struct GlassSegments<T: Hashable>: View {
-    var options: [(T, String)]
-    /// What VoiceOver says for each option, when its short label is not a word ("7d").
-    var spoken: [String]? = nil
-    @Binding var selection: T
-    @Namespace private var lens
-
-    var body: some View {
-        GlassEffectContainer(spacing: 6) {
-            HStack(spacing: 0) {
-                ForEach(Array(options.enumerated()), id: \.element.0) { i, option in
-                    Text(option.1).font(.caption.weight(.semibold))
-                        .foregroundStyle(selection == option.0 ? .primary : .secondary)
-                        .frame(width: 42, height: 26)
-                        .background {
-                            if selection == option.0 {
-                                Capsule().fill(.clear)
-                                    .glassEffect(.clear.interactive(), in: .capsule)
-                                    .glassEffectID("lens", in: lens)
-                            }
-                        }
-                        // Each option takes the capsule's full height (its padding above and below
-                        // the 26 pt label), so the click target is 32 pt tall; the look is the same.
-                        .padding(.vertical, 3)
-                        .contentShape(.rect)
-                        .onTapGesture { withAnimation(.snappy(duration: 0.3)) { selection = option.0 } }
-                        .accessibilityLabel(spoken.map { $0[i] } ?? option.1)
-                        .accessibilityAddTraits(selection == option.0 ? [.isButton, .isSelected] : .isButton)
-                }
-            }
-            // The options inside one element, so a label on the control names the group, not
-            // every option ("Range" on all three before).
-            .accessibilityElement(children: .contain)
-            .padding(.horizontal, 3)
-            .glassEffect(.regular, in: .capsule)
         }
     }
 }
