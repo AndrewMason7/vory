@@ -74,10 +74,15 @@ import VoryCore
         #expect(!names.contains("compress"))
         #expect(!names.contains("new"))
         #expect(!names.contains("approve"))
+        // A session's status and its checkpoints (the Mac's check on #27): there is no session yet.
+        #expect(!names.contains("status"))
         #expect(names.contains("model"))
-        #expect(names.contains("status"))
         #expect(names.contains("code-review"))
         #expect(Set(M.commandItems(Self.catalog, query: "", draft: false).map(\.name)).contains("compress"))
+        #expect(Set(M.commandItems(Self.catalog, query: "", draft: false).map(\.name)).contains("status"))
+        let rollback = CommandsCatalog(pairs: [["/rollback", "Restore a checkpoint"], ["/model", "Switch model"]])
+        #expect(M.commandItems(rollback, query: "", draft: true).map(\.name) == ["model"])
+        #expect(Set(M.commandItems(rollback, query: "", draft: false).map(\.name)).contains("rollback"))
     }
 
     @Test func aBareSlashListsTheCommandsAToZThenTheSkillsMostUsedFirst() {

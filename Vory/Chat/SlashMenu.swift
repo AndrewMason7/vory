@@ -109,7 +109,7 @@ enum SlashMenu {
     /// the chat exists, so a draft's list (the New Message sheet) leaves them out. The rest
     /// (models, reasoning, a title, skills, plugin and quick commands) go out as its first turn.
     static let notBeforeAChat: Set<String> = ["stop", "approve", "deny", "new", "reset", "clear", "undo", "retry",
-                                              "compress", "usage", "history", "queue", "steer"]
+                                              "compress", "usage", "history", "queue", "steer", "rollback", "status"]
 
     static func commandItems(_ catalog: CommandsCatalog, query: String, draft: Bool = false) -> [Item] {
         let meta = Dictionary((catalog.commands ?? [:]).map { (key($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
