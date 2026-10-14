@@ -36,7 +36,33 @@ public final class GatewayRuntime {
             // A socket that died quietly while the app was away is found out now, not at the
             // next heartbeat (see `GatewaySocket.checkAlive`).
             Task { [socket] in await socket?.checkAlive() }
+            // What was owed while away, once, after the return's animation (the foreground
+            // transition is where the watchdog counts the main thread's seconds).
+            owedFlush?.cancel()
+            owedFlush = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(700))
+                guard let self, !Task.isCancelled, !self.isAway else { return }
+                self.payOwedRefreshes()
+            }
         }
+    }
+    /// Refreshes held back while away (`publishSnapshot`, the sessions-changed notice): a long
+    /// turn sends a sessions.changed with every flush, and each one fetched the list, read and
+    /// wrote the widget snapshot in the Keychain, reloaded the widgets, and reloaded the chat
+    /// list with its Siri and Spotlight catalogs, all on a main thread the system wants quiet
+    /// in the background (#371: a quarter to half a core for as long as the turn ran).
+    private(set) var owedSnapshot = false
+    private(set) var owedSessionsRefresh = false
+    private(set) var owedListRefresh = false
+    private var owedFlush: Task<Void, Never>?
+
+    private func payOwedRefreshes() {
+        if owedListRefresh {
+            owedListRefresh = false
+            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
+            Task { await projects.refreshTree() }
+        }
+        if owedSnapshot { publishSnapshot(refreshSessions: owedSessionsRefresh) }
     }
     /// False where no socket is opened at all (a watch going through its iPhone): start,
     /// reconnect and new credentials leave it closed, and the capability probe skips it.
@@ -560,8 +586,10 @@ public final class GatewayRuntime {
         case "session.reclaimed":
             if let sid = event.payload["session_id"]?.stringValue, let chat = registry.byRuntime(sid) { chat.handle(event: event) }
         case "sessions.changed":
-            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             publishSnapshot(refreshSessions: true)
+            // Away, the lists are read again once on the way back (see `owedListRefresh`).
+            guard !isAway else { owedListRefresh = true; break }
+            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             Task { await projects.refreshTree() }
         case "projects.changed":
             Task { await projects.refresh() }
@@ -603,8 +631,19 @@ public final class GatewayRuntime {
     public var onSnapshotPublished: (@MainActor (WidgetSnapshot) -> Void)?
     private var recentSessions: [StoredSession] = []
 
-    /// Refreshes the recent-sessions list and writes the widget snapshot. Cheap; safe to call often.
+    /// Refreshes the recent-sessions list and writes the widget snapshot. Safe to call often.
+    ///
+    /// Away with a turn running, it is owed rather than run (see `owedSnapshot`), and runs once
+    /// when the last turn ends (the state the widgets are left showing) or on the way back.
     public func publishSnapshot(refreshSessions: Bool = false) {
+        if isAway, registry.all.contains(where: \.isRunning) {
+            owedSnapshot = true
+            owedSessionsRefresh = owedSessionsRefresh || refreshSessions
+            return
+        }
+        let refreshSessions = refreshSessions || owedSessionsRefresh
+        owedSnapshot = false
+        owedSessionsRefresh = false
         Task {
             if refreshSessions || recentSessions.isEmpty {
                 if let r: SessionListResponse = try? await api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "8")], profile: selectedProfile) {
