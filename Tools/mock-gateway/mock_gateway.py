@@ -2241,13 +2241,16 @@ class Gateway:
         await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
         await asyncio.sleep(0.3)
 
+        # "once or deny" in the prompt: an approval that offers only those two, as a gateway
+        # does when the command may not be remembered (the app shows only what is offered).
+        choices = ["once", "deny"] if "once or deny" in prompt.lower() else ["once", "session", "always", "deny"]
         answer = await self.ask("approval", s.sid, {
             "request_id": f"req-{uuid.uuid4().hex[:8]}",
             "command": "find /var/log -name '*.log.*' -mtime +90 -delete",
             "description": "Delete 34 rotated log files older than 90 days (4.2 GB) under /var/log",
             "tool_name": "terminal",
-            "choices": ["once", "session", "always", "deny"],
-            "allow_session": True, "allow_permanent": True})
+            "choices": choices,
+            "allow_session": "session" in choices, "allow_permanent": "always" in choices})
         choice = (answer or {}).get("choice", "deny")
 
         if choice == "deny":

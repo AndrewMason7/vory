@@ -482,22 +482,12 @@ struct BottomDock: View {
                         .glassEffectID("dock", in: namespace)
                         .accessibilityLabel("Read-only: this is another bot's chat")
                 } else if let card = chat.firstCard {
-                    if card.method == "approval" {
-                        PendingCardView(chat: chat, card: card)
-                            .glassEffectID("dock", in: namespace)
-                            .contextMenu {
-                                Button { Task { await chat.respond(card: card, result: ["choice": "once"]) } } label: { Label("Allow once", systemImage: "checkmark") }
-                                Button { Task { await chat.respond(card: card, result: ["choice": "session"]) } } label: { Label("Allow for this session", systemImage: "checkmark.circle") }
-                                Button { Task { await chat.respond(card: card, result: ["choice": "always"]) } } label: { Label("Always allow", systemImage: "checkmark.seal") }
-                                Divider()
-                                Button(role: .destructive) { Task { await chat.respond(card: card, result: ["choice": "deny"]) } } label: { Label("Deny", systemImage: "xmark") }
-                            }
-                    } else {
-                        // No context menu on a password or question card: a long press on the
-                        // secure field inside an empty menu was one more thing to go wrong.
-                        PendingCardView(chat: chat, card: card)
-                            .glassEffectID("dock", in: namespace)
-                    }
+                    // No long-press menu on any card: an approval is answered on its own buttons,
+                    // which offer exactly the gateway's choices, "Always" asking first. The menu an
+                    // approval card had (all four choices, Always without a question) never opened
+                    // inside this glass container anyway (26).
+                    PendingCardView(chat: chat, card: card)
+                        .glassEffectID("dock", in: namespace)
                 } else {
                     ComposerView(chat: chat, text: $text, quote: $quote, namespace: namespace)
                 }
