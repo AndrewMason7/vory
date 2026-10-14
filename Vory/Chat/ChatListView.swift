@@ -48,6 +48,19 @@ struct ChatListView: View {
     @State private var sessions: [StoredSession] = []
     /// Bumped by a tap on the selected Chats tab: the list scrolls to its first row.
     @State private var scrollToTop = 0
+    /// Rows waiting for their swipe action or menu to close before they move (#372): their pin
+    /// and archive as they were, kept by a reload that lands in the wait, so the change cannot
+    /// arrive unanimated ahead of its own move.
+    @State private var heldRows: [String: (pinned: Bool?, archived: Bool?)] = [:]
+    /// Until when a row's move is playing: a reload placed in the middle of it left a blank row
+    /// where the moving one was going, so it waits.
+    @State private var movingUntil = Date.distantPast
+    /// How long a row's swipe action, or its menu's preview, takes to close: the row moves after.
+    /// Moved while its swipe was still closing, it went with its actions out and its place blank
+    /// but for faint Pin and Archive circles, then popped in (#372, Matt on 24).
+    static let closeBeforeMove: Duration = .milliseconds(400)
+    /// The move itself (a snappy spring), for `movingUntil`.
+    static let moveLength: TimeInterval = 0.4
     /// Chats the user deleted here, so a pinned row is not kept alive from memory afterwards.
     @State private var droppedIDs: Set<String> = []
     @State private var searchText = ""
@@ -889,6 +902,17 @@ struct ChatListView: View {
                 guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
                 var kept = s; kept.lastActive = was; return kept
             }
+            // A row's move under way plays out first; a row still waiting for its swipe or menu to
+            // close keeps its pin and archive as they were until it moves (#372).
+            let moving = movingUntil.timeIntervalSinceNow
+            if moving > 0 { try? await Task.sleep(for: .seconds(moving)) }
+            let held = heldRows
+            if !held.isEmpty {
+                all = all.map { s in
+                    guard let h = held[s.id] else { return s }
+                    var t = s; t.pinned = h.pinned; t.archived = h.archived; return t
+                }
+            }
             // Placed without animation: rows whose words changed cross-faded over themselves.
             var tx = Transaction(); tx.disablesAnimations = true
             withTransaction(tx) {
@@ -1046,8 +1070,8 @@ struct ChatListView: View {
                 #endif
                 .contextMenu {
                     Button { open(route) } label: { Label("Open", systemImage: "bubble.left") }
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))]) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
-                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))]) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
+                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
+                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     if runtime.projects.available == true, runtime.projects.canMove {
                         Menu {
                             ProjectMoveMenu(sessions: [s], runtime: runtime) { errorText = $0 }
@@ -1065,8 +1089,8 @@ struct ChatListView: View {
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))]) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
-                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))]) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
+                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
+                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
                 }
     }
 
@@ -1162,28 +1186,45 @@ struct ChatListView: View {
         await load()
     }
 
-    private func patch(_ s: StoredSession, _ fields: [String: JSONValue]) async {
+    /// `afterClose`: from a row's swipe action or its menu, which close as the button is tapped.
+    /// The gateway is told at once; the row moves (a pin, an unpin) or goes (an archive) once the
+    /// swipe or the menu's preview has closed, in one animated step (`closeBeforeMove`).
+    private func patch(_ s: StoredSession, _ fields: [String: JSONValue], afterClose: Bool = false) async {
         guard let runtime else { return }
         var body = fields
         if let p = s.profile ?? runtime.selectedProfile, !p.isEmpty { body["profile"] = .string(p) }
         // Archiving a pinned chat unpins it too: the gateway lists every pinned chat, archived
         // or not, so an archived pin would stay at the top as if nothing happened.
         if case .bool(true)? = body["archived"], s.pinned == true { body["pinned"] = .bool(false) }
-        // Shown at once; the gateway's answer decides whether it stays that way.
-        let before = sessions
-        if let i = sessions.firstIndex(where: { $0.id == s.id }) {
-            if case .bool(let v)? = body["pinned"] { sessions[i].pinned = v }
-            if case .bool(let v)? = body["archived"] { sessions[i].archived = v }
+        let was = (pinned: s.pinned, archived: s.archived)
+        var pinned: Bool?, archived: Bool?
+        if case .bool(let v)? = body["pinned"] { pinned = v }
+        if case .bool(let v)? = body["archived"] { archived = v }
+        if afterClose { heldRows[s.id] = was }
+        let payload = JSONValue.object(body)
+        async let sent: JSONValue? = runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: payload)
+        if afterClose { try? await Task.sleep(for: Self.closeBeforeMove) }
+        // Shown now, by the row's id (a reload in the wait may have reordered the list); the
+        // gateway's answer decides whether it stays that way.
+        heldRows[s.id] = nil
+        movingUntil = Date().addingTimeInterval(Self.moveLength)
+        withAnimation(.snappy) {
+            if let i = sessions.firstIndex(where: { $0.id == s.id }) {
+                if let pinned { sessions[i].pinned = pinned }
+                if let archived { sessions[i].archived = archived }
+            }
         }
         do {
-            let _: JSONValue? = try await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body))
+            _ = try await sent
         } catch HermesAPIError.http(let status, _) where status == 404 {
             // The gateway no longer has this id (compressed onto a new one, deleted elsewhere):
             // the row was stale, and the gateway's list is the truth.
-            sessions.removeAll { $0.id == s.id }
+            withAnimation(.snappy) { sessions.removeAll { $0.id == s.id } }
             droppedIDs.insert(s.id)
         } catch {
-            sessions = before
+            withAnimation(.snappy) {
+                if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i].pinned = was.pinned; sessions[i].archived = was.archived }
+            }
             errorText = "Could not update the chat: \(error.localizedDescription)"
             return
         }

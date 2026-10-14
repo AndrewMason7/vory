@@ -1497,10 +1497,14 @@ def _process_request(connection, request):
     elif method == "PUT" and re.fullmatch(r"/api/profiles/[^/]+/(description|model)", base):
         result = put_profile(unquote(base.split("/")[3]), base.split("/")[4], body_json if isinstance(body_json, dict) else {})
     elif method == "PATCH" and base.startswith("/api/sessions/"):
-        # Title rename from the chat info sheet; the body is not readable here (websockets only
-        # hands us headers), so echo a plausible title so the sheet's "saved" path is exercised.
+        # A chat's pin, archive or title, kept on the stored row, so the list the app reloads
+        # after its own change agrees with it (a pin used to be put back by that reload).
         sid = base.split("/")[3]
         row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
+        if row and isinstance(body_json, dict):
+            for key in ("pinned", "archived", "title"):
+                if key in body_json:
+                    row[key] = body_json[key]
         result = (200, {"ok": True, "title": row["title"] if row else ""})
     elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
         # Held while the task "runs": answered later, without holding up anything else.
