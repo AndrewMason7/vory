@@ -48,6 +48,13 @@ struct VoryTabBar: View {
     /// when the lens is dropped (Matt, 2026-10-11: switching as it passed made the drag lag,
     /// each pass cross-faded two whole pages under a live glass lens).
     @State private var hoverTab: AppModel.AppTab?
+    /// True while a finger is on the capsule; back to false on a lift and on a cancel alike,
+    /// which is how a cancelled drag is told apart (`onEnded` never runs for one, #375).
+    @GestureState private var touching = false
+    #if DEBUG
+    /// UI tests of #375 (`TabBarDragTesting`): the drag's gesture is taken away for a moment.
+    @State private var testCancel = false
+    #endif
 
     /// The system capsule is 62 pt; the user wanted it a little shorter, bottom edge kept.
     private let barHeight: CGFloat = 56
@@ -209,7 +216,8 @@ struct VoryTabBar: View {
                 }
             }
             .contentShape(Capsule())
-            .gesture(barGesture(slotAlong: slotAlong))
+            .gesture(barGesture(slotAlong: slotAlong), including: gestureMask)
+            .onChange(of: touching) { _, on in if !on { DispatchQueue.main.async { dragGone() } } }
         }
         .frame(width: axis == .vertical ? verticalSlot + inset * 2 : nil,
                height: axis == .horizontal ? barHeight : CGFloat(max(1, tabs.count)) * verticalSlot + inset * 2)
@@ -259,6 +267,7 @@ struct VoryTabBar: View {
     /// is dropped. A quick press is a tap on that tab.
     private func barGesture(slotAlong: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .updating($touching) { _, on, _ in on = true }
             .onChanged { v in
                 if pressStart == nil { pressStart = Date() }
                 let held = Date().timeIntervalSince(pressStart ?? Date()) > 0.22
@@ -270,6 +279,9 @@ struct VoryTabBar: View {
                 if let tab = tab(at: along, slotAlong: slotAlong), tab != (hoverTab ?? model.selectedTab) {
                     UISelectionFeedbackGenerator().selectionChanged()
                     hoverTab = tab
+                    #if DEBUG
+                    if tab != model.selectedTab { TabBarDragTesting.cancelSoon { testCancel = $0 } }
+                    #endif
                 }
             }
             .onEnded { v in
@@ -285,6 +297,32 @@ struct VoryTabBar: View {
                     select(tab)
                 }
             }
+    }
+
+    private var gestureMask: GestureMask {
+        #if DEBUG
+        testCancel ? .subviews : .all
+        #else
+        .all
+        #endif
+    }
+
+    /// The finger is off the capsule. After a lift `onEnded` has already put everything away; a
+    /// drag the system cancelled (its edge gesture, or the window's glass recognizer that won the
+    /// touch) never gets `onEnded`, and left the lens and the tint on the tab it was over with the
+    /// page unchanged until the next touch (Matt on 24, #375). Run a turn later, so a lift's
+    /// `onEnded` always comes first: here only a cancel is left. A lifted lens then goes on to the
+    /// tab it was over, the page with it, as if dropped there; a press that had not lifted it
+    /// (a cancelled tap) does nothing. The tint and the page never disagree.
+    private func dragGone() {
+        guard dragX != nil || pressStart != nil else { return }
+        let lifted = dragX != nil
+        let target = hoverTab
+        dragX = nil
+        pressStart = nil
+        hoverTab = nil
+        guard lifted, let target, target != model.selectedTab else { return }
+        withAnimation(.snappy(duration: 0.28)) { model.selectedTab = target }
     }
 
     private func tab(at along: CGFloat, slotAlong: CGFloat) -> AppModel.AppTab? {
@@ -816,3 +854,22 @@ extension View {
     func hidesTabBar() -> some View { modifier(HidesTabBar()) }
     func tabRoot(_ tab: AppModel.AppTab) -> some View { modifier(TabRoot(tab: tab)) }
 }
+
+#if DEBUG
+/// UI tests of #375: with `-vory-test-cancel-bar-drag`, a drag of the lens onto another tab is
+/// cancelled 0.15 s later: the bar's gesture is taken away for a moment, which SwiftUI ends as a
+/// cancel (its state reset, no `onEnded`), as when the system takes the touch. A synthesized drag
+/// on the simulator is never cancelled, and SwiftUI's own touch recognizer is out of an app's reach.
+@MainActor enum TabBarDragTesting {
+    private static var last = Date.distantPast
+    static func cancelSoon(_ set: @escaping @MainActor (Bool) -> Void) {
+        guard ProcessInfo.processInfo.arguments.contains("-vory-test-cancel-bar-drag"), Date().timeIntervalSince(last) > 1 else { return }
+        last = Date()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            set(true)
+            NSLog("bar drag: test cancel")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { set(false) }
+        }
+    }
+}
+#endif
