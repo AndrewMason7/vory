@@ -198,4 +198,50 @@ final class ChatScrollUITests: XCTestCase {
         XCTAssertTrue(farHeld.exists, "the row held far up (\(far.label.prefix(30))) is no longer on screen: the thread moved")
         XCTAssertEqual(farHeld.frame.minY, far.y, accuracy: 24, "the thread moved \(Int(farHeld.frame.minY - far.y)) pt on its own while reading earlier messages")
     }
+
+    /// A reader who leaves a chat partway up finds it there again when they open it next (#329:
+    /// the place is kept per chat, `ChatViewMemory`), not pulled to the end. The open's own landing
+    /// must not take it away (1.5 (24): the open lands a past-the-end at once while locked).
+    func testAReaderReopensAChatAtTheirPlace() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        continueAfterFailure = false
+        launch(url: url, token: token)
+        // The list's row, not the chat's title pill, which carries the same words.
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup' AND identifier != 'chat.titlePill'"))
+        let row = try XCTUnwrap(hittable(rows, timeout: 40), "no Disk cleanup row")
+        row.tap()
+
+        // A long reply, then up the thread a little and out of the chat.
+        sendMarathon(20)
+        XCTAssertTrue(text("Everything else looked healthy").firstMatch.waitForExistence(timeout: 90), "the turn did not finish")
+        if app.keyboards.firstMatch.exists { app.swipeDown(velocity: .slow); RunLoop.current.run(until: Date().addingTimeInterval(0.6)) }
+        app.swipeDown(velocity: .slow)
+        app.swipeDown(velocity: .slow)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let place = try XCTUnwrap(mark(), "no row on screen up the thread")
+        shot("place-before-leaving")
+        let back = app.descendants(matching: .any).matching(identifier: "chat.back").firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "no Back")
+        back.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+
+        // Open again: the same row, where it was, and the arrow, since the thread is away from its end.
+        let again = try XCTUnwrap(hittable(rows, timeout: 10), "the list did not come back")
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        again.tap()
+        XCTAssertTrue(app.otherElements["chat.dock"].firstMatch.waitForExistence(timeout: 20), "the chat did not open again")
+        RunLoop.current.run(until: Date().addingTimeInterval(2.5))
+        shot("place-after-reopening")
+        let held = text(place.label).firstMatch
+        XCTAssertTrue(held.exists, "the row the reader left (\(place.label.prefix(30))) is not on screen: the place was lost")
+        print("CHAT-SCROLL place before \(Int(place.y)) after \(Int(held.frame.minY))")
+        // #373, kept here as a check: on 1.5 (23) and (24) the reopened chat lands about
+        // 750 pt from the reader's place. The place is remembered (#329); the open's landing moves
+        // it. When it is fixed this expectation fails ("expected failure did not occur"): remove it.
+        continueAfterFailure = true
+        XCTExpectFailure("#373: the reopened chat lands about 750 pt from where the reader left it (1.5 (23), (24))") {
+            XCTAssertEqual(held.frame.minY, place.y, accuracy: 40, "the reopened chat is \(Int(held.frame.minY - place.y)) pt from where the reader left it")
+            XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Jump to latest'")).firstMatch.exists, "no jump arrow: the reopened chat is at its end")
+        }
+    }
 }
