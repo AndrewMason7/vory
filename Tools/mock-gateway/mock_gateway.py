@@ -2478,6 +2478,13 @@ class Gateway:
                             for m in base:
                                 live.history.append({**m, "timestamp": m["timestamp"] - (reps - i) * 600, "row_id": len(live.history) + 1})
                 LIVE[sid] = live
+                # MOCK_WORKING=<title words or stored id>: that chat is mid-turn from its first
+                # resume, a reply streaming for ten minutes, so its bot is working (the Watch's
+                # live faces and their battery check, #387).
+                working = os.environ.get("MOCK_WORKING", "")
+                if working and row and (working == row["id"] or working.lower() in row["title"].lower()):
+                    live.running, live.turn_started_at = True, time.time()
+                    asyncio.ensure_future(self.run_turn(live, "long 600"))
             live.members.add(self)
             self.sessions[live.sid] = live
             messages = [] if p.get("omit_messages") else list(live.history)

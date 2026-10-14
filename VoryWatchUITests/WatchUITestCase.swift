@@ -14,6 +14,9 @@ import XCTest
 ///   watchOS simulator takes no system text size from `simctl ui`.
 /// - Increase Contrast is the simulator's own setting (the harness writes the accessibility
 ///   default), so the app runs as it would on a Watch set that way.
+/// - TEST_RUNNER_HERMES_E2E_DIMMED=1: the app drawn as with the wrist down (the DEBUG launch
+///   argument -vory-test-dimmed, the one test hook in the Watch app, since the simulator cannot be
+///   put in the always-on state).
 @MainActor
 class WatchUITestCase: XCTestCase {
     var app: XCUIApplication!
@@ -33,6 +36,7 @@ class WatchUITestCase: XCTestCase {
         app.launchEnvironment = ["VORY_E2E_URL": url, "VORY_E2E_TOKEN": token].merging(environment) { $1 }
         var args = arguments
         if let size = e["HERMES_E2E_CONTENT_SIZE"], !size.isEmpty { args += ["-UIPreferredContentSizeCategoryName", size] }
+        if e["HERMES_E2E_DIMMED"] == "1" { args += ["-vory-test-dimmed", "YES"] }
         app.launchArguments = args
         app.launch()
     }
