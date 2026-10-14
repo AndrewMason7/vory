@@ -258,7 +258,7 @@ struct HTMLCardSheet: View {
             Group {
                 if source {
                     ScrollView {
-                        Text(html).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                        LongText(html, code: true).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading).padding()
                     }
                 } else {

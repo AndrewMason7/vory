@@ -48,6 +48,40 @@ enum MarkdownTableMetrics {
     static func overflow(contentWidth: CGFloat, visibleMinX: CGFloat, visibleMaxX: CGFloat) -> Overflow {
         Overflow(leading: visibleMinX > 1, trailing: visibleMaxX < contentWidth - 1)
     }
+
+    /// A cell's text as a grid shows it: at most `TextPieces.limit` characters, then an ellipsis. A cell with a huge
+    /// unbroken value (a hash, base64) was laid out on one line to size its column, and drawn as one picture taller
+    /// than the graphics card allows on the sheet, where cells are not cut to three lines (#361). The whole cell is in
+    /// Copy as Markdown and on a long press on the sheet.
+    static func shownCell(_ markdown: String, limit: Int = TextPieces.limit) -> String {
+        guard markdown.utf8.count > limit else { return markdown }
+        return String(markdown.prefix(limit)) + "…"
+    }
+
+    /// Most columns and rows a table shows in a reply; the whole table is on its sheet.
+    static let bubbleColumns = 16
+    static let bubbleRows = 60
+}
+
+extension MarkdownTable {
+    /// The table's first `columns` columns and `rows` rows.
+    func prefix(columns: Int, rows: Int) -> MarkdownTable {
+        guard header.count > columns || self.rows.count > rows else { return self }
+        return MarkdownTable(header: Array(header.prefix(columns)), alignments: Array(alignments.prefix(columns)),
+                             rows: self.rows.prefix(rows).map { Array($0.prefix(columns)) })
+    }
+}
+
+/// "Copy Cell" on a long press, on the table's sheet only (in a reply the long press keeps the reply's own menu).
+private struct CopyCellMenu: ViewModifier {
+    var text: String?
+    func body(content: Content) -> some View {
+        if let text {
+            content.contextMenu { Button { UIPasteboard.general.string = text } label: { Label("Copy Cell", systemImage: "doc.on.doc") } }
+        } else {
+            content
+        }
+    }
 }
 
 /// Lays a table's cells out row by row (header first, `columns` to a row) with the widths from
@@ -237,10 +271,11 @@ struct MarkdownTableGrid: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment(c))
             .overlay(alignment: .top) { hairline }
+            .modifier(CopyCellMenu(text: opaqueHeader ? MarkdownTable.plain(table.cell(row: r, column: c)) : nil))
     }
 
     private func text(_ markdown: String, column c: Int, header: Bool) -> some View {
-        Text(MarkdownView.inline(markdown))
+        Text(MarkdownView.inline(MarkdownTableMetrics.shownCell(markdown)))
             .font(header ? font.weight(.semibold) : font)
             .lineLimit(lineLimit)
             .truncationMode(.tail)
@@ -303,7 +338,7 @@ struct MarkdownTableStack: View {
 
     private func line(row r: Int, column c: Int) -> some View {
         let name = table.header[c]
-        let value = Text(MarkdownView.inline(table.cell(row: r, column: c)))
+        let value = Text(MarkdownView.inline(MarkdownTableMetrics.shownCell(table.cell(row: r, column: c), limit: TextPieces.Limits.largestAccessibility.chars)))
         let shown = name.isEmpty ? value : Text("\(Text(MarkdownView.inline(name)).fontWeight(.semibold)): \(value)")
         return shown.font(font)
             .fixedSize(horizontal: false, vertical: true)

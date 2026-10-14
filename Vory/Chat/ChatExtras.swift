@@ -116,25 +116,51 @@ struct JumpToBottomButton: View {
 /// own selectable text offers Copy and Share for the whole thing and nothing in between (a
 /// tester: "the select text window doesn't work").
 #if os(macOS)
-/// On the Mac SwiftUI's selectable text already selects by range, so no AppKit view is needed.
+/// On the Mac an AppKit text view too, as on the iPhone: SwiftUI's selectable `Text` drew the whole text as one
+/// picture, and a long output past the graphics card's largest texture was an empty box (#361). The text view lays
+/// out and draws only what is on screen, and selects by range as before.
 struct SelectableText: View {
     var text: String
     var monospaced = false
+    /// What VoiceOver calls the text (the sheet's title).
+    var label = "Text"
     var body: some View {
-        ScrollView {
-            Text(text)
-                .font(monospaced ? .system(.footnote, design: .monospaced) : .body)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+        SelectableTextView(text: text, monospaced: monospaced, label: label)
+            .frame(minWidth: 420, minHeight: 320)
+    }
+}
+
+private struct SelectableTextView: NSViewRepresentable {
+    var text: String
+    var monospaced: Bool
+    var label: String
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        if let v = scroll.documentView as? NSTextView {
+            v.isEditable = false
+            v.isSelectable = true
+            v.drawsBackground = false
+            v.textContainerInset = NSSize(width: 12, height: 12)
         }
-        .frame(minWidth: 420, minHeight: 320)
+        return scroll
+    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let v = scroll.documentView as? NSTextView else { return }
+        if v.string != text { v.string = text }
+        v.font = monospaced ? .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
+                            : .preferredFont(forTextStyle: .body)
+        v.textColor = .labelColor
+        v.setAccessibilityLabel(label)
     }
 }
 #else
 struct SelectableText: UIViewRepresentable {
     var text: String
     var monospaced = false
+    /// What VoiceOver calls the text (the sheet's title).
+    var label = "Text"
     func makeUIView(context: Context) -> UITextView {
         let v = UITextView()
         v.isEditable = false
@@ -150,21 +176,26 @@ struct SelectableText: UIViewRepresentable {
     func updateUIView(_ v: UITextView, context: Context) {
         v.font = monospaced ? UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular) : UIFont.preferredFont(forTextStyle: .body)
         v.textColor = .label
+        v.accessibilityLabel = label
         if v.text != text { v.text = text }
     }
 }
 #endif
 
 struct SelectTextSheet: View {
+    /// What the text is: "Select Text" for a message's own, the bot's name and "Reasoning" for a reasoning shown whole.
+    var title = "Select Text"
     var text: String
+    var monospaced = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
-            SelectableText(text: text)
-            .navigationTitle("Select Text")
+            SelectableText(text: text, monospaced: monospaced, label: title)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                // Done, a swipe down on the phone, Escape on the Mac.
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .primaryAction) { Button { UIPasteboard.general.string = text } label: { Label("Copy all", systemImage: "doc.on.doc") } }
             }
         }

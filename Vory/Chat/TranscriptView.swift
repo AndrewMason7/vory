@@ -114,7 +114,7 @@ struct TranscriptView: View {
     @State private var openReasoning: Set<String> = []
     /// The rows' actions, one object for the view's life (see `RowContext`).
     @State private var actions = RowActions()
-    @State private var selectText: String?
+    @State private var selectText: SelectTextItem?
     @AppStorage(ChatStyle.showToolCalls) private var showToolCalls = true
     @AppStorage(ChatStyle.showReasoning) private var showReasoning = true
     @AppStorage(ChatStyle.showTurnStats) private var showTurnStats = true
@@ -361,11 +361,18 @@ struct TranscriptView: View {
                 }
                 #endif
             }
+            #if DEBUG
+            .overlay(alignment: .topLeading) {
+                if PieceProbe.shared.on {
+                    Text(PieceProbe.shared.summary).font(.system(size: 8)).padding(.top, 140).accessibilityIdentifier("debug.pieces")
+                }
+            }
+            #endif
             .overlay(alignment: .bottomTrailing) {
                 JumpToBottomButton(visible: awayFromBottom) { jumpToBottom() }
                 .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
-            .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide).withAppModel() }
+            .sheet(item: $selectText) { SelectTextSheet(title: $0.title, text: $0.text, monospaced: $0.monospaced).sheetFrame(.wide).withAppModel() }
             .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame().withAppModel() }
             .sheet(isPresented: $showAwayGrace) { AwayGraceSheet(runtime: chat.runtime).sheetFrame(.compact).withAppModel() }
             #if os(iOS)
@@ -467,10 +474,12 @@ extension TranscriptView {
         actions.onReply = onReply
         actions.onChooseModel = { showModelSheet = true }
         actions.onKeepRunning = { showAwayGrace = true }
-        actions.onSelectText = { selectText = $0 }
+        actions.onSelectText = { selectText = SelectTextItem(text: $0) }
+        actions.onShowAll = { title, text in selectText = SelectTextItem(title: title, text: text, monospaced: title.hasPrefix("Code")) }
         actions.setReasoningOpen = { id, on in if on { openReasoning.insert(id) } else { openReasoning.remove(id) } }
         actions.setToolOpen = { id, on in if on { openTools.insert(id) } else { openTools.remove(id) } }
-        return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
+        return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName,
+                          botLabel: chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
                           showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
                           openReasoning: openReasoning, openTools: openTools, showToolOutput: showToolOutput, compactTools: compactTools,
                           wide: wideReplies, maxBubble: bubbleCap, actions: actions)
@@ -732,6 +741,8 @@ final class RowActions {
     var onChooseModel: () -> Void = {}
     var onKeepRunning: () -> Void = {}
     var onSelectText: (String) -> Void = { _ in }
+    /// The whole of a text a fold shows only the start of, on the Select Text sheet under a title (#361).
+    var onShowAll: (_ title: String, _ text: String) -> Void = { _, _ in }
     var setReasoningOpen: (String, Bool) -> Void = { _, _ in }
     var setToolOpen: (String, Bool) -> Void = { _, _ in }
 }
@@ -746,6 +757,8 @@ struct RowContext: Equatable {
     /// The chat's bot whatever is shown: pictures live in its images dir on the gateway (with
     /// bots hidden, a stored attachment of a non-default bot's chat came back as a placeholder).
     var bot: String?
+    /// The chat's bot as the person knows it, for the title of its reasoning's sheet.
+    var botLabel: String?
     var typingTool: String?
     var showReasoning: Bool
     var currentStepOnly: Bool
@@ -761,7 +774,7 @@ struct RowContext: Equatable {
     var actions: RowActions
 
     static func == (a: RowContext, b: RowContext) -> Bool {
-        a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
+        a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
             && a.currentStepOnly == b.currentStepOnly && a.showStats == b.showStats && a.interruptCause == b.interruptCause && a.lastID == b.lastID
             && a.openReasoning == b.openReasoning && a.openTools == b.openTools && a.showToolOutput == b.showToolOutput
             && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
@@ -784,6 +797,7 @@ struct RowContext: Equatable {
                       interruptCause: id == lastID ? interruptCause : nil, onKeepRunning: actions.onKeepRunning,
                       reasoningOpen: openReasoning.contains(id), setReasoningOpen: { actions.setReasoningOpen(id, $0) },
                       onSelectText: actions.onSelectText,
+                      onShowAll: actions.onShowAll, botLabel: botLabel,
                       toolOpen: openTools.contains(id), setToolOpen: { actions.setToolOpen(id, $0) },
                       showToolOutput: showToolOutput, compactTools: compactTools, wide: wide, maxBubble: maxBubble)
             // Equatable on what it draws (the closures and the binding are
@@ -1143,11 +1157,17 @@ struct TranscriptRowModel: Identifiable, Equatable {
     }
 }
 
-struct SelectTextItem: Identifiable { let text: String; var id: String { text } }
+struct SelectTextItem: Identifiable {
+    var title = "Select Text"
+    let text: String
+    /// Code and logs read in a fixed-width font.
+    var monospaced = false
+    var id: String { title + "\u{0}" + text }
+}
 
 struct TranscriptRow: View, Equatable {
     static func == (a: TranscriptRow, b: TranscriptRow) -> Bool {
-        a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botShown == b.botShown && a.typingTool == b.typingTool
+        a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.botShown == b.botShown && a.typingTool == b.typingTool
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
             && a.reasoningOpen == b.reasoningOpen && a.toolOpen == b.toolOpen
             && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
@@ -1185,6 +1205,10 @@ struct TranscriptRow: View, Equatable {
     var reasoningOpen = false
     var setReasoningOpen: (Bool) -> Void = { _ in }
     var onSelectText: (String) -> Void = { _ in }
+    /// A text's whole on the Select Text sheet under a title, from a fold that shows its start (#361).
+    var onShowAll: (_ title: String, _ text: String) -> Void = { _, _ in }
+    /// The chat's bot as the person knows it: the reasoning sheet's title.
+    var botLabel: String? = nil
     var toolOpen = false
     var setToolOpen: (Bool) -> Void = { _ in }
     var showToolOutput = true
@@ -1244,7 +1268,11 @@ struct TranscriptRow: View, Equatable {
                     if !attachments.isEmpty { AttachmentStrip(attachments: attachments) }
                     if !attached.isEmpty { MediaThumbStrip(refs: attached, profile: bot, side: 120, alignment: .trailing) }
                     if !shownText.isEmpty {
-                        Text(shownText)
+                        let shown = TextPieces.capped(shownText)
+                        VStack(alignment: .leading, spacing: 6) {
+                            LongText(shown.text)
+                            if shown.more > 0 { MoreTextNote(more: shown.more) { onShowAll("Your message", text) } }
+                        }
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
@@ -1280,7 +1308,7 @@ struct TranscriptRow: View, Equatable {
                     // runs), the reasoning above it when there is some, the live count below.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id)
+                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1294,13 +1322,13 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
                     // Other files the bot hands back are cards under the words (#309).
                     let files = TranscriptMedia.files(in: text)
-                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false).equatable()
+                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false, onShowAll: onShowAll).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if !files.isEmpty { FileCardStrip(refs: files, profile: bot) }
                     if showStats, let s = item.stats {
@@ -1335,7 +1363,7 @@ struct TranscriptRow: View, Equatable {
             HStack {
                 Spacer(minLength: 56)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(text)
+                    LongText(text)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -1364,7 +1392,7 @@ struct TranscriptRow: View, Equatable {
             // read nor copy the small grey line it was).
             VStack(alignment: .leading, spacing: 6) {
                 Label("Command", systemImage: "terminal").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text(text).font(.body).textSelection(.enabled)
+                LongText(text).font(.body).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(12).padding(.trailing, 20)
@@ -1421,7 +1449,7 @@ struct StartFailureCard: View {
                     .buttonStyle(.borderless)
             }
             if showRaw {
-                Text(raw).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                LongText(TextPieces.capped(raw).text, code: true).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }
         .padding(12)
@@ -1501,11 +1529,16 @@ struct InjectedNoteRow: View {
             Button { withAnimation(.snappy(duration: 0.32)) { self.open.toggle() } } label: { title.contentShape(.rect) }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
-            Text(note.body).font(.caption.monospaced()).textSelection(.enabled)
+            // A background process's output can run to megabytes: its start, in pieces (#361).
+            let body = TextPieces.capped(note.body)
+            VStack(alignment: .leading, spacing: 4) {
+                LongText(body.text, code: true).font(.caption.monospaced()).textSelection(.enabled)
+                if body.more > 0 { MoreTextNote(more: body.more) }
+            }
                 .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
                 .frame(width: max(rowWidth, pillWidth), alignment: .leading)
                 // Revealed by the glass, not faded or moved: it is already in place.
-                .folded(open: open)
+                .folded(open: open, keep: body.text.utf8.count <= 6_000)
         }
         .frame(width: pillWidth > 0 ? (open ? max(rowWidth, pillWidth) : pillWidth) : nil)
         .clipShape(.rect(cornerRadius: open ? 14 : 20))
@@ -1526,6 +1559,9 @@ struct Folded: ViewModifier {
     var open: Bool
     /// The parent stack's spacing: a zero-height child would still get it, so it is taken back.
     var spacing: CGFloat = 0
+    /// Kept laid out through the close, so the edge covers it. Not for a big fold: a few screens of text laid out and
+    /// animated only to be covered, the close went with the fold at once (#361).
+    var keep = true
     /// Mounted while open and for the close animation after; not before the first open.
     @State private var shown = false
     /// Bumped on every change, so a close's delayed unmount stands down when it reopened since.
@@ -1542,7 +1578,7 @@ struct Folded: ViewModifier {
         .padding(.top, open ? 0 : -spacing)
         .onChange(of: open, initial: true) { _, now in
             gen += 1
-            if now { shown = true } else {
+            if now { shown = true } else if !keep { shown = false } else {
                 let g = gen
                 Task { try? await Task.sleep(for: .milliseconds(650)); if gen == g { shown = false } }
             }
@@ -1551,7 +1587,7 @@ struct Folded: ViewModifier {
 }
 
 extension View {
-    func folded(open: Bool, spacing: CGFloat = 0) -> some View { modifier(Folded(open: open, spacing: spacing)) }
+    func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep)) }
 }
 
 /// The whole tool call on its own page: the command or arguments and the output, as text you
@@ -1572,7 +1608,7 @@ struct ToolCallSheet: View {
             SelectableText(text: text, monospaced: true)
                 .navigationTitle(activity.displayName).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
                     ToolbarItem(placement: .primaryAction) { ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") } }
                 }
         }
@@ -1613,7 +1649,11 @@ struct BotMessageNotice: View {
                 }
                 .buttonStyle(.plain)
                 if open {
-                    Text(text).font(.footnote).textSelection(.enabled)
+                    let shown = TextPieces.capped(text)
+                    VStack(alignment: .leading, spacing: 4) {
+                        LongText(shown.text).font(.footnote).textSelection(.enabled)
+                        if shown.more > 0 { MoreTextNote(more: shown.more) }
+                    }
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(maxWidth: 360, alignment: .leading)
                         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
@@ -1630,6 +1670,8 @@ struct ReasoningDisclosure: View {
     var text: String
     @Binding var open: Bool
     var itemID: String? = nil
+    /// The whole reasoning, when the fold shows only its start (`TextPieces.foldCap`).
+    var onShowAll: ((String) -> Void)? = nil
     @State private var revealing = false
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1647,8 +1689,14 @@ struct ReasoningDisclosure: View {
             .accessibilityLabel(open ? "Hide reasoning" : "Show reasoning")
             // Models think in markdown (headings, lists, tables): render it, small and quiet.
             // In place from the start; the fold's moving edge reveals and covers it (nothing slides).
-            MarkdownView(text: text, style: .reasoning, inlineSelection: false).equatable()
-                .folded(open: open, spacing: 4)
+            // A long turn's reasoning is shown up to the fold's cap, the rest on the Select Text sheet,
+            // and closes at once rather than staying laid out under the closing edge (#361).
+            let shown = TextPieces.capped(text)
+            VStack(alignment: .leading, spacing: 6) {
+                MarkdownView(text: shown.text, style: .reasoning, inlineSelection: false).equatable()
+                if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(text) } }) }
+            }
+            .folded(open: open, spacing: 4, keep: shown.text.utf8.count <= 6_000)
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
             if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
@@ -1724,16 +1772,8 @@ struct MarkdownView: View, Equatable {
         guard text.utf8.contains(UInt8(ascii: "@")) else { return a }
         return Mentions.mark(a, names: Mentions.names)
     }
-    /// The inline text as a view, bot mentions drawn as chips (#321).
-    @MainActor @ViewBuilder static func inlineText(_ text: String) -> some View {
-        // The chip renderer only where there is a mention: on every paragraph it sized and drew
-        // each line itself, a cost in every long reply's layout with nothing to show for it (1.5 (24)).
-        if text.utf8.contains(UInt8(ascii: "@")) {
-            Mentions.text(inline(text)).textRenderer(MentionChipRenderer())
-        } else {
-            Text(inline(text))
-        }
-    }
+    /// The inline text as a view, bot mentions drawn as chips (#321), in pieces when long for the text size (#361).
+    @MainActor static func inlineText(_ text: String) -> some View { InlineText(text: text) }
     static func inlineCached(_ text: String) -> AttributedString {
         let key = text as NSString
         if let hit = inlineCache.object(forKey: key) { return hit.text }
@@ -1747,6 +1787,14 @@ struct MarkdownView: View, Equatable {
 
     /// Selectable in place. Chat bubbles on the iPhone turn it off (see `selectable`).
     var inlineSelection = true
+    /// A code block's whole text on the Select Text sheet, under a title, when the reply shows only its start (#361).
+    var onShowAll: ((_ title: String, _ text: String) -> Void)? = nil
+
+    /// A code block's sheet title: "Code", or "Code · bash" when the fence names a language.
+    static func codeTitle(_ lang: String?) -> String {
+        guard let lang, !lang.isEmpty, !["text", "txt", "plaintext", "plain"].contains(lang.lowercased()) else { return "Code" }
+        return "Code · \(lang)"
+    }
 
     static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.style == b.style && a.inlineSelection == b.inlineSelection }
 
@@ -1811,8 +1859,15 @@ struct MarkdownView: View, Equatable {
                     if closed { CopyButton(text: code) } else { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.top, 6)
-                Text(code).font(style.codeFont).textSelection(.enabled)
+                // Its start, in pieces: every piece is drawn whole, so a log of thousands of lines cost hundreds of
+                // megabytes; the rest is a Show all away (#361).
+                let shown = TextPieces.capped(code)
+                LongText(shown.text, code: true).font(style.codeFont).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true).padding(10)
+                if shown.more > 0 {
+                    MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(Self.codeTitle(lang), code) } })
+                        .padding(.horizontal, 10).padding(.bottom, 8)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
@@ -1895,12 +1950,24 @@ struct MarkdownTableView: View {
     @State private var full = false
     @State private var more = MarkdownTableMetrics.Overflow()
 
+    /// What the reply shows: a table over 16 columns or 60 rows shows that much and says how much more there is; the
+    /// whole of it is on the sheet (a wide table made a grid wider than the graphics card draws, #361).
+    private var shownTable: MarkdownTable { table.prefix(columns: MarkdownTableMetrics.bubbleColumns, rows: MarkdownTableMetrics.bubbleRows) }
+
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 4) {
             if typeSize.isAccessibilitySize {
-                MarkdownTableStack(table: table)
+                MarkdownTableStack(table: shownTable)
             } else {
                 card
+            }
+            let columns = table.header.count - shownTable.header.count, rows = table.rows.count - shownTable.rows.count
+            if columns > 0 || rows > 0 {
+                Button { full = true } label: {
+                    Text([columns > 0 ? "\(columns) more columns" : nil, rows > 0 ? "\(rows) more rows" : nil].compactMap { $0 }.joined(separator: ", ") + " · Open the table")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain).foregroundStyle(.tint)
             }
         }
         // No menu of its own: a long press keeps the reply's (Reply, Speak, Copy, Share). The
@@ -1910,7 +1977,7 @@ struct MarkdownTableView: View {
     }
 
     private var grid: some View {
-        MarkdownTableGrid(table: table, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn, headerInset: 22)
+        MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn, headerInset: 22)
     }
 
     private var card: some View {
@@ -2113,11 +2180,11 @@ struct ToolCardView: View {
                     // full (a tester opened a card and got a few more characters of a cut preview).
                     if todos == nil, let a = fullCall, !a.isEmpty {
                         Text(activity.name == "terminal" || activity.name == "bash" ? "Command" : "Arguments").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        CodeBlock(text: a, lineCap: 40)
+                        CodeBlock(text: a, lineCap: 40, onShowAll: { showFull = true })
                     }
                     if showOutput, let r = activity.resultText, !r.isEmpty {
                         Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        CodeBlock(text: r, lineCap: 30)
+                        CodeBlock(text: r, lineCap: 30, onShowAll: { showFull = true })
                         // A tool that made or found pictures (a screenshot, a render): shown, not just named.
                         let shots = MediaScan.imagePaths(inToolOutput: r)
                         if !shots.isEmpty { MediaThumbStrip(refs: shots, profile: nil, side: 110) }
@@ -2170,20 +2237,22 @@ struct ToolCardView: View {
 struct CodeBlock: View {
     var text: String
     var lineCap: Int
+    /// The whole text on a page of its own (the tool's), when what is shown is capped.
+    var onShowAll: (() -> Void)? = nil
     @State private var showAll = false
 
-    private var lines: [Substring] { text.split(separator: "\n", omittingEmptySubsequences: false) }
-    private var shown: String {
-        showAll || lines.count <= lineCap ? String(text.prefix(20_000)) : lines.prefix(lineCap).joined(separator: "\n")
-    }
-
     var body: some View {
+        // Capped in characters as well as lines: a few lines of minified output can be a megabyte. What is shown is
+        // drawn in pieces (#361); the whole output is on the tool's page and in Copy.
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : lines.prefix(lineCap).joined(separator: "\n"))
         VStack(alignment: .leading, spacing: 4) {
-            Text(shown).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            LongText(shown.text, code: true).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true).padding(10).padding(.trailing, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
             .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
+            if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll) }
             if lines.count > lineCap {
                 Button(showAll ? "Show less" : "Show \(lines.count - lineCap) more lines") { withAnimation(.snappy) { showAll.toggle() } }
                     .font(.caption)
