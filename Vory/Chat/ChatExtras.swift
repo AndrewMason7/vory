@@ -176,9 +176,11 @@ struct SelectableText: UIViewRepresentable {
         return v
     }
     func updateUIView(_ v: UITextView, context: Context) {
-        v.font = monospaced ? UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular) : UIFont.preferredFont(forTextStyle: .body)
-        v.textColor = .label
-        v.accessibilityLabel = label
+        // Only what changed: setting the font lays the whole text out again (100 KB on a Show all sheet).
+        let font = monospaced ? UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular) : UIFont.preferredFont(forTextStyle: .body)
+        if v.font != font { v.font = font }
+        if v.textColor != .label { v.textColor = .label }
+        if v.accessibilityLabel != label { v.accessibilityLabel = label }
         if v.text != text { v.text = text }
     }
 }
