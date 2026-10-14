@@ -459,8 +459,12 @@ struct MorphTopBar: View {
             // can change with the path still open: a Bot Chat opened from a "Messaged X" notice
             // sits over the chat it came from, and back from it that chat is in front again. The
             // bar is the one in front's: kept on the chat underneath, its Back reached that chat
-            // and took both pages away (#346, Matt on 1.5 (23): Back went to the list).
-            if id != nil, model.chatsPathOpen, let c = model.visibleChat, state.chat !== c { state.push(c) }
+            // and took both pages away (#346, Matt on 1.5 (23): Back went to the list). The Chats
+            // tab's own only: with a chat left open on Chats (the Overview widget's link goes to
+            // Home and leaves it there), a chat pushed on another tab's stack (from a bot's page or
+            // its compose) took the bar, and after its Back the chat's bar stayed over the page
+            // (#386, the planner's call #34). On another tab a chat gets the page's own Back.
+            if id != nil, model.chatsPathOpen, model.selectedTab == .chats, let c = model.visibleChat, state.chat !== c { state.push(c) }
         }
     }
 
