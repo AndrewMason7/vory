@@ -77,6 +77,73 @@ final class PinMoveUITests: XCTestCase {
         mark("done")
     }
 
+    /// A wide window (the iPad's two columns), the chat open beside the list: pinning and unpinning
+    /// it keeps it open there, though its row in the list is a new one each time (1.5 (26)). The
+    /// selected row's tint is in the screenshots (attachments "pin-wide-*").
+    func testPinningTheChatOpenBesideTheListKeepsItOpen() throws {
+        try launch()
+        let window = app.windows.firstMatch.frame
+        guard window.width > 700 else { throw XCTSkip("needs a wide window (the iPad's two columns)") }
+        // The list's row, not the open chat's header beside it (which names the chat too).
+        func listRow(_ title: String) -> XCUIElement {
+            app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", title)).allElementsBoundByIndex
+                .first { $0.isHittable && $0.frame.maxX < window.midX } ?? row(title)
+        }
+        listRow("Weekly dependency audit").tap()
+        let header = app.descendants(matching: .any).matching(identifier: "chat.header").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 15), "the chat did not open beside the list")
+        let opened = header.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Weekly dependency audit")).firstMatch
+        pause(2)
+        shot("pin-wide-open")
+        for (action, name) in [("Pin", "pinned"), ("Unpin", "unpinned")] {
+            mark("wide \(name) swipe")
+            listRow("Weekly dependency audit").swipeRight()
+            let b = app.buttons[action].firstMatch
+            XCTAssertTrue(b.waitForExistence(timeout: 5), "no \(action) action")
+            mark("wide \(name) tap")
+            b.tap()
+            pause(2.4)
+            shot("pin-wide-\(name)")
+            XCTAssertTrue(header.exists, "the chat beside the list closed when it was \(name)")
+            XCTAssertTrue(opened.exists || header.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Weekly")).firstMatch.exists,
+                          "another chat is open beside the list after it was \(name)")
+        }
+    }
+
+    /// The accessibility audit on Chats with a chat pinned (its row a new one, 1.5 (26)): nothing on
+    /// the chats' rows. What the audit flags elsewhere is printed (PIN-AUDIT).
+    func testChatsAuditWithAPinnedChat() throws {
+        try launch()
+        row("Weekly dependency audit").swipeRight()
+        let pin = app.buttons["Pin"].firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 5), "no Pin action")
+        pin.tap()
+        pause(2.4)
+        let rows = titles.map { row($0) }.filter { $0.exists }
+        let region = rows.map { $0.frame }.reduce(rows.first?.frame ?? .zero) { $0.union($1) }
+        var flagged: [String] = []
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
+            guard let el = issue.element else { print("PIN-AUDIT '\(issue.compactDescription)' no element"); return true }
+            let line = "'\(issue.compactDescription)' type \(el.elementType.rawValue) id '\(el.identifier)' label '\(el.label)' frame \(el.frame)"
+            print("PIN-AUDIT \(line)")
+            if region.intersects(el.frame), el.frame.width < region.width + 1 { flagged.append(line) }
+            return true
+        }
+        XCTAssertTrue(flagged.isEmpty, "the audit flags the chats' rows: \(flagged)")
+        // Put it back for the tests after.
+        row("Weekly dependency audit").swipeRight()
+        let unpin = app.buttons["Unpin"].firstMatch
+        if unpin.waitForExistence(timeout: 5) { unpin.tap(); pause(2.4) }
+    }
+
+    private func shot(_ name: String) {
+        let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a)
+        if let folder = ProcessInfo.processInfo.environment["HERMES_E2E_SHOTS"], !folder.isEmpty {
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            try? XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(name).png"))
+        }
+    }
+
     /// The same move from the row's menu (no swipe): pressed and held, Pin; then Unpin the same way.
     func testPinFromTheMenu() throws {
         try launch()
