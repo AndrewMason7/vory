@@ -88,6 +88,15 @@ struct VoryTabBar: View {
     static let stripCentreFromEdge: CGFloat = 48
     static let stripGroupGap: CGFloat = 10
     static let stripStatusAllowance: CGFloat = 156
+    /// The longest the bar group (the capsule and the circles) runs along the bottom: its length on the
+    /// widest iPhone, the 17 Pro Max (440 pt wide, less the two 21 pt side margins), so no iPhone
+    /// reaches it (the iPhone app is portrait-only). An iPad and the open Duo upright keep the
+    /// iPhone's bar, centred, instead of one stretched across the window (Matt for 1.5 (26)); a
+    /// window narrower than that (a small Stage Manager window, a window tiled to half the screen)
+    /// is filled, as on an iPhone. A compact height (the closed Duo, the open Duo on its side) has
+    /// the vertical strip instead. If the iPhone's portrait lock is ever lifted, a phone on its side
+    /// would get this capped, centred bar too, as an iPad does: look at it then.
+    static let maxHorizontalLength: CGFloat = 440 - 2 * 21
     /// Down a strip the bar is compact, like the system's vertical bars: icons only, in 46 pt
     /// slots and circles, so it fits under the navigation items the strip already holds.
     private let verticalSlot: CGFloat = 42
@@ -148,6 +157,9 @@ struct VoryTabBar: View {
                 .accessibilityIdentifier("chats.new")
             }
         }
+        // Capped before the shield is drawn round it, so the shield is the capped bar's and a touch
+        // beside it reaches the page, as beside the bar on an iPhone.
+        .frame(maxWidth: axis == .horizontal ? Self.maxHorizontalLength : nil)
         // The bar's own shape takes the touches that miss its buttons: in the gaps between the
         // capsule and the circles, or at the glass's edge, they reached the page behind and
         // opened the row there (Matt on (18): "I can tap it when touching the nav bar"). One
