@@ -87,11 +87,53 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public private(set) var runtimeID = ""
     public private(set) var storedID: String
-    public var title: String
-    public var info: SessionLiveInfo?
-    public var items: [TranscriptItem] = []
-    public var usage: Usage?
-    public var isRunning = false {
+    // What the chat's views draw from is told to them as it changes, except while the app is
+    // away: then it changes quietly and they are told once, on the way back (see `viewsQuiet`).
+    @ObservationIgnored private var _title: String
+    public var title: String {
+        get { access(keyPath: \.title); return _title }
+        set { setTracked(\.title, \._title, newValue) }
+        _modify {
+            access(keyPath: \.title)
+            let told = willModify(\.title)
+            defer { didModify(\.title, told) }
+            yield &_title
+        }
+    }
+    @ObservationIgnored private var _info: SessionLiveInfo?
+    public var info: SessionLiveInfo? {
+        get { access(keyPath: \.info); return _info }
+        set { setTracked(\.info, \._info, newValue) }
+        _modify {
+            access(keyPath: \.info)
+            let told = willModify(\.info)
+            defer { didModify(\.info, told) }
+            yield &_info
+        }
+    }
+    @ObservationIgnored private var _items: [TranscriptItem] = []
+    public var items: [TranscriptItem] {
+        get { access(keyPath: \.items); return _items }
+        set { setTracked(\.items, \._items, newValue) }
+        _modify {
+            access(keyPath: \.items)
+            let told = willModify(\.items)
+            defer { didModify(\.items, told) }
+            yield &_items
+        }
+    }
+    @ObservationIgnored private var _usage: Usage?
+    public var usage: Usage? {
+        get { access(keyPath: \.usage); return _usage }
+        set { setTracked(\.usage, \._usage, newValue) }
+        _modify {
+            access(keyPath: \.usage)
+            let told = willModify(\.usage)
+            defer { didModify(\.usage, told) }
+            yield &_usage
+        }
+    }
+    @ObservationIgnored private var _isRunning = false {
         didSet {
             guard isRunning != oldValue else { return }
             runtime.publishSnapshot()
@@ -124,6 +166,16 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             }
         }
     }
+    public var isRunning: Bool {
+        get { access(keyPath: \.isRunning); return _isRunning }
+        set { setTracked(\.isRunning, \._isRunning, newValue) }
+        _modify {
+            access(keyPath: \.isRunning)
+            let told = willModify(\.isRunning)
+            defer { didModify(\.isRunning, told) }
+            yield &_isRunning
+        }
+    }
     /// True from this device's own submit until its turn ends.
     private var startedHere = false
     /// A turn's first event arrived for a prompt this device did not send: its snapshot is
@@ -153,15 +205,56 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private var approvalPollTask: Task<Void, Never>?
     /// The raw name of the tool running now (nil between tools): the bot's lens rule reads
     /// this, never the prettified status line (1.5, #304).
-    public var currentToolName: String?
-    public var statusLine: String? {
+    @ObservationIgnored private var _currentToolName: String?
+    public var currentToolName: String? {
+        get { access(keyPath: \.currentToolName); return _currentToolName }
+        set { setTracked(\.currentToolName, \._currentToolName, newValue) }
+        _modify {
+            access(keyPath: \.currentToolName)
+            let told = willModify(\.currentToolName)
+            defer { didModify(\.currentToolName, told) }
+            yield &_currentToolName
+        }
+    }
+    @ObservationIgnored private var _statusLine: String? {
         didSet { if isRunning, statusLine != oldValue, cards.isEmpty { activity.update(for: self, attention: false) } }
     }
-    public var banner: String?
+    public var statusLine: String? {
+        get { access(keyPath: \.statusLine); return _statusLine }
+        set { setTracked(\.statusLine, \._statusLine, newValue) }
+        _modify {
+            access(keyPath: \.statusLine)
+            let told = willModify(\.statusLine)
+            defer { didModify(\.statusLine, told) }
+            yield &_statusLine
+        }
+    }
+    @ObservationIgnored private var _banner: String?
+    public var banner: String? {
+        get { access(keyPath: \.banner); return _banner }
+        set { setTracked(\.banner, \._banner, newValue) }
+        _modify {
+            access(keyPath: \.banner)
+            let told = willModify(\.banner)
+            defer { didModify(\.banner, told) }
+            yield &_banner
+        }
+    }
+
     /// Why the latest turn was cut short, when this device can tell: Stop pressed here, or the
     /// app away from the gateway while the turn ran. Cleared by the next message.
     public var interruptCause: InterruptedTurn.Cause?
-    public var cards: [PendingCard] = []
+    @ObservationIgnored private var _cards: [PendingCard] = []
+    public var cards: [PendingCard] {
+        get { access(keyPath: \.cards); return _cards }
+        set { setTracked(\.cards, \._cards, newValue) }
+        _modify {
+            access(keyPath: \.cards)
+            let told = willModify(\.cards)
+            defer { didModify(\.cards, told) }
+            yield &_cards
+        }
+    }
     public var queue: [QueuedMessage] = []
     public var staged: [AttachmentPreview] = []
     public var composerHistory: [String] = []
@@ -169,12 +262,32 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public var stale = false
     /// True from open until `session.resume` has answered; the transcript shown meanwhile is the
     /// cached copy (or a REST page), so the chat appears instantly and syncs behind it.
-    public private(set) var isResuming = false
+    @ObservationIgnored private var _isResuming = false
+    public private(set) var isResuming: Bool {
+        get { access(keyPath: \.isResuming); return _isResuming }
+        set { setTracked(\.isResuming, \._isResuming, newValue) }
+        _modify {
+            access(keyPath: \.isResuming)
+            let told = willModify(\.isResuming)
+            defer { didModify(\.isResuming, told) }
+            yield &_isResuming
+        }
+    }
     /// "Syncing…" is for a chat with nothing to show yet; with the cached transcript on screen
     /// the attach runs silently behind the title (Matt, 2026-10-12: "a Syncing… status, speed
     /// that up").
     public var showsSyncing: Bool { isResuming && items.isEmpty }
-    public var resumeError: String?
+    @ObservationIgnored private var _resumeError: String?
+    public var resumeError: String? {
+        get { access(keyPath: \.resumeError); return _resumeError }
+        set { setTracked(\.resumeError, \._resumeError, newValue) }
+        _modify {
+            access(keyPath: \.resumeError)
+            let told = willModify(\.resumeError)
+            defer { didModify(\.resumeError, told) }
+            yield &_resumeError
+        }
+    }
     private var resumeTask: Task<Void, Never>?
     private var bannerIsReconnect = false
     private var lastActivityUpdate = Date.distantPast
@@ -210,7 +323,60 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         self.activity = runtime.activityReporterFactory()
         self.storedID = storedID ?? ""
         self.profile = (profile?.isEmpty == false ? profile : nil) ?? runtime.selectedProfile
-        self.title = title ?? "New chat"
+        self._title = title ?? "New chat"
+    }
+
+    // MARK: Quiet while away
+
+    /// Whether the views are left out of changes now: while the app is away (#371), unless
+    /// something that is not a view follows this chat (`keepsObserversLive`). A long turn in the
+    /// background changed the rows, the status line and the running state with every event, and
+    /// each change re-ran the thread's views and built its new rows while nobody could see them
+    /// (a third to half of a core; at the turn's end its long reply drawn in full, 30 MB kept
+    /// while suspended). The values stay current for everything that reads them (the Live
+    /// Activity, notifications, the transcript cache, the watch); only the views wait, and are
+    /// told once on the way back (`cameBack`).
+    private var viewsQuiet: Bool { runtime.isAway && !keepsObserversLive }
+
+    /// Set while something other than a view follows this chat's changes through observation
+    /// (a hands-free session, which can run with the app away): the chat stays live, and what
+    /// was held back is told at once.
+    @ObservationIgnored public var keepsObserversLive = false {
+        didSet { if keepsObserversLive { tellOwedChanges() } }
+    }
+
+    @ObservationIgnored private var owedChanges: [AnyKeyPath: () -> Void] = [:]
+
+    private func oweChange<Member>(_ keyPath: KeyPath<ChatSession, Member>) {
+        guard owedChanges[keyPath] == nil else { return }
+        owedChanges[keyPath] = { [unowned self] in self.withMutation(keyPath: keyPath) {} }
+    }
+
+    /// The views are told, once each, of what changed while they were left out.
+    private func tellOwedChanges() {
+        guard !owedChanges.isEmpty else { return }
+        let owed = owedChanges
+        owedChanges = [:]
+        GatewayRuntime.signposter.emitEvent("away catch-up", "\(owed.count) properties, \(self._items.count) rows")
+        for tell in owed.values { tell() }
+    }
+
+    /// The macro's setter (an equal value tells nobody), with the quiet branch.
+    private func setTracked<Member: Equatable>(_ keyPath: KeyPath<ChatSession, Member>, _ store: ReferenceWritableKeyPath<ChatSession, Member>, _ newValue: Member) {
+        guard shouldNotifyObservers(self[keyPath: store], newValue) else { self[keyPath: store] = newValue; return }
+        guard !viewsQuiet else { self[keyPath: store] = newValue; oweChange(keyPath); return }
+        withMutation(keyPath: keyPath) { self[keyPath: store] = newValue }
+    }
+
+    /// The macro's `_modify` (always tells), with the quiet branch: whether it told.
+    private func willModify<Member>(_ keyPath: KeyPath<ChatSession, Member>) -> Bool {
+        if viewsQuiet { oweChange(keyPath); return false }
+        _$observationRegistrar.willSet(self, keyPath: keyPath)
+        return true
+    }
+
+    private func didModify<Member>(_ keyPath: KeyPath<ChatSession, Member>, _ told: Bool) {
+        if told { _$observationRegistrar.didSet(self, keyPath: keyPath) }
     }
 
     public var profileName: String { profile ?? info?.profileName ?? runtime.selectedProfile ?? "default" }
@@ -1595,9 +1761,11 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
     }
 
-    /// The app is back in front: the reply that streamed while it was away is drawn.
+    /// The app is back in front: the reply that streamed while it was away is drawn, and the
+    /// views are told of everything else that changed meanwhile, in one update.
     func cameBack() {
         if streamingItemID != nil, streamFlush == nil { updateStreamingItem() }
+        tellOwedChanges()
     }
 
     private func updateStreamingItem() {
