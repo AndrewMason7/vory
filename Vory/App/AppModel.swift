@@ -402,6 +402,8 @@ final class AppModel {
         #if os(iOS)
         // Started in the background (no scene to say so): away until the app is active.
         rt.isAway = AwayAtLaunch.startsAway(UIApplication.shared.applicationState)
+        // Back from away, the chats catch up just after the return's first frame (#371).
+        rt.scheduleCatchUp = { AfterFirstFrame.run($0) }
         #endif
         // A session that runs out for good signs in again by itself, after Face ID, when this
         // device remembers the gateway's sign-in; otherwise the person is asked, as before.

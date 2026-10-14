@@ -32,7 +32,14 @@ public final class GatewayRuntime {
     public var isAway = false {
         didSet {
             guard oldValue, !isAway else { return }
-            for chat in registry.all { chat.cameBack() }
+            // The chats' views catch up once, when the app says (`scheduleCatchUp`); they stay
+            // held until then, so a live change meanwhile does not have them catch up early.
+            for chat in registry.all { chat.beginCatchUp() }
+            let catchUp: @MainActor () -> Void = { [weak self] in
+                guard let self, !self.isAway else { return }
+                for chat in self.registry.all { chat.cameBack() }
+            }
+            if let scheduleCatchUp { scheduleCatchUp(catchUp) } else { catchUp() }
             // A socket that died quietly while the app was away is found out now, not at the
             // next heartbeat (see `GatewaySocket.checkAlive`).
             Task { [socket] in await socket?.checkAlive() }
@@ -46,6 +53,11 @@ public final class GatewayRuntime {
             }
         }
     }
+    /// When the chats' views catch up after a return: at once when not set (the Mac's wake, the
+    /// tests). The phone runs it just after the return's first frame, out of the scene update,
+    /// whose stretch on the main thread it lengthened by drawing the turn that ended away (#371).
+    public var scheduleCatchUp: (@MainActor (@escaping @MainActor () -> Void) -> Void)?
+
     /// Refreshes held back while away (`publishSnapshot`, the sessions-changed notice): a long
     /// turn sends a sessions.changed with every flush, and each one fetched the list, read and
     /// wrote the widget snapshot in the Keychain, reloaded the widgets, and reloaded the chat

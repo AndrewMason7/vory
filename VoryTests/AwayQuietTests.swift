@@ -120,6 +120,43 @@ import Testing
         c.runtime.isAway = false
     }
 
+    @MainActor final class Pending {
+        var catchUp: (@MainActor () -> Void)?
+    }
+
+    /// The phone times the catch-up just after the return's first frame: until it runs the views
+    /// stay held (a live event meanwhile too), and one that runs after the app went away again
+    /// does nothing.
+    @Test func aScheduledCatchUpHoldsTheViewsUntilItRuns() throws {
+        let c = try chat()
+        let pending = Pending()
+        c.runtime.scheduleCatchUp = { pending.catchUp = $0 }
+        c.runtime.isAway = true
+        let fired = Fired()
+        watch(c, fired)
+        c.handle(event: event("message.start"))
+        c.runtime.isAway = false
+        #expect(fired.count == 0, "the views were told before the catch-up ran")
+        c.handle(event: event("tool.start", ["tool_id": "t1", "name": "terminal"]))
+        #expect(fired.count == 0, "a live event before the catch-up had the views catch up early")
+        pending.catchUp?()
+        #expect(fired.count == 1)
+        #expect(c.items.contains { if case .tool = $0.kind { return true }; return false })
+
+        let again = Fired()
+        watch(c, again)
+        c.runtime.isAway = true
+        c.handle(event: event("message.complete", ["text": "Done.", "status": "complete"]))
+        c.runtime.isAway = false
+        let stale = pending.catchUp
+        c.runtime.isAway = true
+        stale?()
+        #expect(again.count == 0, "a catch-up that ran with the app away again told the views")
+        c.runtime.isAway = false
+        pending.catchUp?()
+        #expect(again.count == 1)
+    }
+
     @Test func goingAwayAgainBeforeTheReturnSettlesStillTellsOnce() throws {
         let c = try chat()
         c.runtime.isAway = true

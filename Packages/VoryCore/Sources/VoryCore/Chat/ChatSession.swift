@@ -336,7 +336,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// while suspended). The values stay current for everything that reads them (the Live
     /// Activity, notifications, the transcript cache, the watch); only the views wait, and are
     /// told once on the way back (`cameBack`).
-    private var viewsQuiet: Bool { runtime.isAway && !keepsObserversLive }
+    private var viewsQuiet: Bool { (runtime.isAway || catchingUp) && !keepsObserversLive }
+
+    /// From the return until the catch-up (`cameBack`), which the app may time just after the
+    /// return's first frame (`GatewayRuntime.scheduleCatchUp`): still held, so a live event
+    /// meanwhile does not have the views catch up in the scene update after all.
+    @ObservationIgnored private var catchingUp = false
+
+    func beginCatchUp() { catchingUp = true }
 
     /// Set while something other than a view follows this chat's changes through observation
     /// (a hands-free session, which can run with the app away): the chat stays live, and what
@@ -1764,6 +1771,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The app is back in front: the reply that streamed while it was away is drawn, and the
     /// views are told of everything else that changed meanwhile, in one update.
     func cameBack() {
+        catchingUp = false
         if streamingItemID != nil, streamFlush == nil { updateStreamingItem() }
         tellOwedChanges()
     }
