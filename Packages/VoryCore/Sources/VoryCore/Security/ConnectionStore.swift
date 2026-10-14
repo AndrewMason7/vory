@@ -13,24 +13,51 @@ public final class ConnectionStore {
     /// from `secrets(for:)`, so nothing that copies those (iCloud, the watch) ever sees them.
     /// Opened on first use, so a process that never asks (the extensions) never reads it.
     @ObservationIgnored public lazy var remembered: RememberedSignInVault = .standard()
+    /// The gateway in use. `GatewayConnection.demoID` makes the demo the one in use until another
+    /// id is set; the demo is never written anywhere (`demo`).
     public var activeConnectionID: UUID? {
-        didSet { UserDefaults.standard.set(activeConnectionID?.uuidString, forKey: Self.activeKey) }
+        get { demo?.id ?? savedActiveID }
+        set {
+            if newValue == GatewayConnection.demoID { demo = .demo; return }
+            demo = nil
+            savedActiveID = newValue
+        }
+    }
+    /// The saved gateway in use, kept in the defaults (this device's own, never synced).
+    private var savedActiveID: UUID? {
+        didSet { defaults.set(savedActiveID?.uuidString, forKey: Self.activeKey) }
+    }
+    private let defaults: UserDefaults
+    /// The demo while it runs (#392), in memory only: never in the Keychain, the defaults or
+    /// iCloud, so a relaunch, after a crash mid-demo too, comes back on the saved gateway, and no
+    /// other device ever switches to it.
+    public private(set) var demo: GatewayConnection?
+
+    public convenience init() {
+        self.init(defaults: .standard, connections: Keychain.getCodable([GatewayConnection].self, account: Self.indexAccount) ?? [])
     }
 
-    public init() {
-        connections = Keychain.getCodable([GatewayConnection].self, account: Self.indexAccount) ?? []
-        if let s = UserDefaults.standard.string(forKey: Self.activeKey), let id = UUID(uuidString: s), connections.contains(where: { $0.id == id }) {
-            activeConnectionID = id
+    /// The saved list as read, and the defaults the gateway in use is kept in (tests give their own).
+    init(defaults: UserDefaults, connections: [GatewayConnection]) {
+        self.defaults = defaults
+        self.connections = connections
+        if let s = defaults.string(forKey: Self.activeKey), let id = UUID(uuidString: s), connections.contains(where: { $0.id == id }) {
+            savedActiveID = id
         } else {
-            activeConnectionID = connections.first?.id
+            savedActiveID = connections.first?.id
         }
     }
 
-    public var active: GatewayConnection? { connections.first { $0.id == activeConnectionID } }
+    public var active: GatewayConnection? { demo ?? connections.first { $0.id == savedActiveID } }
 
-    public func connection(id: UUID) -> GatewayConnection? { connections.first { $0.id == id } }
+    public func connection(id: UUID) -> GatewayConnection? {
+        if id == GatewayConnection.demoID { return demo }
+        return connections.first { $0.id == id }
+    }
 
     public func upsert(_ connection: GatewayConnection, secrets: GatewaySecrets) throws {
+        // The demo is never saved.
+        guard !connection.isDemo else { return }
         var c = connection
         c.hasAccessHeaders = secrets.access.isConfigured
         // Write the Keychain first so a failure leaves the in-memory list untouched.
@@ -39,10 +66,11 @@ public final class ConnectionStore {
         if let i = updated.firstIndex(where: { $0.id == c.id }) { updated[i] = c } else { updated.append(c) }
         try Keychain.setCodable(updated, account: Self.indexAccount)
         connections = updated
-        if activeConnectionID == nil { activeConnectionID = c.id }
+        if savedActiveID == nil { savedActiveID = c.id }
     }
 
     public func updateMetadata(_ connection: GatewayConnection) {
+        if connection.isDemo { if demo != nil { demo = connection }; return }
         if let i = connections.firstIndex(where: { $0.id == connection.id }) {
             connections[i] = connection
             try? persistIndex()
@@ -50,10 +78,12 @@ public final class ConnectionStore {
     }
 
     public func secrets(for id: UUID) -> GatewaySecrets {
-        Keychain.getCodable(GatewaySecrets.self, account: secretsAccount(id)) ?? GatewaySecrets()
+        if id == GatewayConnection.demoID { return GatewaySecrets() }
+        return Keychain.getCodable(GatewaySecrets.self, account: secretsAccount(id)) ?? GatewaySecrets()
     }
 
     public func saveSecrets(_ secrets: GatewaySecrets, for id: UUID) {
+        guard id != GatewayConnection.demoID else { return }
         try? Keychain.setCodable(secrets, account: secretsAccount(id))
         if let i = connections.firstIndex(where: { $0.id == id }) {
             connections[i].hasAccessHeaders = secrets.access.isConfigured
@@ -62,12 +92,13 @@ public final class ConnectionStore {
     }
 
     public func delete(id: UUID) {
+        if id == GatewayConnection.demoID { demo = nil; return }
         connections.removeAll { $0.id == id }
         Keychain.delete(account: secretsAccount(id))
         // A sign-in remembered for it goes with it (a delete needs no Face ID).
         remembered.forget(id)
         try? persistIndex()
-        if activeConnectionID == id { activeConnectionID = connections.first?.id }
+        if savedActiveID == id { savedActiveID = connections.first?.id }
     }
 
     private func secretsAccount(_ id: UUID) -> String { "secrets." + id.uuidString }

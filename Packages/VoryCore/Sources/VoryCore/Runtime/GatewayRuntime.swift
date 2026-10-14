@@ -7,6 +7,10 @@ import OSLog
 @Observable
 public final class GatewayRuntime {
     public let connection: GatewayConnection
+    /// How this runtime reaches its gateway: the network, or in process for the demo.
+    public let transport: GatewayTransport
+    /// The demo (#392): nothing it does is saved or synced. The one check every persistence path asks.
+    public var isEphemeral: Bool { connection.isDemo }
     /// The address in use: the gateway's own, or for a gateway with a backup address (#283) the
     /// one that answered when the socket last connected.
     public private(set) var address: GatewayURL
@@ -121,8 +125,9 @@ public final class GatewayRuntime {
     /// Speech in and out, by the Speech setting: the gateway's providers or this device's engines.
     public let voice = VoiceEngine()
 
-    public init(connection: GatewayConnection, store: ConnectionStore) {
+    public init(connection: GatewayConnection, store: ConnectionStore, transport: GatewayTransport = .network) {
         self.connection = connection
+        self.transport = transport
         self.store = store
         let loadedSecrets = store.secrets(for: connection.id)
         self.secrets = loadedSecrets
@@ -130,7 +135,7 @@ public final class GatewayRuntime {
         let addresses = connection.addresses
         let first = AddressMemory().lastGood(for: connection.id).flatMap { addresses.indices.contains($0) ? addresses[$0] : nil } ?? connection.gateway
         self.address = first
-        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets))
+        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets), urlSession: transport.makeHTTPSession())
         self.socket = GatewaySocket(
             urlProvider: { [weak self] in
                 guard let self else { throw SocketError.cancelled }
@@ -152,7 +157,8 @@ public final class GatewayRuntime {
                 guard let self else { return nil }
                 return await self.answer(serverRequest: req)
             },
-            onReconnected: { [weak self] in await self?.didReconnect() })
+            onReconnected: { [weak self] in await self?.didReconnect() },
+            makePipe: { [transport] in transport.makeFramePipe($0, nil) })
         Task { await api.setRefresher { [weak self] in
             guard let self else { throw HermesAPIError.sessionExpired }
             return try await self.refreshSigner()
