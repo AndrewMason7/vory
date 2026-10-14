@@ -238,8 +238,10 @@ struct MainTabView: View {
                 ForEach(tabs, id: \.self) { tab in
                     content(for: tab)
                         .opacity(model.selectedTab == tab ? 1 : 0)
-                        // The morph prototype's "cut" variant: the page swap is not animated.
-                        .transaction { if MorphTopBar.cutsPages { $0.animation = nil } }
+                        // The morph prototype's "cut" variant: the page swap is not animated. Only
+                        // the swap: unscoped, this took the animation out of every change inside
+                        // every page, and a page's own moves (a pinned chat going up, #372) jumped.
+                        .transaction(value: model.selectedTab) { if MorphTopBar.cutsPages { $0.animation = nil } }
                         .allowsHitTesting(model.selectedTab == tab)
                         .accessibilityHidden(model.selectedTab != tab)
                         // A hidden page's faces hold still: at opacity 0 they kept their

@@ -279,7 +279,7 @@ struct ChatListView: View {
                 switch r.kind {
                 case .newBot: showNewBot = true
                 case .manageProjects: showProjects = true
-                case .selectChats: withAnimation(.snappy) { selecting = true }
+                case .selectChats: withAnimation(Self.selectMotion) { selecting = true }
                 }
             }
             .onChange(of: model.newChatSheetRequest) { _, r in
@@ -749,7 +749,13 @@ struct ChatListView: View {
     /// The chosen chats, in the list's order.
     private var picked: [StoredSession] { (searchText.isEmpty ? sessions : searchResults).filter { selection.contains($0.id) } }
 
-    private func endSelecting() { withAnimation(.snappy) { selecting = false; selection = [] } }
+    private func endSelecting() { withAnimation(Self.selectMotion) { selecting = false; selection = [] } }
+
+    /// Select mode on and off. Not animated where the pages had the cut (#372): a row is a
+    /// different view while selecting (`rowLink`), so animated it cross-fades, its words doubled
+    /// for a moment, rather than sliding over for the circle. As 24 until the row is reworked to
+    /// slide. The Mac never had the cut and keeps its step.
+    static var selectMotion: Animation? { MorphTopBar.cutsPages ? nil : .snappy }
 
     @ViewBuilder private var selectionActions: some View {
         if let runtime, runtime.projects.available == true, runtime.projects.canMove {
@@ -1047,7 +1053,7 @@ struct ChatListView: View {
                             ProjectMoveMenu(sessions: [s], runtime: runtime) { errorText = $0 }
                         } label: { Label("Move to Project", systemImage: "folder") }
                     }
-                    Button { withAnimation(.snappy) { selecting = true; selection = [s.id] } } label: { Label("Select", systemImage: "checkmark.circle") }
+                    Button { withAnimation(Self.selectMotion) { selecting = true; selection = [s.id] } } label: { Label("Select", systemImage: "checkmark.circle") }
                     Divider()
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
                 } preview: {
