@@ -38,6 +38,14 @@ enum Perf {
     /// back to a long turn and found the app frozen; this is how a fix is checked. A second
     /// thread beats every 20 ms; a gap in its beats is the system suspending the app, which is
     /// taken out of the wait rather than blamed on the main thread.
+    /// The shortest wait the watch logs: 250 ms, or what `-vory-perf-stall-ms` asks for, for a UI test that holds a
+    /// screen to a tighter bound (#421: the full-call sheet, 100 ms).
+    static let stallMs: UInt64 = {
+        let a = ProcessInfo.processInfo.arguments
+        if let i = a.firstIndex(of: "-vory-perf-stall-ms"), i + 1 < a.count, let v = UInt64(a[i + 1]), v > 0 { return v }
+        return 250
+    }()
+
     static func watchMainThread() {
         guard !watching else { return }
         watching = true
@@ -64,7 +72,7 @@ enum Perf {
                 Thread.sleep(forTimeInterval: 0.05)
                 lock.lock(); let frozen = frozenNanos - frozenBefore; lock.unlock()
                 let ms = (waited > frozen ? waited - frozen : 0) / 1_000_000
-                if ms >= 250 { log.notice("main thread busy \(ms) ms") }
+                if ms >= stallMs { log.notice("main thread busy \(ms) ms") }
             }
         }
         thread.name = "dev.vory.main-thread-watch"

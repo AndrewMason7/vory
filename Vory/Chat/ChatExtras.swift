@@ -115,21 +115,99 @@ struct JumpToBottomButton: View {
 /// Text you can select by range, with the handles and the Copy/Look Up menu UIKit gives: SwiftUI's
 /// own selectable text offers Copy and Share for the whole thing and nothing in between (a
 /// tester: "the select text window doesn't work").
-#if os(macOS)
-/// On the Mac an AppKit text view too, as on the iPhone: SwiftUI's selectable `Text` drew the whole text as one
-/// picture, and a long output past the graphics card's largest texture was an empty box (#361). The text view lays
-/// out and draws only what is on screen, and selects by range as before.
+///
+/// A text one text view cannot hold safely (`fitsOneView`) is drawn as #361's pieces in a lazy stack instead
+/// (`PiecedText`, #421).
 struct SelectableText: View {
     var text: String
     var monospaced = false
     /// What VoiceOver calls the text (the sheet's title).
     var label = "Text"
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
-        SelectableTextView(text: text, monospaced: monospaced, label: label)
-            .frame(minWidth: 420, minHeight: 320)
+        Group {
+            if Self.fitsOneView(text, TextPieces.Limits.for(typeSize)) {
+                SelectableTextView(text: text, monospaced: monospaced, label: label)
+            } else {
+                PiecedText(text: text, monospaced: monospaced, label: label)
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 420, minHeight: 320)
+        #endif
+    }
+
+    /// Whether one text view can hold `text`. It lays a paragraph out as one block: a tool's output on one line of
+    /// 2 MB (minified JSON) held the main thread for 4 s and drew blank, past the graphics card's largest texture,
+    /// and a whole of megabytes made the view's accessibility tree too big to read (#421). A paragraph of twice a
+    /// piece's characters is well under the limit here (a piece is worked out for a 150 pt column, a sheet is
+    /// 300 pt or wider), so an ordinary reply keeps the text view and its selection across paragraphs. Counted in
+    /// UTF-8 bytes, which are never fewer than the characters.
+    static func fitsOneView(_ text: String, _ limits: TextPieces.Limits) -> Bool {
+        let bytes = text.utf8.count
+        if bytes > 100_000 { return false }
+        let longest = 2 * limits.chars
+        if bytes <= longest { return true }
+        var run = 0
+        for b in text.utf8 {
+            if b == 0x0A { run = 0 } else { run += 1; if run > longest { return false } }
+        }
+        return true
     }
 }
 
+/// A whole text too big for one text view, as #361's pieces (`TextPieces.strings`) in a lazy stack: only the pieces
+/// near the screen are laid out, drawn and in the accessibility tree, each its own element in reading order, and
+/// none past the graphics card's largest texture. The cut runs off the main thread (a 10 MB output is many seconds
+/// of it). A piece selects on its own; Copy and Share carry the whole text.
+struct PiecedText: View {
+    var text: String
+    var monospaced: Bool
+    var label: String
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var pieces: [String]?
+
+    /// What the cut reads: a new text, or the text size's limits.
+    private struct Cut: Hashable { var bytes: Int; var head: String; var tail: String; var limits: TextPieces.Limits; var code: Bool }
+
+    var body: some View {
+        let limits = TextPieces.Limits.for(typeSize)
+        ScrollView {
+            if let pieces {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(pieces.indices, id: \.self) { i in
+                        Text(pieces[i])
+                            .font(monospaced ? .system(.footnote, design: .monospaced) : .body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .modifier(PieceProbe.Measure())
+                    }
+                }
+                .padding(12)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier("sheet.pieces")
+                if PieceProbe.shared.on {
+                    Text(PieceProbe.shared.summary).font(.system(size: 8)).accessibilityIdentifier("debug.pieces.sheet")
+                }
+            } else {
+                Label("Laying out \(ByteCountFormatter.string(fromByteCount: Int64(text.utf8.count), countStyle: .file))…", systemImage: "text.alignleft")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+            }
+        }
+        .task(id: Cut(bytes: text.utf8.count, head: String(text.prefix(64)), tail: String(text.suffix(64)), limits: limits, code: monospaced)) {
+            let whole = text, code = monospaced
+            pieces = await Task.detached(priority: .userInitiated) { TextPieces.strings(whole, code: code, limits) }.value
+        }
+    }
+}
+
+#if os(macOS)
+/// On the Mac an AppKit text view too, as on the iPhone: SwiftUI's selectable `Text` drew the whole text as one
+/// picture, and a long output past the graphics card's largest texture was an empty box (#361). The text view lays
+/// out and draws only what is on screen (but a paragraph whole: `fitsOneView`), and selects by range as before.
 private struct SelectableTextView: NSViewRepresentable {
     var text: String
     var monospaced: Bool
@@ -158,11 +236,10 @@ private struct SelectableTextView: NSViewRepresentable {
     }
 }
 #else
-struct SelectableText: UIViewRepresentable {
+private struct SelectableTextView: UIViewRepresentable {
     var text: String
-    var monospaced = false
-    /// What VoiceOver calls the text (the sheet's title).
-    var label = "Text"
+    var monospaced: Bool
+    var label: String
     func makeUIView(context: Context) -> UITextView {
         let v = UITextView()
         v.isEditable = false
