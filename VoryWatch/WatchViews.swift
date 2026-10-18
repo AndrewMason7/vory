@@ -368,7 +368,8 @@ struct WatchChatView: View {
                                 // The last few messages first; the rest a page at a time from the top.
                                 Button { shown += 20 } label: { Label("Show earlier", systemImage: "arrow.up.circle") }.font(.caption)
                             }
-                            ForEach(chat.items.suffix(shown)) { item in WatchTranscriptRow(item: item, profile: chat.profileName).id(item.id) }
+                            // A step that only thought is a Reasoning card on the phone; the wrist shows no reasoning.
+                            ForEach(chat.items.filter { !$0.isThinkingOnly }.suffix(shown)) { item in WatchTranscriptRow(item: item, profile: chat.profileName).id(item.id) }
                             if let s = chat.statusLine, chat.isRunning { Text(s).font(.caption2).foregroundStyle(.secondary) }
                             // What went wrong (a Talk that heard nothing, a chat that could not re-attach).
                             if let b = chat.banner { Text(b).font(.caption2).foregroundStyle(.red).onTapGesture { chat.banner = nil } }
@@ -561,7 +562,7 @@ struct WatchChatView: View {
             let r: JSONValue = try await rt.api.get("/api/sessions/\(storedID)/messages", query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: String(shown + 2))], profile: profile ?? rt.selectedProfile)
             let msgs = (r["messages"]?.arrayValue ?? r.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
             // Whole-page: an answer a model put in its reasoning shows as the reply.
-            let built = TranscriptItem.fromHistory(msgs)
+            let built = TranscriptItem.fromHistory(msgs).filter { !$0.isThinkingOnly }
             let sorted = built.sorted { $0.timestamp < $1.timestamp }
             // Only replace what changed: a fresh array every poll re-laid out every row.
             if sorted.map(\.id) != items.map(\.id) || sorted.last?.kind != items.last?.kind { items = sorted }

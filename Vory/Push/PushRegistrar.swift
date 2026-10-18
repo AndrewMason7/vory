@@ -434,7 +434,7 @@ enum LocalNotifier {
             content.categoryIdentifier = errorCategory
         } else {
             content.title = bot
-            let last = chat.items.last(where: { if case .assistant = $0.kind { return true }; return false })
+            let last = chat.items.last(where: { if case .assistant = $0.kind { return !$0.isThinkingOnly }; return false })
             if case .assistant(let text, _, _)? = last?.kind { content.body = String(text.prefix(180)) } else { content.body = "Turn finished" }
             content.categoryIdentifier = turnCategory
         }

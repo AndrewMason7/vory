@@ -600,6 +600,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         func said(_ item: TranscriptItem) -> String? {
             switch item.kind {
             case .user(let t, _): return "u" + t.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A step that only thought goes by its reasoning's start (by its empty words every such
+            // step said the same); the start only, as a step's reasoning can run to megabytes.
+            case .assistant(_, let r, false) where item.isThinkingOnly: return "r" + StreamAssembler.normalized(String((r ?? "").prefix(600))).prefix(300)
             case .assistant(let t, _, let streaming): return streaming ? nil : "a" + t.trimmingCharacters(in: .whitespacesAndNewlines)
             case .tool(let act): return "t" + act.name
             default: return nil
@@ -760,7 +763,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             let turnStart = r["turn_started_at"]?.doubleValue ?? 0
             let turnAt: Int = {
                 if turnStart > 0, let i = items.firstIndex(where: { $0.timestamp.timeIntervalSince1970 >= turnStart - 1 }) { return i }
-                if let la = items.lastIndex(where: { if case .assistant = $0.kind { return true }; return false }) { return la + 1 }
+                if let la = items.lastIndex(where: { if case .assistant = $0.kind { return !$0.isThinkingOnly }; return false }) { return la + 1 }
                 return items.count
             }()
             // The prompt is already among the messages only when the last user row is this
@@ -783,7 +786,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             } else if streaming || !partial.isEmpty {
                 // The partial may already be in `messages` as the last assistant row (a flushed
                 // prefix): the streaming bubble takes that row's place instead of repeating it.
-                if let idx = items.indices.last(where: { if case .assistant = items[$0].kind { return true }; return false }),
+                if let idx = items.indices.last(where: { if case .assistant = items[$0].kind { return !items[$0].isThinkingOnly }; return false }),
                    idx > turnAt, case .assistant(let t, _, _) = items[idx].kind, !t.isEmpty, partial.hasPrefix(t) || t.hasPrefix(partial) {
                     items.remove(at: idx)
                 }
@@ -1823,7 +1826,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private func sealStreamingForTool() {
         guard let id = streamingItemID, let idx = items.lastIndex(where: { $0.id == id }) else { return }
         sealedTurnText += assembler.text
-        if assembler.text.isEmpty { items.remove(at: idx) } else {
+        // A step that only thought keeps its row, the Reasoning card alone (`isThinkingOnly`):
+        // taken out here, a step's reasoning went the moment its tool began (#424).
+        if assembler.text.isEmpty && assembler.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { items.remove(at: idx) } else {
             items[idx].kind = .assistant(text: assembler.text, reasoning: assembler.reasoning.isEmpty ? nil : assembler.reasoning, streaming: false)
         }
         streamingItemID = nil
@@ -1865,7 +1870,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             items.append(TranscriptItem(id: UUID().uuidString, kind: .assistant(text: tail, reasoning: nil, streaming: false)))
             result = items.count - 1
         }
-        if result == nil { result = items.lastIndex { if case .assistant = $0.kind { return true }; return false } }
+        if result == nil { result = items.lastIndex { if case .assistant = $0.kind { return !$0.isThinkingOnly }; return false } }
         streamingItemID = nil
         sealedTurnText = ""
         assembler.reset()

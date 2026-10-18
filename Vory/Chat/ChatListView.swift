@@ -1362,7 +1362,7 @@ struct SessionPreview: View {
         .task {
             defer { loaded = true }
             if let cached = runtime.flatMap({ TranscriptCache.load(connection: $0.connection.id, storedID: session.id) }), !cached.isEmpty {
-                messages = Array(cached.filter { $0.role == "user" || $0.role == "assistant" }.suffix(6)); return
+                messages = Array(cached.filter { ($0.role == "user" || $0.role == "assistant") && !($0.text ?? "").isEmpty }.suffix(6)); return
             }
             guard let runtime, let r: JSONValue = try? await runtime.api.get("/api/sessions/\(session.id)/messages",
                                                                              query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: "12")],

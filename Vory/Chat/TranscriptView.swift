@@ -145,6 +145,9 @@ struct TranscriptView: View {
             case .tool(let act): return showToolCalls && (!currentStepOnly || act.status == .running)
             case .subagent: return showToolCalls
             case .system: return showSystemNotes
+            // A step that only thought is its Reasoning card and nothing else: with reasoning off
+            // (or only the current step's), no row and no gap.
+            case .assistant where item.isThinkingOnly: return showReasoning && !currentStepOnly
             default: return true
             }
         }
@@ -1090,7 +1093,7 @@ struct TranscriptRowModel: Identifiable, Equatable {
     var kindTag: String {
         switch item.kind {
         case .user: return "user"
-        case .assistant: return "reply"
+        case .assistant: return item.isThinkingOnly ? "reasoning" : "reply"
         case .tool: return "tool"
         case .system: return "note"
         case .error: return "error"
@@ -1147,10 +1150,16 @@ struct TranscriptRowModel: Identifiable, Equatable {
             out.append(TranscriptRowModel(item: item, separator: sep))
         }
         // A run of replies (with tool cards between them) shows the bot and the tail once, on
-        // the last one; a run of the person's messages gets one tail the same way.
+        // the last one; a run of the person's messages gets one tail the same way. A step that
+        // only thought is no reply: no bot beside its card, and the run goes on past it.
+        func passedOver(_ item: TranscriptItem) -> Bool {
+            if case .tool = item.kind { return true }
+            return item.isThinkingOnly
+        }
         for i in out.indices {
+            if out[i].item.isThinkingOnly { out[i].lastOfRun = false; continue }
             var next = i + 1
-            while next < out.count, case .tool = out[next].item.kind { next += 1 }
+            while next < out.count, passedOver(out[next].item) { next += 1 }
             guard next < out.count else { continue }
             switch (out[i].item.kind, out[next].item.kind) {
             case (.assistant, .assistant), (.user, .user): out[i].lastOfRun = false
@@ -1316,20 +1325,24 @@ struct TranscriptRow: View, Equatable {
                         Color.clear.frame(width: 28, height: 1)
                     }
                 }
-                if streaming && text.isEmpty {
+                if text.isEmpty {
                     // Nothing to read yet: the typing bubble (dark with a badge while a tool
                     // runs), the reasoning above it when there is some, the live count below.
+                    // A step that only thought keeps its card here once its tool begins, in the
+                    // same place, so an open card stays open (#424); no reply, so no menu.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
                             ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
-                        TypingBubble(tool: typingTool)
-                        if showStats, let s = item.stats {
-                            Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary).padding(.leading, 6)
-                                .contentTransition(.numericText())
-                                .accessibilityLabel("Turn statistics: \(s.label)")
+                        if streaming {
+                            TypingBubble(tool: typingTool)
+                            if showStats, let s = item.stats {
+                                Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary).padding(.leading, 6)
+                                    .contentTransition(.numericText())
+                                    .accessibilityLabel("Turn statistics: \(s.label)")
+                            }
                         }
                     }
                     Spacer(minLength: wide ? 0 : 40)
