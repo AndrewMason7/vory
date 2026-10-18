@@ -1372,6 +1372,8 @@ struct TranscriptRow: View, Equatable {
                     }
                     #if os(macOS)
                     Button { UIPasteboard.general.string = TranscriptMedia.copyText(text) } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    // Copy itself copies the markdown (#255); this, the words as they read (#402).
+                    Button { UIPasteboard.general.string = TranscriptMedia.copyPlainText(text) } label: { Label("Copy as Plain Text", systemImage: "doc.plaintext") }
                     #else
                     Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                     #endif
@@ -1379,10 +1381,15 @@ struct TranscriptRow: View, Equatable {
                     ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                 }
                 #if os(macOS)
-                // Copy on hover, past the bubble's trailing edge (#255); not while it streams.
-                .modifier(ReplyCopyHover(text: text, enabled: !streaming))
+                // Copy on hover, beside the bubble's trailing edge (#255, #402); not while it streams.
+                .modifier(ReplyCopyHover(text: text, enabled: !streaming, onSelectText: { onSelectText(text) }))
                 #endif
+                #if os(macOS)
+                // The controls' place is the row's trailing margin.
+                Spacer(minLength: 0)
+                #else
                 Spacer(minLength: wide ? 0 : 24)
+                #endif
                 }
             }
         case .steer(let text, let status):

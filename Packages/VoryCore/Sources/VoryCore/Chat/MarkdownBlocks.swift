@@ -404,3 +404,46 @@ public enum MarkdownParser {
         return out
     }
 }
+
+/// A reply as it reads on screen, without its markdown: for Copy as Plain Text on the Mac (#402; Copy itself copies the
+/// markdown, #255). Headings are their words on a line; list items keep their bullets or numbers, a nested item indented
+/// by two spaces a level; code is as written; a table's rows are tab-separated; a quote is its words; a picture is its
+/// alt text; a rule is left out. Inline marks go (`**a**` reads "a", a link its title). Blocks are a blank line apart.
+public enum MarkdownPlainText {
+    public static func from(_ markdown: String) -> String {
+        var out: [String] = []
+        for block in MarkdownParser.blocks(from: markdown) {
+            switch block {
+            case .paragraph(let t), .quote(let t):
+                out.append(plainLines(t))
+            case .heading(_, let t):
+                out.append(MarkdownTable.plain(t))
+            case .code(_, let t, _):
+                out.append(t)
+            case .list(let items):
+                out.append(items.map { item in
+                    let marker: String
+                    switch item.marker {
+                    case .bullet: marker = "•"
+                    case .number(let n): marker = "\(n)."
+                    case .task(let checked): marker = checked ? "☑" : "☐"
+                    }
+                    return String(repeating: "  ", count: max(0, item.depth)) + marker + " " + plainLines(item.text)
+                }.joined(separator: "\n"))
+            case .table(let table):
+                let rows = [table.header] + table.rows
+                out.append(rows.map { $0.map(MarkdownTable.plain).joined(separator: "\t") }.joined(separator: "\n"))
+            case .image(let alt, _, _):
+                if !alt.isEmpty { out.append(alt) }
+            case .rule:
+                break
+            }
+        }
+        return out.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// Inline markdown as plain words, line by line, so a paragraph's own line breaks stay.
+    private static func plainLines(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { MarkdownTable.plain(String($0)) }.joined(separator: "\n")
+    }
+}
