@@ -229,6 +229,9 @@ final class AppModel {
     /// actions, or the Chats list for one of its own; each carries an id so repeats are seen.
     struct ChatRequest: Equatable { enum Kind { case back, profile, rename, context, newChat, close }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
     var chatRequest: ChatRequest?
+    /// "All Models…" in a model menu (#401): the menu closes as it is picked, so the list is opened by whatever shows
+    /// that chat (its page, or the bot card over it), which clears this as it does.
+    var modelChooser: ModelChooserRequest?
     struct ChatListRequest: Equatable { enum Kind { case newBot, manageProjects, selectChats, selectDone, selectMove, selectArchive, selectDelete }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
     var chatListRequest: ChatListRequest?
     /// Select mode on the Chats list, while the morph bar is over it: the bar draws Done, the count

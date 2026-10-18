@@ -678,19 +678,7 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         return 200, {"name": "gateway-restart", "running": running, "exit_code": None if running else 0, "pid": 4243,
                      "lines": ["=== hermes gateway restart ===", "stopping gateway (pid 4242)", "starting gateway"] + ([] if running else ["gateway up (pid 4243)"])}
     if base == "/api/model/options":
-        return 200, {"model": MODEL, "provider": PROVIDER, "providers": [
-            {"slug": "claude-subscription-directsdk-experimental", "name": "Claude subscription", "authenticated": False,
-             "warning": "Needs the Claude Code CLI installed and signed in on the gateway machine.",
-             "featured_models": ["claude-subscription/claude-opus-4.6"], "models": ["claude-subscription/claude-opus-4.6"]},
-            {"slug": "anthropic", "name": "Anthropic", "authenticated": True, "is_current": True,
-             "featured_models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
-             "models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
-             "capabilities": {MODEL: {"fast": True, "reasoning": True, "can_disable_reasoning": True}}},
-            {"slug": "openai", "name": "OpenAI", "authenticated": False,
-             "featured_models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"],
-             "models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"]},
-            {"slug": "nous", "name": "Nous Research", "authenticated": True, "free_tier": True,
-             "featured_models": ["nous/hermes-4-70b"], "models": ["nous/hermes-4-70b"]}]}
+        return 200, model_options()
     if base == "/api/model/auxiliary":
         return 200, {"main": {"provider": PROVIDER, "model": MODEL}, "tasks": [
             {"task": "titles", "provider": "auto", "model": "", "base_url": "", "local_endpoint": False},
@@ -1420,6 +1408,43 @@ PROFILES_DELAY = [0.0]
 PROFILES_FAIL = [0]
 
 
+# Test only (#401): a long model list (--extra-models N, across two providers that list hundreds, as OpenRouter and
+# Together do) and models the gateway stops offering (GET /mock/drop-model?model=…, or ?clear=1), for a favourite that
+# is no longer there.
+EXTRA_MODELS = [0]
+DROPPED_MODELS: set = set()
+
+
+def model_options() -> dict:
+    providers = [
+        {"slug": "claude-subscription-directsdk-experimental", "name": "Claude subscription", "authenticated": False,
+         "warning": "Needs the Claude Code CLI installed and signed in on the gateway machine.",
+         "featured_models": ["claude-subscription/claude-opus-4.6"], "models": ["claude-subscription/claude-opus-4.6"]},
+        {"slug": "anthropic", "name": "Anthropic", "authenticated": True, "is_current": True,
+         "featured_models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
+         "models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
+         "capabilities": {MODEL: {"fast": True, "reasoning": True, "can_disable_reasoning": True}}},
+        {"slug": "openai", "name": "OpenAI", "authenticated": False,
+         "featured_models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"],
+         "models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"]},
+        {"slug": "nous", "name": "Nous Research", "authenticated": True, "free_tier": True,
+         "featured_models": ["nous/hermes-4-70b"], "models": ["nous/hermes-4-70b"]}]
+    n = EXTRA_MODELS[0]
+    if n > 0:
+        vendors = ["acme", "borealis", "cobalt", "delta", "ember", "falcon", "garnet", "harbor", "indigo", "juniper"]
+        big = [f"{vendors[i % len(vendors)]}/model-{i:04d}" for i in range(n)]
+        split = n * 3 // 5
+        providers.append({"slug": "openrouter", "name": "OpenRouter", "authenticated": True,
+                          "featured_models": big[:6], "models": big[:split]})
+        providers.append({"slug": "together", "name": "Together", "authenticated": True,
+                          "featured_models": big[split:split + 4], "models": big[split:]})
+    if DROPPED_MODELS:
+        for pr in providers:
+            pr["models"] = [m for m in pr["models"] if m not in DROPPED_MODELS]
+            pr["featured_models"] = [m for m in pr["featured_models"] if m not in DROPPED_MODELS]
+    return {"model": MODEL, "provider": PROVIDER, "providers": providers}
+
+
 # Test only (#423): what Cloudflare in front of the gateway can do to the app, switched at run time with
 # GET /mock/fault?mode=MODE[&status=N][&count=N]. Every mode but "none" first drops the open sockets, so the app meets it
 # on its next attempt.
@@ -1475,6 +1500,15 @@ async def _fault(request) -> Response | None:
 
 async def process_request(connection, request):
     base = request.path.split("?")[0]
+    if base == "/mock/drop-model":
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        if q.get("clear"):
+            DROPPED_MODELS.clear()
+        elif q.get("model"):
+            DROPPED_MODELS.add(unquote(q["model"]))
+        print(f"[mock] models no longer offered: {sorted(DROPPED_MODELS)}", flush=True)
+        body = json.dumps({"dropped": sorted(DROPPED_MODELS)}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     if base == "/mock/fault":
         q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
         FAULT["mode"] = q.get("mode", "none") or "none"
@@ -2884,9 +2918,11 @@ async def main() -> None:
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
+    ap.add_argument("--extra-models", type=int, default=0, metavar="N", help="N more models across two big providers (a long model list, #401)")
     ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
     args = ap.parse_args()
     PROFILES_DELAY[0] = args.profiles_delay
+    EXTRA_MODELS[0] = args.extra_models
     titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
     def extra_session(i: int, profile: str) -> dict:
         return {"id": f"2026100{i % 9}_1200{i % 100:02d}_{profile[:6]}{i:04x}", "title": titles[i % len(titles)],

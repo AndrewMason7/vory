@@ -110,6 +110,10 @@ struct CloudMerge {
     static let joinedKey = "cloudSync.joinedAt"
     static let settingPrefix = "set."
     static let lookPrefix = "look."
+    /// A favourite model (#401): one entry each, so adds and removals on different devices never undo each other.
+    static let favouritePrefix = "mf."
+    /// A gateway's favourites' order: one entry, the last order set.
+    static let favouriteOrderPrefix = "mfo."
     static let devicePrefix = "dev."
     /// A photo larger than this stays on its device: the whole store holds 1 MB.
     static let photoLimit = 60_000
@@ -146,6 +150,7 @@ struct CloudMerge {
         }
 
         reconcileLooks(mode, joined: joined, stamps: &stamps, seen: &seen, out: &out)
+        reconcileFavourites(mode, joined: joined, stamps: &stamps, seen: &seen, out: &out)
 
         // Only when something moved: writing these wakes the defaults observer again.
         if stamps != before.0 { defaults.set(stamps, forKey: Self.stampsKey) }
@@ -163,8 +168,10 @@ struct CloudMerge {
     }
 
     /// One key: which way, if any, it moves.
+    /// `changed` says whether this device changed the key since the last agreement, where `local` alone cannot (it has
+    /// moved in this same pass by what was taken from the cloud).
     private func step(_ ck: String, local: String?, cloud cloudFP: String?, cloudTime: Double?, mode: Mode, joined: Double,
-                      stamps: inout [String: Double], seen: inout [String: String], out: inout Outcome,
+                      stamps: inout [String: Double], seen: inout [String: String], out: inout Outcome, changed: Bool? = nil,
                       push: (Double) -> Void, apply: () -> String?) {
         func agree(_ fp: String?, at t: Double) { stamps[ck] = t; seen[ck] = fp }
         func doPush() { let t = now(); push(t); agree(local, at: t); out.pushed += 1 }
@@ -178,7 +185,7 @@ struct CloudMerge {
         case .backUp:
             if local != nil { doPush() }
         case .merge:
-            let changedHere = local != seen[ck]
+            let changedHere = changed ?? (local != seen[ck])
             if let cloudTime, cloudTime > (stamps[ck] ?? 0) {
                 if cloudFP == local { agree(local, at: cloudTime) }
                 // In the cloud before this device joined: both sides stay as they are until one
@@ -248,6 +255,84 @@ struct CloudMerge {
         if avatars != original.1 { defaults.set(Self.string(avatars), forKey: BotAvatarStore.storageKey) }
         if ownNames != original.2 {
             if ownNames.isEmpty { defaults.removeObject(forKey: BotNames.storageKey) } else { defaults.set(Self.stringOfMaps(ownNames), forKey: BotNames.storageKey) }
+        }
+    }
+
+    // MARK: Favourite models, one entry per favourite and one order per gateway (#401)
+
+    /// A favourite's cloud key, short enough for the store's 64 bytes: the gateway's first characters and a hash.
+    static func favouriteKey(_ gateway: String, _ id: String) -> String {
+        favouritePrefix + gateway.prefix(8) + "." + hash(Data((gateway + "|" + id).utf8))
+    }
+
+    static func favouriteOrderKey(_ gateway: String) -> String { favouriteOrderPrefix + hash(Data(gateway.utf8)) }
+
+    /// Each favourite moves on its own (on, or gone once removed: a removal is kept as a marker, so an older copy
+    /// elsewhere cannot bring it back), then each gateway's order, which only reorders what is there: a favourite it
+    /// does not name goes at the end, and one it names that is gone is left out.
+    private func reconcileFavourites(_ mode: Mode, joined: Double, stamps: inout [String: Double], seen: inout [String: String], out: inout Outcome) {
+        var all = FavouriteModels.decode(defaults.string(forKey: FavouriteModels.storageKey))
+        let original = all
+
+        // Every favourite this device or the cloud knows of.
+        var known: [String: (gateway: String, fav: FavouriteModel)] = [:]
+        for (g, list) in all { for f in list { known[Self.favouriteKey(g, f.id)] = (g, f) } }
+        var gateways = Set(all.keys)
+        for key in cloud.cloudKeys {
+            guard let e = cloud.cloudValue(key) as? [String: Any], let g = e["g"] as? String else { continue }
+            if key.hasPrefix(Self.favouriteOrderPrefix) { gateways.insert(g); continue }
+            guard key.hasPrefix(Self.favouritePrefix), let p = e["p"] as? String, let m = e["m"] as? String else { continue }
+            if known[key] == nil { known[key] = (g, FavouriteModel(provider: p, model: m)) }
+            gateways.insert(g)
+        }
+
+        for (ck, item) in known.sorted(by: { $0.key < $1.key }) {
+            let (g, f) = item
+            let entry = cloud.cloudValue(ck) as? [String: Any]
+            let gone = entry?["gone"] as? Bool == true
+            let here = (all[g] ?? []).contains(f)
+            step(ck, local: here ? "on" : nil, cloud: entry == nil || gone ? nil : "on", cloudTime: entry?["t"] as? Double,
+                 mode: mode, joined: joined, stamps: &stamps, seen: &seen, out: &out,
+                 push: { t in
+                    var e: [String: Any] = ["g": g, "p": f.provider, "m": f.model, "t": t]
+                    if !here { e["gone"] = true }
+                    cloud.setCloudValue(e, for: ck)
+                 },
+                 apply: {
+                    if entry == nil || gone {
+                        all[g]?.removeAll { $0 == f }
+                        if all[g]?.isEmpty == true { all[g] = nil }
+                        return nil
+                    }
+                    if !(all[g] ?? []).contains(f) { all[g, default: []].append(f) }
+                    return "on"
+                 })
+        }
+
+        for g in gateways.sorted() {
+            let ck = Self.favouriteOrderKey(g)
+            let entry = cloud.cloudValue(ck) as? [String: Any]
+            let order = entry?["o"] as? [String] ?? []
+            let list = all[g] ?? []
+            func fingerprint(_ l: [FavouriteModel]) -> String? { l.isEmpty ? nil : l.map(\.id).joined(separator: "\n") }
+            let local = fingerprint(list)
+            let cloudFP: String? = order.isEmpty ? nil : order.joined(separator: "\n")
+            // Changed here: the list as it was before this pass. The favourites just taken went on the end, which is
+            // not this device's order, and must not be sent up as if it were.
+            step(ck, local: local, cloud: cloudFP, cloudTime: entry?["t"] as? Double,
+                 mode: mode, joined: joined, stamps: &stamps, seen: &seen, out: &out, changed: fingerprint(original[g] ?? []) != seen[ck],
+                 push: { t in cloud.setCloudValue(["g": g, "o": list.map(\.id), "t": t], for: ck) },
+                 apply: {
+                    let here = all[g] ?? []
+                    let ordered = order.compactMap { id in here.first { $0.id == id } } + here.filter { !order.contains($0.id) }
+                    all[g] = ordered.isEmpty ? nil : ordered
+                    return ordered.isEmpty ? nil : ordered.map(\.id).joined(separator: "\n")
+                 })
+        }
+
+        if all != original {
+            if let s = FavouriteModels.encode(all) { defaults.set(s, forKey: FavouriteModels.storageKey) }
+            else { defaults.removeObject(forKey: FavouriteModels.storageKey) }
         }
     }
 
@@ -983,7 +1068,8 @@ final class CloudSync {
     /// instead of putting their own copies straight back.
     func eraseCloud() {
         let now = Date().timeIntervalSince1970
-        for key in cloud.cloudKeys where key.hasPrefix(CloudMerge.settingPrefix) || key.hasPrefix(CloudMerge.lookPrefix) || key.hasPrefix(CloudMerge.devicePrefix) {
+        for key in cloud.cloudKeys where key.hasPrefix(CloudMerge.settingPrefix) || key.hasPrefix(CloudMerge.lookPrefix) || key.hasPrefix(CloudMerge.devicePrefix)
+            || key.hasPrefix(CloudMerge.favouritePrefix) || key.hasPrefix(CloudMerge.favouriteOrderPrefix) {
             cloud.setCloudValue(nil, for: key)
         }
         cloud.setCloudValue(now, for: Self.erasedAtCloudKey)
