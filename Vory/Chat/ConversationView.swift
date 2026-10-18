@@ -9,6 +9,8 @@ struct ConversationView: View {
     @State private var loadError: String?
     @State private var showContext = false
     @State private var showProfile = false
+    /// The whole model list, searchable (#401): "All Models…" in a model menu.
+    @State private var choosingModel = false
     /// Rename chat, from the header's menu or a long press on the title pill (#286).
     @State private var renaming = false
     /// A bot whose "@name" was tapped in the thread: its card opens (#302).
@@ -68,6 +70,13 @@ struct ConversationView: View {
                     .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
                     .toolbar(.hidden, for: .navigationBar)
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
+                    // "All Models…" from a model menu for this chat (#401); the bot card opens it itself while it is up.
+                    .onChange(of: model.modelChooser?.id) { _, _ in
+                        guard let r = model.modelChooser, r.chat === chat, !showProfile else { return }
+                        model.modelChooser = nil
+                        choosingModel = true
+                    }
+                    .sheet(isPresented: $choosingModel) { ModelChooserSheet(chat: chat).sheetFrame().withAppModel() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }

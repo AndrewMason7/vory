@@ -13,6 +13,8 @@ struct ProfileInfoSheet: View {
     /// Full height from the start (Matt, 2026-10-10): at the medium height the sheet's glass let
     /// the thread show through beside the face. Medium stays a drag away.
     @State private var detent: PresentationDetent = .large
+    /// "All Models…" from the card's Model menu (#401): opened over the card, as the chat under it cannot while it is up.
+    @State private var choosingModel = false
 
     var body: some View {
         NavigationStack {
@@ -29,6 +31,12 @@ struct ProfileInfoSheet: View {
         .presentationDragIndicator(.visible)
         // Up from the chat's face or pill: the face here plays the reaction the sheet covered.
         .background(ArrivalProbe(profile: profileName))
+        .onChange(of: model.modelChooser?.id) { _, _ in
+            guard let r = model.modelChooser, let chat, r.chat === chat else { return }
+            model.modelChooser = nil
+            choosingModel = true
+        }
+        .sheet(isPresented: $choosingModel) { if let chat { ModelChooserSheet(chat: chat).sheetFrame().withAppModel() } }
     }
 }
 
