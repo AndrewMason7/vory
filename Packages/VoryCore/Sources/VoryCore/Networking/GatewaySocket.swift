@@ -72,6 +72,9 @@ public actor GatewaySocket {
     private let onState: StateSink
     private let onServerRequest: RequestHandler
     private let onReconnected: ReconnectHook
+    /// The socket's first open, which `onReconnected` is not told of: whatever gave up waiting
+    /// for it (a chat opened before it, #422) can be tried again.
+    private let onFirstConnected: ReconnectHook
     /// What the frames go over: a URLSession web socket, or the demo's pipe (`GatewayTransport`).
     private let makePipe: @Sendable (URLRequest) -> any GatewayFramePipe
 
@@ -122,21 +125,25 @@ public actor GatewaySocket {
     /// the batch later gets everything that arrived in the meantime.
     public init(urlProvider: @escaping URLProvider, onEvents: @escaping EventBatchSink, onState: @escaping StateSink,
          onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook,
+         onFirstConnected: @escaping ReconnectHook = {},
          makePipe: @escaping @Sendable (URLRequest) -> any GatewayFramePipe = { GatewayTransport.network.makeFramePipe($0, nil) }) {
         self.urlProvider = urlProvider
         self.onEvents = onEvents
         self.onState = onState
         self.onServerRequest = onServerRequest
         self.onReconnected = onReconnected
+        self.onFirstConnected = onFirstConnected
         self.makePipe = makePipe
     }
 
     /// Events one at a time, each as it arrives.
     public init(urlProvider: @escaping URLProvider, onEvent: @escaping EventSink, onState: @escaping StateSink,
          onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook,
+         onFirstConnected: @escaping ReconnectHook = {},
          makePipe: @escaping @Sendable (URLRequest) -> any GatewayFramePipe = { GatewayTransport.network.makeFramePipe($0, nil) }) {
         self.init(urlProvider: urlProvider, onEvents: { batch in for e in batch.take() { onEvent(e) } },
-                  onState: onState, onServerRequest: onServerRequest, onReconnected: onReconnected, makePipe: makePipe)
+                  onState: onState, onServerRequest: onServerRequest, onReconnected: onReconnected,
+                  onFirstConnected: onFirstConnected, makePipe: makePipe)
     }
 
     // MARK: Lifecycle
@@ -214,7 +221,7 @@ public actor GatewaySocket {
                 problem = nil; problemStreak = 0
                 ticketRetried = false
                 addressStepNoAnswer = false
-                if wasReconnect { await onReconnected() }
+                if wasReconnect { await onReconnected() } else { await onFirstConnected() }
                 return
             } catch let e as HermesAPIError where e.isUnauthorized {
                 teardown(reason: "auth")
