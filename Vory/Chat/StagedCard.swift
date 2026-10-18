@@ -60,7 +60,7 @@ struct StagedCard: View {
                                 .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 14)
                         }
                     } else {
-                        Image(systemName: symbol).font(.system(size: 28, weight: .light)).foregroundStyle(.secondary)
+                        Image(systemName: symbol).font(.system(size: 28, weight: .light)).foregroundStyle(.secondary).accessibilityHidden(true)
                     }
                 }
                 .frame(width: Self.side, height: Self.side)

@@ -130,7 +130,7 @@ struct MacBoardView: View {
         let isTarget = targeted == s
         return VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: s.symbol).font(.caption).foregroundStyle(.secondary)
+                Image(systemName: s.symbol).font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
                 Text(s.title).font(.subheadline.weight(.semibold))
                 Text("\(tasks.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     .padding(.horizontal, 6).padding(.vertical, 1).background(.quaternary, in: .capsule)
@@ -602,6 +602,7 @@ struct MacTaskInspector: View {
                     .onTapGesture(count: 2) { if let t = detail?.task { titleDraft = t.title; editingTitle = true } }
                 Button { if let t = detail?.task { titleDraft = t.title; editingTitle = true } } label: { Image(systemName: "pencil") }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Rename")
+                    .accessibilityLabel("Rename")
                     .disabled(detail == nil)
                 Button { onClose() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Close the inspector")
@@ -670,6 +671,7 @@ struct MacTaskInspector: View {
                     Spacer()
                     if !editingBody {
                         Button { bodyDraft = t.body ?? ""; editingBody = true } label: { Image(systemName: "pencil") }.buttonStyle(.plain).help("Edit the description")
+                            .accessibilityLabel("Edit the description")
                     }
                 }
             }

@@ -31,7 +31,7 @@ struct MacVoiceHUD: View {
 
     private var ended: some View {
         VStack(spacing: 8) {
-            Image(systemName: "waveform.badge.mic").font(.title).foregroundStyle(.secondary)
+            Image(systemName: "waveform.badge.mic").font(.title).foregroundStyle(.secondary).accessibilityHidden(true)
             Text("Voice mode is off").font(.headline)
             // A session that could not start (the microphone refused, no input): why, here as
             // well as in the chat's banner.

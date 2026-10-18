@@ -178,7 +178,7 @@ struct TurnMenu: View {
             BotAvatar(profile: chat.profileName, size: 30, active: true, mood: BotFaceView.Mood(profile: chat.profileName, state: voice.state.phase == .speaking ? .streaming : .working))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Image(systemName: "waveform.badge.mic").font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                    Image(systemName: "waveform.badge.mic").font(.caption.weight(.semibold)).foregroundStyle(.tint).accessibilityHidden(true)
                     Text("Voice mode · \(voice.state.title)").font(.subheadline.weight(.semibold)).lineLimit(1)
                 }
                 Text(chat.title).font(.caption).lineLimit(1)

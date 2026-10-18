@@ -268,6 +268,7 @@ private struct ChatDemo: View {
                     Image(systemName: toolDone ? "checkmark.circle.fill" : "gearshape.2").foregroundStyle(toolDone ? .green : .secondary)
                         .symbolEffect(.rotate, isActive: !toolDone && live)
                         .contentTransition(.symbolEffect(.replace))
+                        .accessibilityLabel(toolDone ? "Done" : "Running")
                     Text("terminal").font(.caption.weight(.semibold))
                     Text("find /var/log -mtime +90 -delete").font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
@@ -338,6 +339,7 @@ private struct ApprovalDemo: View {
                 Image(systemName: picked ? "checkmark.shield.fill" : "exclamationmark.triangle.fill").foregroundStyle(picked ? .green : .yellow)
                     .contentTransition(.symbolEffect(.replace))
                     .symbolEffect(.pulse, isActive: !picked)
+                    .accessibilityHidden(true)
                 Text(picked ? "Allowed once" : "Approval needed").font(.headline).contentTransition(.numericText())
             }
             Text("delete rotated log files older than 90 days").font(.subheadline).foregroundStyle(.secondary)
@@ -425,6 +427,7 @@ private struct IslandDemo: View {
                     Text(String(format: "0:%02d", seconds)).font(.subheadline.monospacedDigit()).foregroundStyle(.white)
                     Image(systemName: finished ? "checkmark" : "ellipsis.message.fill").foregroundStyle(finished ? .green : Color(botHex: bot.hex) ?? .purple)
                         .symbolEffect(.pulse, isActive: !finished)
+                        .accessibilityHidden(true)
                 }
                 if expanded {
                     Text("Clean up the old logs").font(.caption.weight(.medium)).foregroundStyle(.white)
@@ -549,7 +552,7 @@ private struct SummariesDemo: View {
                         Text(summarized ? "Log cleanup on the web host" : "Clean up the old logs on the server and then tell me wh…")
                             .font(.body.weight(.medium)).lineLimit(1)
                             .contentTransition(.numericText())
-                        if summarized { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.secondary).transition(.scale.combined(with: .opacity)) }
+                        if summarized { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.secondary).transition(.scale.combined(with: .opacity)).accessibilityLabel("Summarized") }
                     }
                     Text(summarized ? "Freed 4.2 GB of rotated logs; the bot offered to set up log rotation and is waiting on a yes."
                                     : "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone. Done — 4.2 GB freed. Want log rotation set up so it")
@@ -606,11 +609,16 @@ private struct ConnectDemo: View {
     private func row(_ symbol: String, _ title: String, _ text: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: symbol).font(.body.weight(.semibold)).frame(width: 28, height: 28).foregroundStyle(.tint)
+                // Out of the tree as well: on iOS 27 a combined row's parts stay in it.
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.semibold))
                 Text(text).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
+        // Read as its words: the icon said its own name ("globe", "mostly cloudy", #409).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title). \(text)")
     }
 }

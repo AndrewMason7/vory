@@ -436,7 +436,7 @@ private struct RailMore: View {
     var body: some View {
         Button { choosing = true } label: {
             VStack(spacing: 3) {
-                Image(systemName: "ellipsis.circle").font(.system(size: 19, weight: .medium)).frame(height: 24)
+                Image(systemName: "ellipsis.circle").font(.system(size: 19, weight: .medium)).frame(height: 24).accessibilityHidden(true)
                 Text("More").font(.caption2).lineLimit(1)
             }
             .foregroundStyle(.secondary)
@@ -549,7 +549,7 @@ private struct MacLockView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Image(systemName: "lock.fill").font(.system(size: 34, weight: .medium)).foregroundStyle(.secondary)
+            Image(systemName: "lock.fill").font(.system(size: 34, weight: .medium)).foregroundStyle(.secondary).accessibilityHidden(true)
             Text("Vory is locked").font(.headline)
             if let e = model.lock.lastError { Text(e).font(.footnote).foregroundStyle(.secondary) }
             Button("Unlock with \(model.lock.biometryName)") { Task { await model.lock.unlock() } }

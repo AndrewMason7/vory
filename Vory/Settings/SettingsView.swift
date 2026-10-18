@@ -162,6 +162,7 @@ struct SettingsLabel: View {
         HStack(spacing: 10) {
             Image(systemName: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
                 .frame(width: 22, height: 22).background(color, in: .rect(cornerRadius: 5.5))
+                .accessibilityHidden(true)
             Text(title)
         }
         .padding(.vertical, 2)
@@ -172,6 +173,8 @@ struct SettingsLabel: View {
             // One symbol size for every row (SF Symbols vary in weight and width), centred in the tile.
             Image(systemName: symbol).font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
                 .frame(width: 28, height: 28).background(color, in: .rect(cornerRadius: 7))
+                // The row's title says it; the icon read its own name ("Cpu Chip", "Mostly Cloudy", #409).
+                .accessibilityHidden(true)
         }
         #endif
     }

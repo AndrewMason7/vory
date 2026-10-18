@@ -470,7 +470,7 @@ struct PushSetupView: View {
 
     private func overviewRow(_ title: String, symbol: String, ok: Bool, primary: String, secondary: String, fullValue: String? = nil) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol).font(.body).foregroundStyle(.secondary).frame(width: 24)
+            Image(systemName: symbol).font(.body).foregroundStyle(.secondary).frame(width: 24).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline.weight(.medium))
                 Text(secondary).font(.caption).foregroundStyle(.secondary)
@@ -973,7 +973,7 @@ struct CompanionStatusRows: View {
     /// Icon and text that share a first line, whatever the text wraps to.
     private func statusLabel(_ text: String, systemImage: String, color: Color) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: systemImage).frame(width: 20)
+            Image(systemName: systemImage).frame(width: 20).accessibilityHidden(true)
             Text(text)
         }
         .foregroundStyle(color)
