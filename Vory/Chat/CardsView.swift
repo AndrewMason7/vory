@@ -26,7 +26,7 @@ struct PendingCardView: View {
 struct ApprovalCardView: View {
     var approval: ApprovalRequest
     var count: Int
-    /// The bot's display name, for the scope line ("for defender").
+    /// The bot's display name, for the scope line ("for ops").
     var botName: String = ""
     var onChoice: (String) -> Void
     @State private var confirmAlways = false

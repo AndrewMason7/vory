@@ -361,8 +361,8 @@ final class SmoothnessPerfUITests: XCTestCase {
     }
 
     /// A bot's shape changed in its card (Look, then a shape), then the list and the Bots page,
-    /// and the Bots page again after a relaunch (Matt on 1.5 (17): "after changing UniFi from
-    /// cloud to circle it now broke the look"): stills to hold the changed bot against the others.
+    /// and the Bots page again after a relaunch (Matt on 1.5 (17): changing a bot from Cloud to
+    /// Circle broke its look): stills to hold the changed bot against the others.
     /// The bot starts as HERMES_E2E_SHAPE_FROM (Cloud; set, then a relaunch, so the Bots page is
     /// first drawn with it, as Matt's was) and becomes HERMES_E2E_SHAPE (Circle).
     func testShapeChange() throws {
