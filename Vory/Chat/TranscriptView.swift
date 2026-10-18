@@ -616,9 +616,14 @@ extension TranscriptView {
     /// set is set, where the rows already split.
     private func settleTail() async {
         try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
         let count = visibleItems.count
         let wanted = TranscriptRowModel.tailStart(count)
-        guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling, tailFrom != wanted else { return }
+        // Not set yet while a turn runs: set where the rows already split, wherever the reader
+        // is (nothing moves), so the rest of the turn holds its rows out of the lazy stack.
+        // Unset, the boundary followed every block of new rows, a reader up the thread or not.
+        if tailFrom == nil, chat.isRunning, count > 0 { tailFrom = wanted; return }
+        guard metrics.stickToBottom, !metrics.userScrolling, tailFrom != wanted else { return }
         let moves = TranscriptRowModel.split(count: count, tailFrom: tailFrom) != wanted
         if moves, chat.isRunning { return }
         tailFrom = wanted
@@ -1103,18 +1108,26 @@ struct TranscriptRowModel: Identifiable, Equatable {
     /// Room for a long turn of tool calls (one can add dozens of rows), whose rows would
     /// otherwise cross while it streams (see `settleTail`).
     static let tailCap = 96
-    /// Where the rows that are not lazy would start if nothing held them: whole blocks, so
-    /// the boundary moves once in a block of rows.
-    static func tailStart(_ count: Int) -> Int {
-        max(0, (count - tailBlock) / tailBlock * tailBlock)
+    /// Rows the end keeps when it outgrows `tailCap`: a few screens' worth, so the rows that
+    /// cross then are far above the screen.
+    static let tailKeep = 48
+    /// Where the rows that are not lazy would start if nothing held them, `keep` rows (or up to
+    /// a block more) from the end: whole blocks, so the boundary moves once in a block of rows.
+    static func tailStart(_ count: Int, keep: Int = tailBlock) -> Int {
+        max(0, (count - keep) / tailBlock * tailBlock)
     }
     /// Index of the first row that is not lazy. The thread's own boundary (`tailFrom`) stands
-    /// while it leaves a sensible end: a thread that has not set one, a history that just
-    /// arrived, or rows that piled up while the reader was up the thread, go by whole blocks.
+    /// while it leaves a sensible end: a thread that has not set one goes by whole blocks. Past
+    /// `tailCap` rows (a turn longer than the end holds, a history that arrived or rows that
+    /// piled up while the reader was up the thread) only the rows a few screens up cross: a
+    /// coding bot's turn of a hundred rows used to hand all but the last 16 to the lazy stack
+    /// mid-turn, which laid the newest rows out from its guessed heights, over a long reply
+    /// (#410). The rest cross at rest (`settleTail`).
     static func split(count: Int, tailFrom: Int?) -> Int {
         let wanted = tailStart(count)
-        guard let tailFrom, tailFrom <= wanted, count - tailFrom <= tailCap else { return wanted }
-        return tailFrom
+        guard let tailFrom, tailFrom <= wanted else { return wanted }
+        if count - tailFrom <= tailCap { return tailFrom }
+        return max(tailFrom, tailStart(count, keep: tailKeep))
     }
 
     static func build(_ items: [TranscriptItem], now: Date = Date()) -> [TranscriptRowModel] {

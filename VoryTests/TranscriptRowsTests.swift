@@ -49,9 +49,9 @@ import Testing
         #expect(TranscriptRowModel.tailStart(block * 2 + 5) == block)
         // The thread's own boundary holds while the tail it leaves is within the cap.
         #expect(TranscriptRowModel.split(count: block * 3, tailFrom: block) == block)
-        // Too many rows piled up past it: the blocks take over.
+        // Too many rows piled up past it: the blocks take over, a few screens from the end (#410).
         let cap = TranscriptRowModel.tailCap
-        #expect(TranscriptRowModel.split(count: block + cap + 1, tailFrom: block) == TranscriptRowModel.tailStart(block + cap + 1))
+        #expect(TranscriptRowModel.split(count: block + cap + 1, tailFrom: block) == TranscriptRowModel.tailStart(block + cap + 1, keep: TranscriptRowModel.tailKeep))
         // A boundary past where the blocks would start is not honoured either.
         #expect(TranscriptRowModel.split(count: block * 4, tailFrom: block * 3 + 2) == TranscriptRowModel.tailStart(block * 4))
         // A long turn of tool calls (sixty rows) streams without moving the boundary: rows that

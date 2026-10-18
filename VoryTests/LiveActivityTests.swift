@@ -73,16 +73,31 @@ import Testing
         #expect(TranscriptRowModel.tailStart(500) == 480)
         for n in 0...200 { #expect(n - TranscriptRowModel.tailStart(n) < 2 * TranscriptRowModel.tailBlock) }
     }
+    @Test func aTurnLongerThanTheEndHoldsLetsOnlyRowsFarUpCross() {
+        // The boundary set at 16 holds while the end grows to the cap.
+        #expect(TranscriptRowModel.split(count: 112, tailFrom: 16) == 16)
+        // Past it, a few screens of rows stay out of the lazy stack, never just a block (#410).
+        for n in 113...600 {
+            let split = TranscriptRowModel.split(count: n, tailFrom: 16)
+            #expect(n - split >= TranscriptRowModel.tailKeep, "only \(n - split) rows at the end of \(n)")
+            #expect(n - split < TranscriptRowModel.tailKeep + TranscriptRowModel.tailBlock)
+            #expect(split % TranscriptRowModel.tailBlock == 0)
+        }
+        // No boundary yet, or one past the rows (they went): by whole blocks, as before.
+        #expect(TranscriptRowModel.split(count: 500, tailFrom: nil) == 480)
+        #expect(TranscriptRowModel.split(count: 40, tailFrom: 64) == 16)
+    }
 
     @Test func theThreadsOwnBoundaryStandsUntilItLeavesTooMuchOrTooLittle() {
         // A thread that has not set one yet.
         #expect(TranscriptRowModel.split(count: 90, tailFrom: nil) == 64)
         // Rows arriving since the boundary was set: it stays where it is.
         #expect(TranscriptRowModel.split(count: 60, tailFrom: 16) == 16)
-        // A long history arriving in a thread that had none: whole blocks, not every row at once.
-        #expect(TranscriptRowModel.split(count: 500, tailFrom: 0) == 480)
-        // More rows piled up than the end may hold.
-        #expect(TranscriptRowModel.split(count: 16 + TranscriptRowModel.tailCap + 1, tailFrom: 16) == TranscriptRowModel.tailStart(16 + TranscriptRowModel.tailCap + 1))
+        // A long history arriving in a thread that had none: whole blocks, not every row at once,
+        // with a few screens kept at the end until the thread rests (#410).
+        #expect(TranscriptRowModel.split(count: 500, tailFrom: 0) == TranscriptRowModel.tailStart(500, keep: TranscriptRowModel.tailKeep))
+        // More rows piled up than the end may hold: the same.
+        #expect(TranscriptRowModel.split(count: 16 + TranscriptRowModel.tailCap + 1, tailFrom: 16) == TranscriptRowModel.tailStart(16 + TranscriptRowModel.tailCap + 1, keep: TranscriptRowModel.tailKeep))
         // A shorter thread than the boundary was set for.
         #expect(TranscriptRowModel.split(count: 20, tailFrom: 48) == 0)
     }

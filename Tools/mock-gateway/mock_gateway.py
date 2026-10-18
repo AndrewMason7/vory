@@ -2160,8 +2160,11 @@ class Gateway:
         await self.echo_reasoning(s, TOOLS_INTRO)
         layout: list = [TOOLS_INTRO]
         said = TOOLS_INTRO
+        # "same ids" in the prompt: every call has the same id, as from a provider that numbers
+        # its calls per response ("call_0" each time) and a gateway that passes the id through.
+        same_ids = "same ids" in prompt.lower()
         for i, (name, context, summary, result, between) in enumerate(TOOLS_STEPS):
-            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            tool_id = "call_0" if same_ids else f"t-{uuid.uuid4().hex[:8]}"
             await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": name, "context": context, "args": {"command": context}})
             await asyncio.sleep(0.25 + (i % 3) * 0.2)
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": name, "duration_s": 0.4 + i * 0.1,
