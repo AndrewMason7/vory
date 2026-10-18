@@ -1,7 +1,7 @@
-"""Unit tests for the companion (hermes_push.py).
+"""Unit tests for the companion (hermes_push.py and the plugin's single-instance lock).
 
 No Hermes is imported or run: a fake gateway answers the companion's calls over a local
-WebSocket. Run from the repo root:
+WebSocket, and Windows' msvcrt is a stand-in. Run from the repo root:
 
     PYTHONPATH=<a folder with websockets> python3 -m unittest discover -s server/hermes-push/tests
 
@@ -10,6 +10,7 @@ PyJWT (used only to sign APNs requests) is replaced by an empty module when it i
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -30,6 +31,14 @@ if "jwt" not in sys.modules:
 sys.path.insert(0, str(ROOT))
 import hermes_push  # noqa: E402
 import websockets  # noqa: E402
+
+
+def load_plugin():
+    """The plugin's __init__.py as a module of its own (its folder name has a hyphen)."""
+    spec = importlib.util.spec_from_file_location("vory_push_plugin", ROOT / "plugin" / "vory-push" / "__init__.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class FakeGateway:
@@ -128,6 +137,67 @@ class CapabilitiesTests(unittest.IsolatedAsyncioTestCase):
             written = json.loads(status.read_text())
         self.assertIs(written["server_requests"], False)
         self.assertEqual(written["version"], hermes_push.VERSION)
+
+
+class FakeMsvcrt(types.ModuleType):
+    """Windows' msvcrt, as far as the lock goes: one holder per file, LK_NBLCK raising OSError
+    while another handle holds it."""
+    LK_NBLCK, LK_UNLCK = 2, 0
+
+    def __init__(self) -> None:
+        super().__init__("msvcrt")
+        self.held: dict[str, int] = {}
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None:
+        path = str(os.fstat(fd).st_ino)  # one file, whichever handle
+        if mode == self.LK_NBLCK:
+            if self.held.get(path, fd) != fd:
+                raise OSError(36, "Resource deadlock avoided")
+            self.held[path] = fd
+        elif mode == self.LK_UNLCK and self.held.get(path) == fd:
+            del self.held[path]
+
+
+class SingleInstanceTests(unittest.TestCase):
+    """#403: on Windows, which has no fcntl, the relay's lock is msvcrt's, so the dashboard and the
+    gateway do not both run a relay (every push arrived twice)."""
+
+    def setUp(self) -> None:
+        self.saved = {k: sys.modules.get(k) for k in ("fcntl", "msvcrt")}
+        sys.modules["fcntl"] = None  # import fcntl raises ImportError
+        self.msvcrt = FakeMsvcrt()
+        sys.modules["msvcrt"] = self.msvcrt
+        self.plugin = load_plugin()
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name) / "relay.lock"
+
+    def tearDown(self) -> None:
+        for k, v in self.saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        self.dir.cleanup()
+
+    def test_one_holder_at_a_time_without_fcntl(self) -> None:
+        first, second = open(self.path, "w"), open(self.path, "w")
+        try:
+            self.assertTrue(self.plugin._try_lock(first), "the first relay did not get the lock")
+            self.assertFalse(self.plugin._try_lock(second), "a second relay got the lock too")
+            self.msvcrt.locking(first.fileno(), FakeMsvcrt.LK_UNLCK, 1)
+            self.assertTrue(self.plugin._try_lock(second), "the lock was not free once its holder let go")
+        finally:
+            first.close(); second.close()
+
+    def test_the_claim_takes_the_lock_through_msvcrt(self) -> None:
+        hp = types.SimpleNamespace(status_path=lambda: self.path.with_name("status.json"))
+        self.assertTrue(self.plugin._claim_single_instance(hp))
+        self.assertEqual(len(self.msvcrt.held), 1)
+
+    def test_with_neither_lock_the_relay_runs(self) -> None:
+        sys.modules["msvcrt"] = None
+        with open(self.path, "w") as h:
+            self.assertTrue(self.plugin._try_lock(h))
 
 
 if __name__ == "__main__":
