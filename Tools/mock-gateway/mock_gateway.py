@@ -2027,6 +2027,8 @@ class Gateway:
                               for k in range(MARATHON_LINES))
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.04,
                                                       "summary": f"{(i * 37) % 11} errors", "result_text": lines})
+            # When each step went out, for a UI test that measures how far behind the app is (#421, 28).
+            print(f"[mock] marathon step {i + 1} sent {time.time():.2f}", flush=True)
             if i % 25 == 24:
                 await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
         sections = []
@@ -2044,6 +2046,7 @@ class Gateway:
         self.store_turn(s, prompt, layout)
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": "".join(parts), "status": "complete", "usage": usage(s.output_tokens, steps + 1)})
+        print(f"[mock] marathon ended {time.time():.2f}", flush=True)
 
     def file_reasoning_turn(self, s: Session, prompt: str, steps: list[dict]) -> None:
         """Files a finished turn as the gateway stores it: the prompt, then each step's row as
