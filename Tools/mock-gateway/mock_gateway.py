@@ -66,6 +66,13 @@ _http11.Request.parse = classmethod(_lenient_request_parse)
 
 TOKEN = "mock-token"
 PROFILES = ["default", "work"]
+# The bots as the dashboard lists them; PATCH /api/profiles/{name} renames one in place (#315).
+PROFILE_ROWS: list[dict] = [
+    {"name": "default", "path": "/home/hermes/.hermes", "is_default": True, "description": "Main agent", "skill_count": 18},
+    {"name": "work", "path": "/home/hermes/.hermes-work", "is_default": False, "description": "Work profile", "skill_count": 11},
+]
+# The default bot's rename lands as a display name only, as the real gateway's does.
+DISPLAY_NAMES: dict[str, str] = {}
 MODEL = "anthropic/claude-sonnet-4.6"
 PROVIDER = "anthropic"
 CONTEXT_MAX = 200_000
@@ -101,6 +108,46 @@ accumulated. Lowering that to `rotate 8` would hold the directory near 400 MB.
 
 Here is the disk use before and after:
 MEDIA:/home/hermes/.hermes/images/disk-before-after.png"""
+
+
+def digest_history(rounds: int, end: float) -> list[dict]:
+    """A long working chat (MOCK_DIGEST): `rounds` rounds of a question, a short answer with its
+    reasoning, tool rows and a long markdown digest, oldest first, ending at `end`. Generic hosts
+    and teams only."""
+    hosts = ["web-01", "web-02", "db-01", "cache-01", "build-01", "edge-02"]
+    tools = [("terminal", "systemctl status nginx --no-pager"), ("search files", "auth.log failed password"),
+             ("read file", "/etc/nginx/sites-enabled/default"), ("web extract", "https://status.example.com"),
+             ("tool search", "Searching tools · message agent")]
+    out, rid = [], 1
+    for r in range(rounds):
+        t0 = end - (rounds - r) * 900
+        h = hosts[r % len(hosts)]
+        out.append({"role": "user", "text": f"Morning check on {h}: anything I should know?", "timestamp": t0, "row_id": rid}); rid += 1
+        out.append({"role": "assistant", "text": f"Looking at {h} now.", "reasoning": f"Start with the service state on {h}, then the auth log for failed logins, then compare with yesterday's numbers before writing it up.", "timestamp": t0 + 5, "row_id": rid}); rid += 1
+        for k in range(3 + r % 3):
+            name, ctx = tools[(r + k) % len(tools)]
+            out.append({"role": "tool", "name": name, "context": ctx, "timestamp": t0 + 10 + k})
+        image = f"\n\nTraffic over the last day:\nMEDIA:/home/hermes/.hermes/images/disk-before-after.png" if r % 5 == 4 else ""
+        body = (f"## Daily digest: {h}\n\n"
+                f"**Status:** all services up, {12 + r % 7} warnings since yesterday, none new.\n\n"
+                f"### What changed\n\n"
+                f"- Failed logins: {40 + r * 3} from {3 + r % 4} addresses, all blocked by the rate limit\n"
+                f"- Disk on `/var` at {55 + r % 30}%, up {r % 4} points; rotation runs nightly\n"
+                f"- Two package updates are waiting: `openssl` and `curl`, neither marked urgent\n"
+                f"- Certificate for the edge proxy renews in {30 - r % 20} days\n\n"
+                f"### Numbers\n\n"
+                f"| Check | Today | Yesterday | Trend |\n|---|---|---|---|\n"
+                f"| Requests | {120 + r}k | {118 + r}k | up |\n| Errors | {r % 9} | {(r + 3) % 9} | flat |\n"
+                f"| p95 latency | {180 + r % 40} ms | {175 + r % 40} ms | flat |\n| Blocked IPs | {3 + r % 4} | {2 + r % 4} | up |\n\n"
+                f"### Next\n\n"
+                f"1. Apply the two package updates in the Thursday window\n"
+                f"2. Keep an eye on the failed-login count; it has risen for three days\n"
+                f"3. No action needed on the disk yet\n\n"
+                f"The command I used for the login count:\n\n"
+                f"```bash\ngrep -c 'Failed password' /var/log/auth.log\njournalctl -u nginx --since yesterday | tail -n 20\n```\n\n"
+                f"Say the word if you want the updates applied now instead.{image}")
+        out.append({"role": "assistant", "text": body, "timestamp": t0 + 30, "row_id": rid}); rid += 1
+    return out
 
 
 DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper and pull the answers together."""
@@ -303,8 +350,15 @@ def reasoning_echo(content: str) -> str:
     return _REASONING_TAG_RE.sub("", content.strip()).strip()[:500]
 
 
+# `--context-percent N`: every session reports its context this full (the ring in the message bar
+# at a high fill, for pictures); None keeps the figure that follows from the output.
+CONTEXT_PERCENT_OVERRIDE = None
+
+
 def usage(output: int, calls: int = 1) -> dict:
     used = 18_400 + output * 4
+    if CONTEXT_PERCENT_OVERRIDE is not None:
+        used = int(CONTEXT_MAX * CONTEXT_PERCENT_OVERRIDE / 100)
     return {
         "model": MODEL, "input": 17_900, "output": output, "reasoning": 0,
         "total": 17_900 + output, "calls": calls, "compressions": 0,
@@ -391,7 +445,10 @@ CONFIG_SCHEMA = {
         "max_live_sessions": {"type": "number", "description": "Max Live Sessions", "category": "general"},
         "approvals.mode": {"type": "select", "description": "Dangerous command approval mode", "category": "security", "options": ["manual", "smart", "off"]},
         "approvals.timeout": {"type": "number", "description": "Seconds before an unanswered prompt fails closed", "category": "security"},
-        "agent.reasoning_effort": {"type": "select", "description": "Reasoning effort", "category": "agent", "options": ["", "minimal", "low", "medium", "high", "xhigh", "max"]},
+        # As the real gateway has it (#319): the agent's level is a plain field with no options;
+        # the delegation select is the one that carries the set.
+        "agent.reasoning_effort": {"type": "string", "description": "Agent → Reasoning Effort", "category": "agent"},
+        "delegation.reasoning_effort": {"type": "select", "description": "Reasoning effort for delegated subagents", "category": "delegation", "options": ["", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]},
         "agent.max_iterations": {"type": "number", "description": "Maximum tool-loop iterations per turn", "category": "agent"},
         "display.streaming": {"type": "boolean", "description": "Stream tokens as they arrive", "category": "display"},
         "display.show_reasoning": {"type": "boolean", "description": "Show the model's reasoning blocks", "category": "display"},
@@ -552,14 +609,16 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         return 200, {"ok": True, "version": "0.21.4", "auth_required": False}
     if base == "/api/profiles":
         return 200, {"profiles": [
-            {"name": "default", "path": "/home/hermes/.hermes", "is_default": True, "model": MODEL,
-             "provider": PROVIDER, "description": "Main agent", "skill_count": 18, "has_env": True},
-            {"name": "work", "path": "/home/hermes/.hermes-work", "is_default": False, "model": MODEL,
-             "provider": PROVIDER, "description": "Work profile", "skill_count": 11, "has_env": True}]}
+            {**row, "model": MODEL, "provider": PROVIDER, "has_env": True,
+             **({"display_name": DISPLAY_NAMES[row["name"]]} if row["name"] in DISPLAY_NAMES else {})}
+            for row in PROFILE_ROWS]}
     if base.startswith("/api/profiles/") and base.endswith("/soul"):
         return 200, {"content": "# Workshop assistant\n\nYou are a careful operator. Prefer read-only commands, ask before deleting, and summarize what you changed.", "exists": True}
     if base == "/api/profiles/active":
         return 200, {"active": "default", "current": "default"}
+    if base == "/api/_mock/profile-renames":
+        # Every rename as it arrived, for a test that checks what the app sent.
+        return 200, {"renames": PROFILE_RENAMES}
     if base == "/api/sessions":
         # The real gateway refuses a page over 100 (FastAPI le=100 → 422), as a tester's Home found out.
         if int(query.get("limit") or 20) > 100:
@@ -717,6 +776,81 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
 
 
 RESTART: dict = {}
+PROFILE_RENAMES: list[dict] = []
+
+
+def create_profile(payload: dict) -> tuple[int, object]:
+    """POST /api/profiles: a new bot, named as Vory cleans it (#139's checks: create, edit,
+    rename and delete one bot from the Bots page)."""
+    name = str(payload.get("name") or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
+        return 400, {"detail": f"Invalid profile name {name!r}"}
+    if any(r["name"] == name for r in PROFILE_ROWS):
+        return 400, {"detail": f"Profile '{name}' already exists"}
+    PROFILE_ROWS.append({"name": name, "path": f"/home/hermes/.hermes-{name}", "is_default": False, "description": "", "skill_count": 0})
+    PROFILES[:] = [r["name"] for r in PROFILE_ROWS]
+    return 200, {"ok": True, "name": name}
+
+
+def delete_profile(name: str) -> tuple[int, object]:
+    """DELETE /api/profiles/{name}: the folder and its chats go; the default bot stays."""
+    row = next((r for r in PROFILE_ROWS if r["name"] == name), None)
+    if row is None:
+        return 404, {"detail": f"Profile '{name}' does not exist"}
+    if row.get("is_default"):
+        return 400, {"detail": "Cannot delete the default profile"}
+    PROFILE_ROWS.remove(row)
+    PROFILES[:] = [r["name"] for r in PROFILE_ROWS]
+    STORED_SESSIONS[:] = [s for s in STORED_SESSIONS if s.get("profile") != name]
+    return 200, {"ok": True}
+
+
+def put_profile(name: str, field: str, payload: dict) -> tuple[int, object]:
+    """PUT /api/profiles/{name}/description or /model: Edit Bot's Save."""
+    row = next((r for r in PROFILE_ROWS if r["name"] == name), None)
+    if row is None:
+        return 404, {"detail": f"Profile '{name}' does not exist"}
+    if field == "description":
+        row["description"] = str(payload.get("description") or "")
+    return 200, {"ok": True}
+
+
+def rename_profile(name: str, payload: dict) -> tuple[int, object]:
+    """PATCH /api/profiles/{name}: what hermes_cli.profiles.rename_profile answers. The folder
+    moves, the stored chats move with it, and the bot's sockets drop as its gateway stops and
+    starts again under the new name. The default bot only gets a display name."""
+    new = str(payload.get("new_name") or "").strip()
+    PROFILE_RENAMES.append({"name": name, "new_name": new})
+    if not new:
+        return 400, {"detail": "profile name cannot be empty"}
+    row = next((r for r in PROFILE_ROWS if r["name"] == name), None)
+    if row is None:
+        return 404, {"detail": f"Profile '{name}' does not exist"}
+    if name == "default":
+        DISPLAY_NAMES["default"] = new
+        return 200, {"ok": True, "name": "default", "display_name": new, "path": row["path"]}
+    canon = new.lower()
+    if canon == "default":
+        return 400, {"detail": "Cannot rename to 'default' - it is reserved."}
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", canon):
+        return 400, {"detail": f"Invalid profile name {canon!r}"}
+    if any(r["name"] == canon for r in PROFILE_ROWS):
+        return 400, {"detail": f"Profile '{canon}' already exists"}
+    row["name"] = canon
+    row["path"] = f"/home/hermes/.hermes-{canon}"
+    PROFILES[:] = [r["name"] for r in PROFILE_ROWS]
+    for s in STORED_SESSIONS:
+        if s.get("profile") == name:
+            s["profile"] = canon
+    dropped = 0
+    for gw in list(GATEWAYS):
+        try:
+            gw.ws.transport.abort()
+            dropped += 1
+        except Exception:  # noqa: BLE001
+            pass
+    print(f"[mock] renamed profile {name} -> {canon}, dropped {dropped} socket(s)", flush=True)
+    return 200, {"ok": True, "name": canon, "path": row["path"]}
 ROOMS: list = []
 ROOM_LOGS: dict = {}
 
@@ -1182,6 +1316,10 @@ async def speak_stream(ws):
 # answers session_expired, as a gateway does when its sessions end; GET /api/_mock/auth-log
 # lists the sign-ins and refreshes in order. Session-token requests are served as before.
 PASSWORD_AUTH = {"enabled": False, "username": "", "password": ""}
+# Test only: the browser sign-in approves at once (no login page): /auth/native/authorize with a
+# redirect_uri answers 302 to it with a code for the PKCE challenge, as a signed-in browser would
+# come back. POST /api/_mock/browser-auto {"enabled": true} (password auth on as well).
+BROWSER_AUTO = {"enabled": False}
 AUTH_PENDING: dict = {}
 AUTH_CODES: dict = {}
 ACCESS_TOKENS: set = set()
@@ -1212,11 +1350,22 @@ def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tu
         return 200, {"ok": True}
     if base == "/api/_mock/auth-log":
         return 200, {"log": AUTH_LOG}
+    if base == "/api/_mock/browser-auto" and method == "POST":
+        BROWSER_AUTO["enabled"] = bool(payload.get("enabled"))
+        return 200, {"ok": True, "enabled": BROWSER_AUTO["enabled"]}
     if base == "/api/auth/providers":
         enabled = PASSWORD_AUTH["enabled"]
         return 200, {"providers": [{"name": "basic", "display_name": "Username and password", "supports_password": True}] if enabled else []}
     if not PASSWORD_AUTH["enabled"]:
         return None
+    if base == "/auth/native/authorize" and BROWSER_AUTO["enabled"] and query.get("redirect_uri"):
+        code = "code-" + uuid.uuid4().hex
+        AUTH_CODES[code] = unquote(query.get("code_challenge", ""))
+        AUTH_LOG.append("browser-auto")
+        to = unquote(query["redirect_uri"]) + f"?code={code}&state={query.get('state', '')}"
+        return 302, {"location": to}
+    if base == "/auth/native/authorize" and BROWSER_AUTO["enabled"]:
+        return 400, {"detail": "code_challenge and redirect_uri are required"}
     if base == "/auth/native/authorize":
         # The real one sets its PKCE cookie and shows the login page; one sign-in at a time here.
         AUTH_PENDING.clear()
@@ -1256,7 +1405,34 @@ def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tu
     return None
 
 
-def process_request(connection, request):
+# Test only: /api/profiles answers this much later, as a real gateway over the network can (the
+# app's socket then opens before the bots are known: the cold-launch Chats check, 1.5 (21)).
+PROFILES_DELAY = [0.0]
+# Test only: the next N /api/profiles answer 500 (GET /mock/profiles-fail?count=N), with the
+# socket staying up: the Chats refresh has to ask for the bots again (#338).
+PROFILES_FAIL = [0]
+
+
+async def process_request(connection, request):
+    base = request.path.split("?")[0]
+    if base == "/mock/profiles-fail":
+        count = request.path.partition("count=")[2].split("&")[0]
+        PROFILES_FAIL[0] = int(count) if count.isdigit() else 1
+        print(f"[mock] the next {PROFILES_FAIL[0]} /api/profiles fail", flush=True)
+        body = json.dumps({"fail": PROFILES_FAIL[0]}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/api/profiles":
+        if PROFILES_DELAY[0] > 0:
+            await asyncio.sleep(PROFILES_DELAY[0])
+        if PROFILES_FAIL[0] > 0:
+            PROFILES_FAIL[0] -= 1
+            print(f"[mock] /api/profiles failed on purpose ({PROFILES_FAIL[0]} more)", flush=True)
+            body = json.dumps({"error": "mock: profiles failed on purpose"}).encode()
+            return Response(500, "Internal Server Error", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    return _process_request(connection, request)
+
+
+def _process_request(connection, request):
     path = request.path
     if path.split("?")[0] in ("/api/ws", "/api/plugins/kanban/events", "/api/audio/speak-stream"):
         return None  # let the WebSocket handshake proceed
@@ -1267,6 +1443,18 @@ def process_request(connection, request):
             query[k] = v
     method = getattr(request, "method", "GET") or "GET"
     base = path.split("?")[0]
+    if base in ("/mock/port-down", "/mock/port-up"):
+        # #283's two-address check: the same gateway (this process, its state) at two ports;
+        # one goes away and comes back, as a home address does when the phone leaves home.
+        port = int(query.get("port", "0") or 0)
+        ok = port in LISTEN_PORTS
+        if ok and base == "/mock/port-down" and port in SERVERS:
+            SERVERS.pop(port).close()
+        elif ok and base == "/mock/port-up" and port not in SERVERS:
+            asyncio.get_running_loop().create_task(listen(port))
+        print(f"[mock] {base[6:]} {port}: {'ok' if ok else 'not one of ours'}", flush=True)
+        body = json.dumps({"ok": ok, "up": sorted(SERVERS)}).encode()
+        return Response(200 if ok else 404, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     if base == "/mock/drop-sockets":
         # What iOS does to a suspended app's sockets after a while: they die under it, and the
         # app finds out only when it comes back (a UI test calls this while the app is away).
@@ -1295,11 +1483,28 @@ def process_request(connection, request):
             payload = {}
         payload = payload if isinstance(payload, dict) else {}
         result = kanban_rest(method, base, query, payload) if base.startswith("/api/plugins/kanban/") else audio_rest(method, base, payload)
+    elif method == "OPTIONS" and re.fullmatch(r"/api/profiles/[^/]+", base):
+        # Starlette's answer for a path whose routes take other methods: 405 naming the first
+        # route's methods. Vory reads `Allow` to know the gateway has the rename (#315).
+        body = b""
+        return Response(405, "Method Not Allowed", Headers([("Allow", "PATCH"), ("Content-Length", "0")]), body)
+    elif method == "PATCH" and re.fullmatch(r"/api/profiles/[^/]+", base):
+        result = rename_profile(unquote(base.split("/")[3]), body_json if isinstance(body_json, dict) else {})
+    elif method == "POST" and base == "/api/profiles":
+        result = create_profile(body_json if isinstance(body_json, dict) else {})
+    elif method == "DELETE" and re.fullmatch(r"/api/profiles/[^/]+", base):
+        result = delete_profile(unquote(base.split("/")[3]))
+    elif method == "PUT" and re.fullmatch(r"/api/profiles/[^/]+/(description|model)", base):
+        result = put_profile(unquote(base.split("/")[3]), base.split("/")[4], body_json if isinstance(body_json, dict) else {})
     elif method == "PATCH" and base.startswith("/api/sessions/"):
-        # Title rename from the chat info sheet; the body is not readable here (websockets only
-        # hands us headers), so echo a plausible title so the sheet's "saved" path is exercised.
+        # A chat's pin, archive or title, kept on the stored row, so the list the app reloads
+        # after its own change agrees with it (a pin used to be put back by that reload).
         sid = base.split("/")[3]
         row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
+        if row and isinstance(body_json, dict):
+            for key in ("pinned", "archived", "title"):
+                if key in body_json:
+                    row[key] = body_json[key]
         result = (200, {"ok": True, "title": row["title"] if row else ""})
     elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
         # Held while the task "runs": answered later, without holding up anything else.
@@ -1322,6 +1527,8 @@ def process_request(connection, request):
         result = (200, {"room": room})
     else:
         result = rest(path, query)
+    if result and result[0] == 302 and isinstance(result[1], dict) and "location" in result[1]:
+        return Response(302, "Found", Headers([("Location", result[1]["location"]), ("Content-Length", "0")]), b"")
     return _json_response(*(result if result else (404, {"detail": "Not found"})))
 
 
@@ -1430,6 +1637,41 @@ if len(STORED_SESSIONS) > 1:
 LIVE: dict[str, Session] = {}   # by runtime id
 GATEWAYS: set = set()           # every connected JSON-RPC socket, for /mock/drop-sockets
 
+# MOCK_SESSIONS_CHANGED=1: the gateway's change watcher during a turn (tui_gateway/change_watcher.py).
+# A turn's messages and tool rows move the sessions table, and every connected client gets a
+# session-less sessions.changed at most every 2 s, the trailing edge included: a long turn sends
+# one every 2 s for as long as it runs (#371, the app's work per list refresh while away).
+SESSIONS_CHANGED_FLOOR = 2.0 if os.environ.get("MOCK_SESSIONS_CHANGED") else 0.0
+SESSIONS_CHANGED = {"at": 0.0, "pending": False, "sent": 0}
+
+
+def note_sessions_moved() -> None:
+    if not SESSIONS_CHANGED_FLOOR or SESSIONS_CHANGED["pending"]:
+        return
+    SESSIONS_CHANGED["pending"] = True
+    wait = SESSIONS_CHANGED["at"] + SESSIONS_CHANGED_FLOOR - time.monotonic()
+
+    async def fire() -> None:
+        if wait > 0:
+            await asyncio.sleep(wait)
+        SESSIONS_CHANGED.update(pending=False, at=time.monotonic(), sent=SESSIONS_CHANGED["sent"] + 1)
+        if SESSIONS_CHANGED["sent"] % 10 == 1:
+            print(f"[mock] sessions.changed #{SESSIONS_CHANGED['sent']} to {len(GATEWAYS)} socket(s)", flush=True)
+        frame = neutral(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {"type": "sessions.changed", "session_id": "", "payload": {}}}))
+        for gw in list(GATEWAYS):
+            try:
+                await gw.ws.send(frame)
+            except Exception:  # noqa: BLE001
+                pass
+
+    asyncio.get_running_loop().create_task(fire())
+
+
+# The marathon's pace and output (#371's background checks): MOCK_MARATHON_STEP_S seconds per tool
+# call (0.04 by default) and MOCK_MARATHON_LINES lines of output each (40).
+MARATHON_STEP_S = float(os.environ.get("MOCK_MARATHON_STEP_S") or 0.04)
+MARATHON_LINES = int(os.environ.get("MOCK_MARATHON_LINES") or 40)
+
 
 class Gateway:
     def __init__(self, ws) -> None:
@@ -1452,6 +1694,8 @@ class Gateway:
             elif kind == "tool.complete":
                 live.history.append({"role": "tool", "name": (payload or {}).get("name", "tool"), "text": (payload or {}).get("summary", ""),
                                      "timestamp": time.time(), "row_id": len(live.history) + 1})
+        if kind in ("message.start", "tool.complete", "message.complete"):
+            note_sessions_moved()
         targets = list(live.members) if live is not None and live.members else [self]
         for m in targets:
             try:
@@ -1608,6 +1852,29 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
 
+    async def _morph_turn(self, s: Session, prompt: str) -> None:
+        """A staged interrupted change for the bot's motion (1.5 #304): a tool starts and, 0.15 s
+        later while the toolbox is still forming, an approval is asked; the tool completes once
+        the approval is answered, then a short reply. For the planner's clip."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, "Checking the disk first. ", delay=0.01)
+        tool_id = f"t-{uuid.uuid4().hex[:8]}"
+        await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": "df -h /", "args": {"command": "df -h /"}})
+        await asyncio.sleep(0.15)
+        answer = await self.ask("approval", s.sid, {
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "command": "rm -rf /var/log/old",
+            "description": "Delete the old log folder (1.1 GB)",
+            "tool_name": "terminal",
+            "choices": ["once", "session", "always", "deny"],
+            "allow_session": True, "allow_permanent": True})
+        await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.2, "summary": "41% used", "result_text": "/dev/sda1  470G  190G  257G  41% /"})
+        text = "Done." if (answer or {}).get("choice", "deny") != "deny" else "Left it alone."
+        await self.stream_words(s, text)
+        self.store_turn(s, prompt, ["Checking the disk first. ", 1, text])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": "Checking the disk first. " + text, "status": "complete", "usage": usage(s.output_tokens, 2)})
+
     async def _marathon_turn(self, s: Session, prompt: str) -> None:
         """A long run of the kind a person starts and leaves going with the phone in a pocket:
         a step at a time (a sentence, then a tool call with a screenful of output), then a long
@@ -1626,9 +1893,9 @@ class Gateway:
             tool_id = f"t-{uuid.uuid4().hex[:8]}"
             cmd = f"grep -c ERROR /var/log/app/shard-{i + 1:03d}.log && tail -n 40 /var/log/app/shard-{i + 1:03d}.log"
             await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd[:80], "args": {"command": cmd}})
-            await asyncio.sleep(0.04)
+            await asyncio.sleep(MARATHON_STEP_S)
             lines = "\n".join(f"2026-10-0{1 + k % 5} 0{k % 10}:{k:02d}:1{k % 10} shard-{i + 1:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms"
-                              for k in range(40))
+                              for k in range(MARATHON_LINES))
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.04,
                                                       "summary": f"{(i * 37) % 11} errors", "result_text": lines})
             if i % 25 == 24:
@@ -1657,6 +1924,80 @@ class Gateway:
         rows = [s.store("user", prompt, timestamp=s.turn_started_at)]
         rows += [s.store(step.pop("role"), step.pop("content"), **step) for step in steps]
         s.history += resume_rows(rows)
+
+    async def _huge_turn(self, s: Session, prompt: str) -> None:
+        """One piece of text too big to draw in one go (#371 candidate 3, test only), streamed in
+        large chunks (`huge link 6`: one paragraph of that many KB with a link in it): `huge reasoning 100` a single-paragraph reasoning of that many KB, then a
+        short answer; `huge code 2000` a reply with a code block of that many lines; `huge tool
+        60000` a tool call with that many characters of output, then a short answer."""
+        words = prompt.strip().lower().split()
+        kind = words[1] if len(words) > 1 else "reasoning"
+        m = re.search(r"\d+", prompt)
+        n = int(m.group()) if m else 0
+        sentence = "The export retried shard {} after the checksum on the backups disk came back different from the source, and the second pass matched. "
+        await self.event("message.start", s.sid)
+
+        async def chunks(text: str, kind_: str) -> None:
+            for i in range(0, len(text), 2048):
+                await self.event(kind_, s.sid, {"text": text[i:i + 2048]})
+                s.output_tokens += 512
+                await asyncio.sleep(0.01)
+
+        answer = "Done: every shard is checked and the export is complete."
+        if kind == "link":
+            # One paragraph of about N KB with a link in its middle (a long paragraph drawn in pieces must
+            # keep its link where VoiceOver's links rotor finds it).
+            size = max(4, min(400, n or 6)) * 1024
+            words, k = [], 0
+            while sum(len(w) + 1 for w in words) < size:
+                k += 1
+                words.append(sentence.format(k).strip())
+                if k == 12:
+                    words.append("The details are on the [status page](https://status.example.com/shards).")
+            text = " ".join(words)[:size].rstrip()
+            await chunks(text, "message.delta")
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if kind == "code":
+            lines = max(10, min(20000, n or 2000))
+            code = "\n".join(f"{k + 1:05d}  2026-10-13 04:{k % 60:02d}:{k * 7 % 60:02d} shard-{k % 97:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms" for k in range(lines))
+            text = f"Here is the whole log:\n\n```text\n{code}\n```\n\n{answer}"
+            await chunks(text, "message.delta")
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if kind == "tool":
+            size = max(1000, min(2_000_000, n or 60000))
+            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            cmd = "cat /var/log/app/export.log"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
+            out, k = [], 0
+            while sum(len(x) + 1 for x in out) < size:
+                out.append(f"{k + 1:05d}  shard-{k % 97:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms")
+                k += 1
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.3,
+                                                      "summary": f"{k} lines", "result_text": "\n".join(out)[:size]})
+            await chunks(answer, "message.delta")
+            self.store_turn(s, prompt, [1, answer])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": answer, "status": "complete", "usage": usage(s.output_tokens, 2)})
+            return
+        size = max(1, min(4000, n or 100)) * 1024
+        reasoning, k = "", 0
+        while len(reasoning) < size:
+            k += 1
+            reasoning += sentence.format(k)
+        reasoning = reasoning[:size].rstrip()
+        await chunks(reasoning, "reasoning.delta")
+        await chunks(answer, "message.delta")
+        await self.echo_reasoning(s, answer)
+        self.file_reasoning_turn(s, prompt, [
+            {"role": "assistant", "content": answer, "finish_reason": "stop", "reasoning": reasoning, "reasoning_content": reasoning}])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": answer, "usage": usage(s.output_tokens, 1), "status": "complete", "reasoning": reasoning})
 
     async def _thinking_turn(self, s: Session, prompt: str) -> None:
         """A model that thinks before it answers: its thinking as reasoning.delta (the real
@@ -1788,11 +2129,35 @@ class Gateway:
         if prompt.strip().lower().startswith("delegate"):
             await self._delegate_turn(s, prompt)
             return
+        if prompt.strip().lower().startswith("morph"):
+            await self._morph_turn(s, prompt)
+            return
         if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
             await self._card_turn(s, prompt)
             return
+        if prompt.strip().lower().startswith("huge"):
+            await self._huge_turn(s, prompt)
+            return
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("long"):
+            # A long answer streamed at the usual pace, for what each token costs the app while a
+            # reply streams: `long 40` streams for about 40 s (30 when no number is given).
+            m = re.search(r"\d+", prompt)
+            secs = max(5, min(600, int(m.group()) if m else 30))
+            await self.event("message.start", s.sid)
+            para = ("The nightly export now writes to the backups disk in batches of a thousand rows, "
+                    "and each batch is checked against its source before the next one starts. ")
+            text, n = "", 0
+            while len(text) < secs * 240:   # about 240 characters a second at the 35 ms pace
+                n += 1
+                text += f"**Step {n}.** {para}" + ("\n\n" if n % 3 == 0 else "")
+            text += "\n\nThat is the end of the export notes."   # a last line a test can wait for
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
             return
         if prompt.strip().lower().startswith("files"):
             # Files handed back by a reply (#309): a PDF on a MEDIA line, a CSV with a space in
@@ -1876,13 +2241,16 @@ class Gateway:
         await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
         await asyncio.sleep(0.3)
 
+        # "once or deny" in the prompt: an approval that offers only those two, as a gateway
+        # does when the command may not be remembered (the app shows only what is offered).
+        choices = ["once", "deny"] if "once or deny" in prompt.lower() else ["once", "session", "always", "deny"]
         answer = await self.ask("approval", s.sid, {
             "request_id": f"req-{uuid.uuid4().hex[:8]}",
             "command": "find /var/log -name '*.log.*' -mtime +90 -delete",
             "description": "Delete 34 rotated log files older than 90 days (4.2 GB) under /var/log",
             "tool_name": "terminal",
-            "choices": ["once", "session", "always", "deny"],
-            "allow_session": True, "allow_permanent": True})
+            "choices": choices,
+            "allow_session": "session" in choices, "allow_permanent": "always" in choices})
         choice = (answer or {}).get("choice", "deny")
 
         if choice == "deny":
@@ -1977,9 +2345,10 @@ class Gateway:
         if method == "ping":
             return ok({"pong": True})
         if method == "profiles.list":
-            return ok({"profiles": [{"name": "default", "is_default": True},
-                                    {"name": "work", "is_default": False,
-                                     "canonical_session": {"id": "20260930_221000_work01", "resolved_id": "20260930_221000_work01", "title": "Bot Chat", "message_count": 4}}]})
+            # The same bots as /api/profiles, renamed ones included (#315).
+            return ok({"profiles": [{"name": r["name"], "is_default": r["is_default"]} if r["is_default"] else
+                                    {"name": r["name"], "is_default": False, "canonical_session": {"id": "20260930_221000_work01", "resolved_id": "20260930_221000_work01", "title": "Bot Chat", "message_count": 4}}
+                                    for r in PROFILE_ROWS]})
         if method == "session.active_list":
             return ok({"sessions": [{"id": l.sid, "session_key": l.stored, "title": l.title, "source": "ios",
                                      "status": "streaming" if l.running else "idle", "current": False}
@@ -2098,6 +2467,12 @@ class Gateway:
                         {"role": "assistant", "text": REPLY_PART_1 + REPLY_PART_2 + "\n\n" + REPLY_PART_3,
                          "timestamp": row["last_active"], "row_id": 2},
                     ]
+                    # MOCK_DIGEST=n: a long working chat for the thread's scroll checks (1.5 (23)): n rounds of
+                    # a question, a reply with its reasoning, three to five tool rows and a long digest
+                    # (headings, lists, a code block, a table, an image every fifth round). Generic names.
+                    digest = int(os.environ.get("MOCK_DIGEST", "0") or 0)
+                    if digest > 0:
+                        live.history = digest_history(digest, row["last_active"])
                     # MOCK_LONG=n: the same exchange n times over, for scroll-performance checks.
                     reps = int(os.environ.get("MOCK_LONG", "1") or 1)
                     if reps > 1:
@@ -2349,9 +2724,20 @@ async def ws_handler(ws):
             live.members.discard(gw)
 
 
+SERVERS: dict = {}
+LISTEN_PORTS: list[int] = []
+LISTEN_HOST = "127.0.0.1"
+
+
+async def listen(port: int) -> None:
+    SERVERS[port] = await serve(ws_handler, LISTEN_HOST, port, process_request=process_request, max_size=None)
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9119)
+    ap.add_argument("--port2", type=int, default=None, help="the same gateway (one process, one state) on a second port, for #283's two addresses")
+    ap.add_argument("--profiles-delay", type=float, default=0.0, metavar="S", help="/api/profiles answers S seconds late (test only)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="mock-token")
     # Read at import time (VOICE_LIVE, NEUTRAL_MODELS); declared so the parser accepts them.
@@ -2359,15 +2745,42 @@ async def main() -> None:
     ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
     ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
+    ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
+    ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
+    ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
     args = ap.parse_args()
+    PROFILES_DELAY[0] = args.profiles_delay
+    titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
+    def extra_session(i: int, profile: str) -> dict:
+        return {"id": f"2026100{i % 9}_1200{i % 100:02d}_{profile[:6]}{i:04x}", "title": titles[i % len(titles)],
+                "preview": "Done; nothing else needs a hand right now.", "source": "tui", "model": MODEL,
+                "started_at": time.time() - 200000 - i * 3600, "last_active": time.time() - 190000 - i * 3600,
+                "message_count": 4, "is_active": False, "archived": False, "pinned": False, "profile": profile, "cwd": "/srv/app"}
+    for i in range(args.extra_sessions):
+        row = extra_session(i, "default")
+        STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
+    bot_names = ["ops", "research", "writer", "builder", "support", "data", "design", "finance", "legal", "qa", "infra", "growth"]
+    global CONTEXT_PERCENT_OVERRIDE
+    CONTEXT_PERCENT_OVERRIDE = args.context_percent
+    for b in range(args.extra_bots):
+        name = bot_names[b % len(bot_names)] + ("" if b < len(bot_names) else str(b // len(bot_names) + 1))
+        PROFILES.append(name)
+        PROFILE_ROWS.append({"name": name, "path": f"/home/hermes/.hermes-{name}", "is_default": False, "description": f"{name.capitalize()} profile", "skill_count": 5 + b % 9})
+        for k in range(4):
+            row = extra_session(1000 + b * 4 + k, name)
+            STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
     global TOKEN
     TOKEN = args.token
     if args.password_auth:
         user, _, password = args.password_auth.partition(":")
         PASSWORD_AUTH.update(enabled=True, username=user, password=password)
-    print(f"mock Hermes gateway on http://{args.host}:{args.port}  (session token: {TOKEN})", flush=True)
-    async with serve(ws_handler, args.host, args.port, process_request=process_request, max_size=None) as server:
-        await server.serve_forever()
+    global LISTEN_HOST
+    LISTEN_HOST = args.host
+    LISTEN_PORTS[:] = [args.port] + ([args.port2] if args.port2 else [])
+    print(f"mock Hermes gateway on http://{args.host}:{args.port}" + (f" and :{args.port2}" if args.port2 else "") + f"  (session token: {TOKEN})", flush=True)
+    for port in LISTEN_PORTS:
+        await listen(port)
+    await asyncio.Future()
 
 
 if __name__ == "__main__":

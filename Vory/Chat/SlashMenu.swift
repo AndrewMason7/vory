@@ -105,7 +105,13 @@ enum SlashMenu {
     /// lists the commands A to Z, then the skills most used first, leaving out the bundled skills
     /// nobody has used (the gateway's menus do the same; a search still finds them). A search
     /// ranks by the score, commands before skills on a tie, then use, then name.
-    static func commandItems(_ catalog: CommandsCatalog, query: String) -> [Item] {
+    /// The commands that act on a chat's own state or a turn under way: there is neither before
+    /// the chat exists, so a draft's list (the New Message sheet) leaves them out. The rest
+    /// (models, reasoning, a title, skills, plugin and quick commands) go out as its first turn.
+    static let notBeforeAChat: Set<String> = ["stop", "approve", "deny", "new", "reset", "clear", "undo", "retry",
+                                              "compress", "usage", "history", "queue", "steer", "rollback", "status"]
+
+    static func commandItems(_ catalog: CommandsCatalog, query: String, draft: Bool = false) -> [Item] {
         let meta = Dictionary((catalog.commands ?? [:]).map { (key($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
         let skills = Dictionary((catalog.skills ?? [:]).map { (key($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
         struct Row { var item: Item; var usage: Int; var unusedBundled: Bool }
@@ -115,6 +121,7 @@ enum SlashMenu {
             let name = pair.name.hasPrefix("/") ? String(pair.name.dropFirst()) : pair.name
             let k = key(name)
             guard !k.isEmpty, seen.insert(k).inserted else { continue }
+            if draft, notBeforeAChat.contains(k) { continue }
             if let s = skills[k] {
                 rows.append(Row(item: Item(kind: .skill, name: name, detail: pair.description),
                                 usage: s.usage ?? 0, unusedBundled: s.origin == "bundled" && (s.usage ?? 0) == 0))
@@ -331,9 +338,13 @@ struct SlashMenuList: View {
     /// The model list is still loading: one quiet row says so.
     var loading = false
     var cap: CGFloat
+    /// Its own glass (floating over the thread) or none (inside the composer's card).
+    var glass = true
     var pick: (SlashMenu.Item) -> Void
 
-    private static let rowHeight: CGFloat = 38
+    static let rowHeight: CGFloat = 38
+    /// The row under the pointer (the Mac): lit, but the mark stays where the keys put it.
+    @State private var hovered: String?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -349,8 +360,11 @@ struct SlashMenuList: View {
                         .padding(.horizontal, 8)
                     }
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                        Button { pick(item) } label: { row(item, selected: i == selection) }
+                        Button { pick(item) } label: { row(item, selected: i == selection, hovered: hovered == item.id) }
                             .buttonStyle(.plain)
+                            #if os(macOS)
+                            .onHover { over in if over { hovered = item.id } else if hovered == item.id { hovered = nil } }
+                            #endif
                             .id(item.id)
                             .accessibilityIdentifier(item.kind == .model ? "composer.model.\(item.name)" : "composer.command.\(item.name)")
                             .accessibilityValue(item.current ? "Current model" : "")
@@ -376,7 +390,7 @@ struct SlashMenuList: View {
         // A fixed height; the dock's keyboard handling is manual (ConversationView) so this
         // scroll view cannot swallow the keyboard inset.
         .frame(height: min(cap, CGFloat(max(items.count, loading ? 1 : 0)) * Self.rowHeight + 8))
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .glassEffect(glass ? .regular : .identity, in: .rect(cornerRadius: 16))
     }
 
     private func reveal(_ ids: [String], _ proxy: ScrollViewProxy) {
@@ -384,7 +398,7 @@ struct SlashMenuList: View {
         else if let first = ids.first { proxy.scrollTo(first, anchor: .top) }
     }
 
-    private func row(_ item: SlashMenu.Item, selected: Bool) -> some View {
+    private func row(_ item: SlashMenu.Item, selected: Bool, hovered: Bool = false) -> some View {
         HStack(spacing: 10) {
             if item.kind == .model {
                 Text(item.name).font(.subheadline.weight(.medium)).lineLimit(1).truncationMode(.middle).layoutPriority(1)
@@ -399,7 +413,7 @@ struct SlashMenuList: View {
         }
         .padding(.horizontal, 8)
         .frame(height: Self.rowHeight)
-        .background(selected ? Color.vory.opacity(0.14) : .clear, in: .rect(cornerRadius: 10))
+        .background(selected ? Color.vory.opacity(0.14) : hovered ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 10))
         .contentShape(Rectangle())
     }
 

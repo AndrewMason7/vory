@@ -18,11 +18,23 @@ final class TurnBoard {
         var attention: Bool
         let startedAt: Date
         weak var chat: ChatSession?
+        /// What the bot is doing, for its pose in the row (thinking, a tool, a search, writing).
+        var state: BotFace.State = .working
     }
 
-    private(set) var turns: [Turn] = []
-    var running: Int { turns.filter { !$0.attention }.count }
-    var attention: Int { turns.filter(\.attention).count }
+    private(set) var turns: [Turn] = [] { didSet { recount() } }
+    /// The menu bar item's counts, kept and set only when they change. The item, and with it the
+    /// whole app scene (the main menu, the window's root), reads these, not `turns`: a running
+    /// turn's row is rewritten about once a second while a reply streams, and each rewrite used
+    /// to update the whole scene (about 10 ms a time).
+    private(set) var running = 0
+    private(set) var attention = 0
+
+    private func recount() {
+        let needs = turns.filter(\.attention).count
+        if needs != attention { attention = needs }
+        if turns.count - needs != running { running = turns.count - needs }
+    }
 
     func upsert(_ t: Turn) {
         if let i = turns.firstIndex(where: { $0.id == t.id }) { turns[i] = t } else { turns.append(t) }
@@ -84,7 +96,8 @@ final class MenuBarTurnReporter: TurnActivityReporting {
 
     private func turn(_ chat: ChatSession, detail: String, attention: Bool) -> TurnBoard.Turn {
         let bot = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
-        return TurnBoard.Turn(id: chat.storedID, title: chat.title, bot: bot, profile: chat.profileName, detail: detail, attention: attention, startedAt: startedAt, chat: chat)
+        return TurnBoard.Turn(id: chat.storedID, title: chat.title, bot: bot, profile: chat.profileName, detail: detail, attention: attention, startedAt: startedAt, chat: chat,
+                              state: chat.botState)
     }
 }
 
@@ -109,7 +122,7 @@ struct TurnMenu: View {
                     BotFaceView(spec: BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BFF", finish: "flat"), size: 28, active: false, mood: BotFaceView.Mood(profile: "vory-menubar"))
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Nothing running").font(.subheadline.weight(.semibold))
-                        Text(model.runtime.map { "\($0.connection.name) · \($0.socketState.label)" } ?? "No gateway").font(.caption).foregroundStyle(.secondary)
+                        Text(model.runtime.map { [$0.connection.name, $0.addressLabel, $0.socketState.label].compactMap { $0 }.joined(separator: " · ") } ?? "No gateway").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .padding(12)
@@ -132,7 +145,8 @@ struct TurnMenu: View {
 
     private func row(_ t: TurnBoard.Turn) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            BotAvatar(profile: t.profile, size: 30, active: !t.attention, mood: BotFaceView.Mood(state: t.attention ? .awaitingApproval : .working))
+            BotAvatar(profile: t.profile, size: 30, active: !t.attention,
+                      mood: BotFaceView.Mood(session: t.id, state: t.attention ? .awaitingApproval : t.state))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(t.bot).font(.subheadline.weight(.semibold)).lineLimit(1)

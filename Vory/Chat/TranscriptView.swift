@@ -36,7 +36,15 @@ struct TranscriptView: View {
     /// under the home indicator, in which case the automatic inset ends it above that. Two
     /// layouts seen in the wild: a frame that stops at the safe area (the inset is virtual) and
     /// one that runs to the screen edge (the inset is real). This reads the same in both.
-    private var visibleBottom: CGFloat { min(scrollBottom, UIScreen.main.bounds.height - autoInset) }
+    private var visibleBottom: CGFloat { min(scrollBottom, windowGeometry.bounds.height - autoInset) }
+    /// The window as it is now: its height for the bottom edge above, its keyboard for the
+    /// margin below. Read from the window on every layout, so a fold or a resize moves both.
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.wideLayout) private var wide
+    /// The scroll view's top edge in window space, for the header's bottom edge measured the
+    /// same way (`headerBottom`): the top margin is the distance between the two, whatever
+    /// safe area or camera strip the header sits in.
+    @State private var scrollTop: CGFloat = 0
     /// The margin to add so the last line ends 8 pt above the dock. Never less than the keyboard
     /// plus a one-line composer: a tester's first message in a new chat sat under both, which
     /// no dock position this view had measured could explain, so the floor holds on its own.
@@ -49,8 +57,20 @@ struct TranscriptView: View {
     /// dock's spring brought the composer there.
     @State private var keyboardFloor: CGFloat = 0
     @State private var floorTask: Task<Void, Never>?
-    /// Height of the floating header (the nav bar is hidden in a chat).
+    /// Height of the floating header (the nav bar is hidden in a chat), used until the header
+    /// has been measured.
     var topInset: CGFloat = 96
+    /// The floating header's bottom edge in window space (0 = not measured): the thread's top
+    /// margin ends there, however much safe area the header stands in.
+    var headerBottom: CGFloat = 0
+    /// The header band's fade (`ChatStyle.bandFade` on iOS, 0 where there is no band): added to
+    /// the top margin so the first row reads whole. The bottom has no fade above the bar (the
+    /// thread shows through the field's glass, Matt 2026-10-10): the last row ends 8 pt above
+    /// the dock, as before.
+    var bandFade: CGFloat = 0
+    /// `scrollTop` is 0 when the thread starts at the window's top edge (it runs under the status
+    /// bar), which is the usual case, so only the header's measurement gates this.
+    private var effectiveTopInset: CGFloat { headerBottom > 0 ? max(0, headerBottom - scrollTop) : topInset }
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     @State private var awayFromBottom = false
@@ -65,6 +85,10 @@ struct TranscriptView: View {
     /// object, not view state: writing view state per frame re-evaluated this whole body, and
     /// every row with it, on every frame of a flick.
     @State private var metrics = ScrollMetrics()
+    #if os(macOS)
+    /// Whether the thread is scrolling, read only by the rows' hit-test gate (`ThreadHitGate`).
+    @State private var hitGate = ThreadHitGate()
+    #endif
     /// While the chat is still settling after it opened (history arriving, header and dock
     /// measuring), every adjustment lands without animation; animated ones fought each other.
     @State private var openedAt = Date()
@@ -76,6 +100,12 @@ struct TranscriptView: View {
     @State private var tailFrom: Int?
     @State private var revealTask: Task<Void, Never>?
     @State private var overscrollTask: Task<Void, Never>?
+    /// When the keyboard last moved: its own spring carries a stuck thread to the end, so a
+    /// small overshoot is not landed against it.
+    @State private var keyboardMovedAt = Date.distantPast
+    /// Until when the eased landing of an overshoot is under way: no landing in the same update
+    /// meets it (the two fought, a step at each frame of the ease).
+    @State private var overscrollEaseUntil = Date.distantPast
     /// How much of the scroll view the keyboard covers (beyond the home-indicator safe area). The
     /// thread moves up with the keyboard and, when it was at the bottom, stays there.
     @State private var keyboardInset: CGFloat = 0
@@ -84,7 +114,7 @@ struct TranscriptView: View {
     @State private var openReasoning: Set<String> = []
     /// The rows' actions, one object for the view's life (see `RowContext`).
     @State private var actions = RowActions()
-    @State private var selectText: String?
+    @State private var selectText: SelectTextItem?
     @AppStorage(ChatStyle.showToolCalls) private var showToolCalls = true
     @AppStorage(ChatStyle.showReasoning) private var showReasoning = true
     @AppStorage(ChatStyle.showTurnStats) private var showTurnStats = true
@@ -102,14 +132,11 @@ struct TranscriptView: View {
     @State private var openTools: Set<String> = []
     /// The Mac's reading column as laid out, for the bubbles' share of it.
     @State private var columnWidth: CGFloat = 760
-    /// How wide a bubble may grow: no limit on the phone (the screen is the limit), about
-    /// two thirds of the column on the Mac, like Messages.
+    /// How wide a bubble may grow: no limit on the phone (the window is the limit), about
+    /// two thirds of the reading column on a wide layout (the Mac, iPad, the open Duo), like
+    /// Messages.
     private var bubbleCap: CGFloat {
-        #if os(macOS)
-        return wideReplies ? columnWidth : max(320, columnWidth * 0.72)
-        #else
-        return .infinity
-        #endif
+        wide ? (wideReplies ? columnWidth : max(320, columnWidth * 0.72)) : .infinity
     }
 
     private var visibleItems: [TranscriptItem] {
@@ -146,7 +173,9 @@ struct TranscriptView: View {
             ScrollView {
                 TimeRevealColumn {
                 ThreadStack(alignment: .leading, spacing: 10) {
-                    if chat.items.isEmpty, chat.resumeError == nil {
+                    // Not while the history is still on its way: a reopened chat showed "Say
+                    // something" for a few frames before its rows landed (Matt, 2026-10-11).
+                    if chat.items.isEmpty, chat.resumeError == nil, !chat.isResuming {
                         VStack(spacing: 8) {
                             BotAvatar(profile: chat.profileName, size: 56)
                             Text("Say something to \(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName)").foregroundStyle(.secondary)
@@ -193,11 +222,17 @@ struct TranscriptView: View {
                 }
                 .padding(.horizontal, wideReplies ? 10 : 16)
                 .padding(.top, 8)
-                #if os(macOS)
-                // A reading column in the middle of the pane, a page wide however wide the window is.
-                .frame(maxWidth: ChatStyle.macColumn)
+                // A reopened chat whose history is still on its way shows nothing, then the rows
+                // land as one (the fade is the only animation of the stack, see below).
+                .opacity(chat.isResuming && chat.items.isEmpty ? 0 : 1)
+                .animation(.easeOut(duration: 0.25), value: chat.items.isEmpty)
+                // A reading column in the middle of the pane on a wide layout, a page wide however
+                // wide the window is; the full width on the phone.
+                .frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity)
                 .onGeometryChange(for: CGFloat.self) { ($0.size.width / 20).rounded() * 20 } action: { columnWidth = $0 }
                 .frame(maxWidth: .infinity)
+                #if os(macOS)
+                .modifier(ThreadHitGate.Gate(gate: hitGate))
                 #endif
                 .dynamicTypeSize(ChatStyle.stepped(phoneTypeSize, textSize))
                 // No animation for the stack as a whole. One used to run whenever the row count
@@ -217,17 +252,16 @@ struct TranscriptView: View {
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
             .contentMargins(.bottom, bottomInset + 8, for: .scrollContent)
-            .contentMargins(.top, topInset + 8, for: .scrollContent)
+            .modifier(ThreadTopEdge(inset: effectiveTopInset + bandFade + 8))
             // The keyboard is handled by hand (below) so the last message rides up with it instead
             // of vanishing under the composer; SwiftUI's own avoidance would then double the inset.
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { scrollBottom = $0 }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, v in
                 metrics.reportedInsetBottom = v
                 guard autoInsetFixed == nil, dockTop > 0 else { return }
                 #if os(iOS)
                 let raw = max(0, v - (bottomInset + 8))
-                let safe = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
+                let safe = windowGeometry.safeArea.bottom
                 autoInsetFixed = safe > 0 && raw > safe / 2 ? safe : 0
                 #else
                 autoInsetFixed = 0   // no home indicator under a window
@@ -236,37 +270,16 @@ struct TranscriptView: View {
             .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.containerSize.height] } action: { _, v in
                 metrics.contentHeight = v[0]; metrics.containerHeight = v[1]
             }
-            #if os(iOS)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
-                guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-                let screen = UIScreen.main.bounds
-                // The same rule as the dock's: a frame that is not a keyboard's (a floating or
-                // hardware keyboard's bar, another scene's, the whole screen) must not count.
-                let onScreen = end.intersection(screen)
-                guard end.height < screen.height * 0.66, onScreen.isNull || onScreen.maxY >= screen.maxY - 1 || end.minY >= screen.maxY else { return }
-                let covered = max(0, screen.maxY - end.minY)
-                let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
-                let inset = max(0, covered - safeBottom)
-                // The keyboard moves on UIKit's own spring; this spring tracks it closely, so the
-                // thread and the composer arrive together instead of the composer overlapping.
-                withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
-                    keyboardInset = inset
-                    if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
-                }
-                floorTask?.cancel()
-                if inset == 0 { keyboardFloor = 0 } else {
-                    floorTask = Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(450))
-                        guard !Task.isCancelled else { return }
-                        keyboardFloor = inset
-                        if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
-                    }
-                }
-            }
-            #endif
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+            // The window around the thread (`WindowGeometry`): its own frame in window space, the
+            // window's shape (a fold, a resize or an inset that moves makes the automatic inset
+            // measure again), and the keyboard as the window has it (in window space, only when
+            // it sits on the window's bottom edge), the same value the dock moves by.
+            .modifier(ThreadWindowWatch(geometry: windowGeometry,
+                                        frame: { scrollTop = $0.minY; scrollBottom = $0.maxY },
+                                        shapeChanged: { autoInsetFixed = nil },
+                                        keyboard: { keyboardMoved(to: $0) }))
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, new in
                 metrics.offsetY = new
-                if metrics.userScrolling { BotAmbient.shared.scrolled(dy: new - old) }
             }
             // A tool card or reasoning block that opened low on the screen grew under the
             // composer; once its height has settled, the thread scrolls just enough to show
@@ -285,10 +298,15 @@ struct TranscriptView: View {
                 g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
             } action: { was, distance in
                 metrics.distanceFromBottom = distance
-                // Past the end with no finger on it: a scroll-to-bottom that used the lazy stack's
-                // estimated height lands beyond the real content and the thread shows nothing
-                // until a drag bounces it back ("chats open blank until you scroll"). Land it.
-                if distance < -60, !metrics.userScrolling { scheduleOverscrollFix() }
+                // Past the end with no finger on it, by any amount: a scroll-to-bottom that used the
+                // lazy stack's estimated height lands beyond the real content and the thread shows
+                // nothing until a drag bounces it back ("chats open blank until you scroll"), and
+                // content that shrinks under a thread at rest (a chat's stored rows landing shorter
+                // than its first layout) leaves an empty band over the composer that the first
+                // touch snapped away (Matt on 1.5 (21): "a weird jump"). Land it. The scroll that
+                // followed every change of the last row hid the small ones until it went with the
+                // per-token scroll.
+                if distance < -1, !metrics.userScrolling { landPastTheEnd(distance) }
                 let away = distance > 120
                 if away != awayFromBottom { withAnimation(.snappy) { awayFromBottom = away } }
                 // Content growing under a locked thread also reads as "away" for a frame; only a
@@ -309,6 +327,11 @@ struct TranscriptView: View {
                 let touching = phase == .tracking || phase == .interacting || phase == .decelerating
                 if touching, !metrics.userScrolling { metrics.touchStartDistance = metrics.distanceFromBottom }
                 metrics.userScrolling = touching
+                #if os(macOS)
+                if hitGate.scrolling != touching { hitGate.scrolling = touching }
+                #endif
+                // Shared with the lists: idle faces hold their blink while the thread moves.
+                BotAmbient.shared.scrolling = touching
                 if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
@@ -317,7 +340,8 @@ struct TranscriptView: View {
             .overlay(alignment: .bottomLeading) {
                 ZStack {
                     if showBots, chat.isRunning {
-                        BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(state: chat.botState))
+                        // Plain while the reply writes (the thread's own typing bubble says so, decision A).
+                        BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState == .streaming ? .working : chat.botState))
                             .padding(.leading, 16).padding(.bottom, dockReach + 12)
                             .transition(.scale(scale: 0.6).combined(with: .opacity))
                             .allowsHitTesting(false)
@@ -337,11 +361,18 @@ struct TranscriptView: View {
                 }
                 #endif
             }
+            #if DEBUG
+            .overlay(alignment: .topLeading) {
+                if PieceProbe.shared.on {
+                    Text(PieceProbe.shared.summary).font(.system(size: 8)).padding(.top, 140).accessibilityIdentifier("debug.pieces")
+                }
+            }
+            #endif
             .overlay(alignment: .bottomTrailing) {
                 JumpToBottomButton(visible: awayFromBottom) { jumpToBottom() }
                 .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
-            .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide).withAppModel() }
+            .sheet(item: $selectText) { SelectTextSheet(title: $0.title, text: $0.text, monospaced: $0.monospaced).sheetFrame(.wide).withAppModel() }
             .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame().withAppModel() }
             .sheet(isPresented: $showAwayGrace) { AwayGraceSheet(runtime: chat.runtime).sheetFrame(.compact).withAppModel() }
             #if os(iOS)
@@ -350,17 +381,18 @@ struct TranscriptView: View {
             #endif
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
-            // Whole item, not just `.kind`: the tokens/sec footer lands after the text does and
-            // must pull the bottom back into view too.
-            // Streaming text follows unanimated (tokens arrive faster than an animated scroll
-            // settles); a new message fades in where it belongs and the thread eases up to it.
-            .onChange(of: chat.items.last) { _, _ in
-                if mayFollow() { scrollPosition.scrollTo(edge: .bottom) }
-            }
+            // Streaming text, and the tokens/sec footer landing after it, follow by the anchor for
+            // size changes (`.defaultScrollAnchor(.bottom)` above), with no scroll asked per token:
+            // that write ran the transcript's body a second time on every token. A new message
+            // fades in where it belongs and the thread eases up to it (`followRows`).
             .onChange(of: visibleItems.count) { old, new in followRows(from: old, to: new) }
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [visibleItems.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear { openedAt = Date(); refreshMentionNames() }
+            // The thread's place after a layout switch rebuilt it: the distance from the end it
+            // had (`ChatViewMemory`), put back once the content is laid out; at the end, nothing.
+            .onDisappear { ChatViewMemory.setDistanceFromEnd(metrics.stickToBottom || metrics.distanceFromBottom < 24 ? nil : metrics.distanceFromBottom, for: chat) }
+            .task { await restoreDistanceFromEnd() }
             // The names "@" can mean: the gateway's bots (name and label) and the person's own.
             .onChange(of: chat.runtime.profiles.map(\.name)) { _, _ in refreshMentionNames() }
             // Once the history is in and laid out, make sure the end is really on screen.
@@ -442,10 +474,12 @@ extension TranscriptView {
         actions.onReply = onReply
         actions.onChooseModel = { showModelSheet = true }
         actions.onKeepRunning = { showAwayGrace = true }
-        actions.onSelectText = { selectText = $0 }
+        actions.onSelectText = { selectText = SelectTextItem(text: $0) }
+        actions.onShowAll = { title, text in selectText = SelectTextItem(title: title, text: text, monospaced: title.hasPrefix("Code")) }
         actions.setReasoningOpen = { id, on in if on { openReasoning.insert(id) } else { openReasoning.remove(id) } }
         actions.setToolOpen = { id, on in if on { openTools.insert(id) } else { openTools.remove(id) } }
-        return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
+        return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName,
+                          botLabel: chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
                           showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
                           openReasoning: openReasoning, openTools: openTools, showToolOutput: showToolOutput, compactTools: compactTools,
                           wide: wideReplies, maxBubble: bubbleCap, actions: actions)
@@ -476,7 +510,7 @@ extension TranscriptView {
             // Only when the opened row runs under the composer; then its bottom edge is
             // aligned to the visible bottom (the scroll view resolves the row itself,
             // so no offset arithmetic across coordinate spaces).
-            let limit = (dockTop > 0 ? dockTop : UIScreen.main.bounds.height - fallbackInset) - 8
+            let limit = (dockTop > 0 ? dockTop : windowGeometry.bounds.height - fallbackInset) - 8
             let overshoot = settledBottom - limit
             guard overshoot > 0 else { return }
             #if os(iOS)
@@ -490,21 +524,36 @@ extension TranscriptView {
         }
     }
 
+    /// Puts the thread back where it was before a layout switch (see `ChatViewMemory`).
+    private func restoreDistanceFromEnd() async {
+        guard let d = ChatViewMemory.distanceFromEnd[ChatViewMemory.key(for: chat)], d > 24 else { return }
+        ChatViewMemory.setDistanceFromEnd(nil, for: chat)
+        // The content is laid out and the default anchor has it at the end.
+        for _ in 0..<40 {
+            if metrics.contentHeight > metrics.containerHeight, metrics.offsetY > 0 { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        guard metrics.contentHeight > metrics.containerHeight else { return }
+        metrics.stickToBottom = false
+        scrollPosition.scrollTo(y: max(0, metrics.offsetY - d))
+    }
+
     private func landAfterResume() async {
         guard !chat.isResuming else { return }
         for delay in [300, 900] {
             try? await Task.sleep(for: .milliseconds(delay))
             guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
-            if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { scrollPosition.scrollTo(edge: .bottom) }
+            // Eased, not snapped: a tap that moved a little on its way in nudged the thread,
+            // and the two snaps back read as a jump (Matt, 2026-10-12, "opening a chat and
+            // moving my finger a bit").
+            if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
     }
 
     private func refreshMentionNames() {
-        var bots: [String] = []
-        for p in chat.runtime.profiles {
-            bots.append(p.name)
-            if p.label != p.name { bots.append(p.label) }
-        }
+        // Every name a bot answers to: its folder name, the gateway's display name and the one
+        // given in Vory (#315), without repeats.
+        let bots = Mentions.botNames(for: chat.runtime.profiles)
         let person = UserDefaults.standard.string(forKey: "user.name")
         Mentions.names = Mentions.Names(bots: bots, person: person)
     }
@@ -517,11 +566,37 @@ extension TranscriptView {
     private func mayFollow() -> Bool {
         guard metrics.stickToBottom, !metrics.userScrolling else { return false }
         let reach = max(900, metrics.containerHeight * 1.5)
-        if metrics.distanceFromBottom > reach { metrics.stickToBottom = false; return false }
+        // Not while the chat's history is coming in: the rows arriving under a thread that was
+        // still at the top of the first ones read as a reader up the thread, with no finger on
+        // it, and the end it was locked to was lost (1.5 (23), the open's blank).
+        if metrics.distanceFromBottom > reach { if !chat.isResuming { metrics.stickToBottom = false }; return false }
         return true
     }
 
     /// A row came or went under a locked thread: the thread eases to its end with it.
+    /// The keyboard now covers `inset` of the window above the bottom safe area (`WindowGeometry`).
+    /// The keyboard moves on UIKit's own spring; this spring tracks it closely, so the thread and
+    /// the composer arrive together instead of the composer overlapping.
+    private func keyboardMoved(to inset: CGFloat) {
+        // Only a move: the window's geometry reports the inset as a chat opens too, with no
+        // keyboard, and stamped as one it held off the open's own landing (1.5 (23): a chat at
+        // rest went a screen past its end, blank, a moment after it opened).
+        if inset != keyboardInset { keyboardMovedAt = Date() }
+        withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
+            keyboardInset = inset
+            if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
+        }
+        floorTask?.cancel()
+        if inset == 0 { keyboardFloor = 0 } else {
+            floorTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                keyboardFloor = inset
+                if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
+            }
+        }
+    }
+
     private func followRows(from old: Int, to new: Int) {
         guard mayFollow() else { return }
         // Rows crossing into the lazy stack change the height above the screen: the thread
@@ -550,14 +625,45 @@ extension TranscriptView {
         if moves { scrollPosition.scrollTo(edge: .bottom) }
     }
 
+    /// The thread came to rest past its end with no finger on it (not tracking, dragging or
+    /// decelerating). Locked to the end, or by a small overshoot (rows that landed shorter, a
+    /// status row gone), it is landed in the same update, so the last row stays where it was
+    /// against the dock with no frame of gap or of blank; a large one with the thread not
+    /// following after a moment, once its rows have laid out, eased; either waits while the
+    /// keyboard's spring is carrying the thread, and none meets an eased landing under way.
+    private func landPastTheEnd(_ distance: CGFloat) {
+        guard Date() > overscrollEaseUntil else { return }
+        // Locked, any size, once there is more thread than screen (a chat still empty or shorter
+        // than the screen reads as past its end until its rows come, and is no landing).
+        let locked = metrics.stickToBottom && metrics.contentHeight > metrics.containerHeight
+        guard distance >= -60 || locked, Date().timeIntervalSince(keyboardMovedAt) > 0.6 else { scheduleOverscrollFix(); return }
+        Perf.tick("overscrollLand")
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+    }
+
     private func scheduleOverscrollFix() {
         guard overscrollTask == nil else { return }
         overscrollTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(120))
             defer { overscrollTask = nil }
-            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -8 else { return }
+            // Past the keyboard's spring too (up to a second and a half), rechecked each time.
+            for _ in 0..<12 {
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
+                if Date().timeIntervalSince(keyboardMovedAt) > 0.6 { break }
+            }
+            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
             Perf.tick("overscrollFix")
-            scrollPosition.scrollTo(edge: .bottom)
+            // Eased, so it reads as the thread settling rather than a jump of its own; from more
+            // than a screen past (a thread showing nothing) at once, as an animated scroll through
+            // rows still being laid out glitched them (`jumpToBottom`).
+            if -metrics.distanceFromBottom < metrics.containerHeight {
+                overscrollEaseUntil = Date().addingTimeInterval(0.25)
+                withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) }
+            } else {
+                scrollPosition.scrollTo(edge: .bottom)
+            }
         }
     }
 
@@ -635,6 +741,8 @@ final class RowActions {
     var onChooseModel: () -> Void = {}
     var onKeepRunning: () -> Void = {}
     var onSelectText: (String) -> Void = { _ in }
+    /// The whole of a text a fold shows only the start of, on the Select Text sheet under a title (#361).
+    var onShowAll: (_ title: String, _ text: String) -> Void = { _, _ in }
     var setReasoningOpen: (String, Bool) -> Void = { _, _ in }
     var setToolOpen: (String, Bool) -> Void = { _, _ in }
 }
@@ -649,6 +757,8 @@ struct RowContext: Equatable {
     /// The chat's bot whatever is shown: pictures live in its images dir on the gateway (with
     /// bots hidden, a stored attachment of a non-default bot's chat came back as a placeholder).
     var bot: String?
+    /// The chat's bot as the person knows it, for the title of its reasoning's sheet.
+    var botLabel: String?
     var typingTool: String?
     var showReasoning: Bool
     var currentStepOnly: Bool
@@ -664,7 +774,7 @@ struct RowContext: Equatable {
     var actions: RowActions
 
     static func == (a: RowContext, b: RowContext) -> Bool {
-        a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
+        a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
             && a.currentStepOnly == b.currentStepOnly && a.showStats == b.showStats && a.interruptCause == b.interruptCause && a.lastID == b.lastID
             && a.openReasoning == b.openReasoning && a.openTools == b.openTools && a.showToolOutput == b.showToolOutput
             && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
@@ -685,9 +795,10 @@ struct RowContext: Equatable {
                       showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
                       onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
                       interruptCause: id == lastID ? interruptCause : nil, onKeepRunning: actions.onKeepRunning,
-                      reasoningOpen: Binding(get: { [open = openReasoning.contains(id)] in open }, set: { actions.setReasoningOpen(id, $0) }),
+                      reasoningOpen: openReasoning.contains(id), setReasoningOpen: { actions.setReasoningOpen(id, $0) },
                       onSelectText: actions.onSelectText,
-                      toolOpen: Binding(get: { [open = openTools.contains(id)] in open }, set: { actions.setToolOpen(id, $0) }),
+                      onShowAll: actions.onShowAll, botLabel: botLabel,
+                      toolOpen: openTools.contains(id), setToolOpen: { actions.setToolOpen(id, $0) },
                       showToolOutput: showToolOutput, compactTools: compactTools, wide: wide, maxBubble: maxBubble)
             // Equatable on what it draws (the closures and the binding are
             // compared by value): a row whose message did not change is not
@@ -753,6 +864,20 @@ private struct ScrollViewProbe: UIViewRepresentable {
             while let x = s, !(x is UIScrollView) { s = x.superview }
             metrics?.scrollView = s as? UIScrollView
         }
+    }
+}
+#endif
+
+#if os(macOS)
+/// While the thread scrolls, its rows take no hit tests. AppKit routes every scroll event by a hit test, and SwiftUI
+/// answered by walking every row's content shape and every reply's two hover trackers: a third of the main thread
+/// during a drag on the Mac (1.5 (23), measured). The scroll view still gets its events; a click or a hover works
+/// again the moment the thread stops. Observable on its own so only the gate's modifier reads it, not the thread.
+@Observable final class ThreadHitGate {
+    var scrolling = false
+    struct Gate: ViewModifier {
+        let gate: ThreadHitGate
+        func body(content: Content) -> some View { content.allowsHitTesting(!gate.scrolling) }
     }
 }
 #endif
@@ -904,6 +1029,8 @@ enum ChatStyle {
     static let returnSends = "chat.returnSends"
     static let showReasoning = "chat.showReasoning"
     static let showTurnStats = "chat.showTurnStats"
+    /// The message bar's context figure as tokens ("18/200K") instead of a percentage.
+    static let contextAsTokens = "chat.contextAsTokens"
     static let showSystemNotes = "chat.showSystemNotes"
     /// The bot beside each reply bubble.
     static let showBots = "chat.showBots"
@@ -919,8 +1046,14 @@ enum ChatStyle {
     static let currentStepOnly = "chat.currentStepOnly"
     /// Reply bubbles run to the edge instead of leaving a margin on the right.
     static let wideReplies = "chat.wideReplies"
-    /// The Mac's reading column: thread and composer share it, centred in the pane.
-    static let macColumn: CGFloat = 860
+    /// The reading column on a wide layout (the Mac, iPad, the open Duo): thread and composer
+    /// share it, centred in the pane.
+    static let readingColumn: CGFloat = 860
+    /// The soft edge of the header's band on iOS: the page's background fades out over this
+    /// much thread below the header. The thread's top margin clears it, so the first row reads
+    /// whole, not through the fade. (The dock's band sits below the bar and has no fade above
+    /// it: the thread shows through the field's glass.)
+    static let bandFade: CGFloat = 28
     /// "small", "default" or "large": one Dynamic Type step down or up for the thread only.
     static let textSize = "chat.textSize"
     /// "tailed" (Messages), "rounded" (no tails) or "plain" (replies without a bubble, like a page).
@@ -1024,14 +1157,19 @@ struct TranscriptRowModel: Identifiable, Equatable {
     }
 }
 
-struct SelectTextItem: Identifiable { let text: String; var id: String { text } }
+struct SelectTextItem: Identifiable {
+    var title = "Select Text"
+    let text: String
+    /// Code and logs read in a fixed-width font.
+    var monospaced = false
+    var id: String { title + "\u{0}" + text }
+}
 
 struct TranscriptRow: View, Equatable {
     static func == (a: TranscriptRow, b: TranscriptRow) -> Bool {
-        a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botShown == b.botShown && a.typingTool == b.typingTool
+        a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.botShown == b.botShown && a.typingTool == b.typingTool
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
-            && a.reasoningOpen.wrappedValue == b.reasoningOpen.wrappedValue
-            && a.toolOpen.wrappedValue == b.toolOpen.wrappedValue
+            && a.reasoningOpen == b.reasoningOpen && a.toolOpen == b.toolOpen
             && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
             && a.maxBubble == b.maxBubble && a.interruptCause == b.interruptCause
     }
@@ -1061,9 +1199,18 @@ struct TranscriptRow: View, Equatable {
         if botTint, let profile { return BotColors.color(for: profile).opacity(scheme == .dark ? 0.22 : 0.16) }
         return Color(.systemGray5)
     }
-    var reasoningOpen: Binding<Bool> = .constant(false)
+    /// Open states as values with a setter, not Bindings: a Binding made in the parent's body is
+    /// a new value every evaluation, and SwiftUI re-ran every visible row for it on each frame
+    /// of a keyboard drag ("reasoningOpen, toolOpen changed", 854 times in one run).
+    var reasoningOpen = false
+    var setReasoningOpen: (Bool) -> Void = { _ in }
     var onSelectText: (String) -> Void = { _ in }
-    var toolOpen: Binding<Bool> = .constant(false)
+    /// A text's whole on the Select Text sheet under a title, from a fold that shows its start (#361).
+    var onShowAll: (_ title: String, _ text: String) -> Void = { _, _ in }
+    /// The chat's bot as the person knows it: the reasoning sheet's title.
+    var botLabel: String? = nil
+    var toolOpen = false
+    var setToolOpen: (Bool) -> Void = { _ in }
     var showToolOutput = true
     var compactTools = false
     /// Reply bubbles run to the right edge.
@@ -1104,12 +1251,12 @@ struct TranscriptRow: View, Equatable {
         case .user(let text, let attachments) where attachments.isEmpty && InjectedNote.parse(text) != nil:
             // The gateway speaking in the user's seat (a background process reporting in): a
             // folded notice, not a blue bubble of the person's own words.
-            InjectedNoteRow(note: InjectedNote.parse(text)!)
+            InjectedNoteRow(note: InjectedNote.parse(text)!, onShowAll: onShowAll)
         case .user(let text, let attachments) where attachments.isEmpty && AgentMessage.parse(text) != nil:
             // Another bot wrote in: a compact notice with the words folded under it, not a
             // bubble of ours.
             let m = AgentMessage.parse(text)!
-            BotMessageNotice(handle: m.key, label: m.sender, headline: "Message from \(m.sender)", body: m.body, pending: false, onOpen: onOpenBot)
+            BotMessageNotice(handle: m.key, label: m.sender, headline: "Message from \(m.sender)", body: m.body, pending: false, onOpen: onOpenBot, onShowAll: onShowAll)
         case .user(let text, let attachments):
             HStack {
                 Spacer(minLength: 56)
@@ -1121,13 +1268,16 @@ struct TranscriptRow: View, Equatable {
                     if !attachments.isEmpty { AttachmentStrip(attachments: attachments) }
                     if !attached.isEmpty { MediaThumbStrip(refs: attached, profile: bot, side: 120, alignment: .trailing) }
                     if !shownText.isEmpty {
-                        Text(shownText)
+                        let shown = TextPieces.capped(shownText)
+                        VStack(alignment: .leading, spacing: 6) {
+                            LongText(shown.text)
+                            if shown.more > 0 { MoreTextNote(more: shown.more) { onShowAll("Your message", text) } }
+                        }
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
                             .foregroundStyle(.white)
-                            .background(AppTheme.current, in: MessageBubbleShape(side: .trailing, tailed: botShown && bubbleStyle == "tailed"))
-                            .contextMenu {
+                            .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed") {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                                 Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
@@ -1158,7 +1308,7 @@ struct TranscriptRow: View, Equatable {
                     // runs), the reasoning above it when there is some, the live count below.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id)
+                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1172,13 +1322,13 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
                     // Other files the bot hands back are cards under the words (#309).
                     let files = TranscriptMedia.files(in: text)
-                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false).equatable()
+                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false, onShowAll: onShowAll).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if !files.isEmpty { FileCardStrip(refs: files, profile: bot) }
                     if showStats, let s = item.stats {
@@ -1187,13 +1337,9 @@ struct TranscriptRow: View, Equatable {
                     }
                 }
                 .padding(.horizontal, bubbleStyle == "plain" ? 4 : 14).padding(.vertical, bubbleStyle == "plain" ? 4 : 9)
-                .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: botShown && bubbleStyle == "tailed"))
-                #if os(macOS)
-                // The whole bubble takes the right-click, padding and gaps too: on the words the
-                // Mac's selectable text gives its own menu, which has no Copy for the reply (#255).
-                .contentShape(.rect)
-                #endif
-                .contextMenu {
+                // On the Mac the whole bubble takes the right-click, padding and gaps too: on the
+                // words its selectable text gives its own menu, which has no Copy for the reply (#255).
+                .bubble(bubbleStyle == "plain" ? Color.clear : replyFill, side: .leading, tailed: botShown && bubbleStyle == "tailed", wholeOnMac: true) {
                     Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     Button { VoiceCoordinator.shared.toggleSpeaking(text) } label: {
                         Label(VoiceCoordinator.shared.isSpeaking(text) ? "Stop Speaking" : "Speak", systemImage: VoiceCoordinator.shared.isSpeaking(text) ? "speaker.slash" : "speaker.wave.2")
@@ -1217,12 +1363,11 @@ struct TranscriptRow: View, Equatable {
             HStack {
                 Spacer(minLength: 56)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(text)
+                    LongText(text)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(Color(.systemGray4), in: MessageBubbleShape(side: .trailing))
-                        .contextMenu {
+                        .bubble(Color(.systemGray4), side: .trailing) {
                             Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                             Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
                         }
@@ -1234,20 +1379,20 @@ struct TranscriptRow: View, Equatable {
             // A message to another bot: "Messaging X…", then "Messaged X", then X's answer.
             let d = act.delivery!
             VStack(spacing: 4) {
-                BotMessageNotice(handle: d.target, label: d.target, headline: act.status == .running ? "Messaging \(d.target)…" : "Messaged \(d.target)", body: d.message, pending: act.status == .running, onOpen: onOpenBot)
+                BotMessageNotice(handle: d.target, label: d.target, headline: act.status == .running ? "Messaging \(d.target)…" : "Messaged \(d.target)", body: d.message, pending: act.status == .running, onOpen: onOpenBot, onShowAll: onShowAll)
                 if let reply = act.deliveryReply {
-                    BotMessageNotice(handle: d.target, label: d.target, headline: "Message from \(d.target)", body: reply, pending: false, onOpen: onOpenBot)
+                    BotMessageNotice(handle: d.target, label: d.target, headline: "Message from \(d.target)", body: reply, pending: false, onOpen: onOpenBot, onShowAll: onShowAll)
                 }
             }
         case .tool(let act):
-            ToolCardView(activity: act, itemID: item.id, open: toolOpen, showOutput: showToolOutput, compact: compactTools)
+            ToolCardView(activity: act, itemID: item.id, open: Binding(get: { toolOpen }, set: setToolOpen), showOutput: showToolOutput, compact: compactTools)
         case .system(let text, let symbol) where symbol == "terminal":
             // A slash command's reply: reading size, selectable, with Copy; the terminal mark
             // and a quiet background keep it apart from the bot's words (a tester could neither
             // read nor copy the small grey line it was).
             VStack(alignment: .leading, spacing: 6) {
                 Label("Command", systemImage: "terminal").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text(text).font(.body).textSelection(.enabled)
+                LongText(text).font(.body).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(12).padding(.trailing, 20)
@@ -1304,7 +1449,7 @@ struct StartFailureCard: View {
                     .buttonStyle(.borderless)
             }
             if showRaw {
-                Text(raw).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                LongText(TextPieces.capped(raw).text, code: true).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }
         .padding(12)
@@ -1361,32 +1506,90 @@ struct SubagentRow: View {
 
 struct InjectedNoteRow: View {
     var note: InjectedNote
+    /// The whole output on the Select Text sheet, under the note's title, when the note shows only its start.
+    var onShowAll: ((_ title: String, _ text: String) -> Void)? = nil
     @State private var open = false
+    /// The pill's own width and the row's: the glass animates between the two.
+    @State private var pillWidth: CGFloat = 0
+    @State private var rowWidth: CGFloat = 0
     var body: some View {
-        VStack(spacing: 6) {
-            Button { withAnimation(.snappy) { open.toggle() } } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : note.title.hasPrefix("Subagent") ? "person.2" : "gearshape.2")
-                    Text(note.title).font(.caption)
-                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold))
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
-            if open {
-                Text(note.body).font(.caption.monospaced()).textSelection(.enabled)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+        // One piece of glass that grows out from its centre both ways and folds back the same
+        // way. The title never moves: it stays centred, and the details are laid out at the
+        // row's full width underneath from the start, so the widening glass reveals them
+        // (Matt, 2026-10-11: "stay centered and it expands on both sides to reveal the text").
+        let open = open
+        let title = HStack(spacing: 6) {
+            Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : note.title.hasPrefix("Subagent") ? "person.2" : "gearshape.2")
+            Text(note.title).font(.caption)
+            Image(systemName: "chevron.down").font(.caption2.weight(.bold)).rotationEffect(.degrees(open ? 180 : 0))
         }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .fixedSize()
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pillWidth = $0 }
+        VStack(spacing: 0) {
+            Button { withAnimation(.snappy(duration: 0.32)) { self.open.toggle() } } label: { title.contentShape(.rect) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
+            // A background process's output can run to megabytes: its start, in pieces (#361).
+            let body = TextPieces.capped(note.body)
+            VStack(alignment: .leading, spacing: 4) {
+                LongText(body.text, code: true).font(.caption.monospaced()).textSelection(.enabled)
+                if body.more > 0 { MoreTextNote(more: body.more, action: onShowAll.map { f in { f(note.title, note.body) } }) }
+            }
+                .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
+                .frame(width: max(rowWidth, pillWidth), alignment: .leading)
+                // Revealed by the glass, not faded or moved: it is already in place.
+                .folded(open: open, keep: body.text.utf8.count <= 6_000)
+        }
+        .frame(width: pillWidth > 0 ? (open ? max(rowWidth, pillWidth) : pillWidth) : nil)
+        .clipShape(.rect(cornerRadius: open ? 14 : 20))
+        // Plain glass, not interactive: the button inside takes the tap, and interactive glass
+        // on the wrapper hid that button from accessibility (and the UI test).
+        .glassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
         .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
         .padding(.vertical, 2)
     }
+}
+
+/// The folded part of a note, a tool card or a reasoning fold: laid out at its full size from
+/// the first frame and still there through the close, so the container's moving edge reveals
+/// it and covers it again. A plain `if open` with an identity transition pulled it out on the
+/// close's first frame, and an empty box collapsed (seen frame by frame on the phone).
+struct Folded: ViewModifier {
+    var open: Bool
+    /// The parent stack's spacing: a zero-height child would still get it, so it is taken back.
+    var spacing: CGFloat = 0
+    /// Kept laid out through the close, so the edge covers it. Not for a big fold: a few screens of text laid out and
+    /// animated only to be covered, the close went with the fold at once (#361).
+    var keep = true
+    /// Mounted while open and for the close animation after; not before the first open.
+    @State private var shown = false
+    /// Bumped on every change, so a close's delayed unmount stands down when it reopened since.
+    @State private var gen = 0
+    func body(content: Content) -> some View {
+        VStack(spacing: 0) {
+            // No transition of its own, and its natural height whatever the fold proposes: it is
+            // in place at full size and the edge does the rest (a Text offered the shrinking
+            // height re-wrapped to fewer lines mid-close).
+            if open || shown { content.fixedSize(horizontal: false, vertical: true).transition(.identity) }
+        }
+        .frame(height: open ? nil : 0, alignment: .top)
+        .clipped()
+        .padding(.top, open ? 0 : -spacing)
+        .onChange(of: open, initial: true) { _, now in
+            gen += 1
+            if now { shown = true } else if !keep { shown = false } else {
+                let g = gen
+                Task { try? await Task.sleep(for: .milliseconds(650)); if gen == g { shown = false } }
+            }
+        }
+    }
+}
+
+extension View {
+    func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep)) }
 }
 
 /// The whole tool call on its own page: the command or arguments and the output, as text you
@@ -1407,7 +1610,7 @@ struct ToolCallSheet: View {
             SelectableText(text: text, monospaced: true)
                 .navigationTitle(activity.displayName).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
                     ToolbarItem(placement: .primaryAction) { ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") } }
                 }
         }
@@ -1423,10 +1626,14 @@ struct BotMessageNotice: View {
     var body_: String?
     var pending: Bool
     var onOpen: (String) -> Void
+    /// The whole message on the Select Text sheet, under its headline, when the notice shows only its start.
+    var onShowAll: ((_ title: String, _ text: String) -> Void)?
     @State private var open = false
 
-    init(handle: String, label: String, headline: String, body: String?, pending: Bool, onOpen: @escaping (String) -> Void) {
+    init(handle: String, label: String, headline: String, body: String?, pending: Bool, onOpen: @escaping (String) -> Void,
+         onShowAll: ((_ title: String, _ text: String) -> Void)? = nil) {
         self.handle = handle; self.label = label; self.headline = headline; self.body_ = body; self.pending = pending; self.onOpen = onOpen
+        self.onShowAll = onShowAll
     }
 
     var body: some View {
@@ -1448,7 +1655,11 @@ struct BotMessageNotice: View {
                 }
                 .buttonStyle(.plain)
                 if open {
-                    Text(text).font(.footnote).textSelection(.enabled)
+                    let shown = TextPieces.capped(text)
+                    VStack(alignment: .leading, spacing: 4) {
+                        LongText(shown.text).font(.footnote).textSelection(.enabled)
+                        if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(headline, text) } }) }
+                    }
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(maxWidth: 360, alignment: .leading)
                         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
@@ -1465,6 +1676,8 @@ struct ReasoningDisclosure: View {
     var text: String
     @Binding var open: Bool
     var itemID: String? = nil
+    /// The whole reasoning, when the fold shows only its start (`TextPieces.foldCap`).
+    var onShowAll: ((String) -> Void)? = nil
     @State private var revealing = false
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1480,10 +1693,16 @@ struct ReasoningDisclosure: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(open ? "Hide reasoning" : "Show reasoning")
-            if open {
-                // Models think in markdown (headings, lists, tables): render it, small and quiet.
-                MarkdownView(text: text, style: .reasoning, inlineSelection: false).equatable()
+            // Models think in markdown (headings, lists, tables): render it, small and quiet.
+            // In place from the start; the fold's moving edge reveals and covers it (nothing slides).
+            // A long turn's reasoning is shown up to the fold's cap, the rest on the Select Text sheet,
+            // and closes at once rather than staying laid out under the closing edge (#361).
+            let shown = TextPieces.capped(text)
+            VStack(alignment: .leading, spacing: 6) {
+                MarkdownView(text: shown.text, style: .reasoning, inlineSelection: false).equatable()
+                if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(text) } }) }
             }
+            .folded(open: open, spacing: 4, keep: shown.text.utf8.count <= 6_000)
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
             if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
@@ -1533,17 +1752,34 @@ struct MarkdownView: View, Equatable {
     final class BlocksBox { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
     final class InlineBox { let text: AttributedString; init(_ t: AttributedString) { text = t } }
 
-    static func blocks(_ text: String) -> [MarkdownBlock] {
+    /// The settled parts of the replies parsed last (a streaming reply's among them): a reply's
+    /// next text starts with its settled part, so only the tail after it is parsed. The whole
+    /// reply was parsed on every token, a long one's growing with its length.
+    @MainActor private static var settled: [MarkdownParser.Settled] = []
+
+    @MainActor static func blocks(_ text: String) -> [MarkdownBlock] {
         let key = text as NSString
         if let hit = blockCache.object(forKey: key) { return hit.blocks }
-        let b = MarkdownParser.blocks(from: text)
-        blockCache.setObject(BlocksBox(b), forKey: key, cost: text.utf8.count)
-        return b
+        let prior = settled.indices.filter { settled[$0].isStart(of: text) }.max { settled[$0].text.utf8.count < settled[$1].text.utf8.count }
+        let parsed = MarkdownParser.blocks(from: text, after: prior.map { settled[$0] })
+        if let prior { settled.remove(at: prior) }
+        if let s = parsed.settled {
+            settled.append(s)
+            if settled.count > 16 { settled.removeFirst() }
+        }
+        blockCache.setObject(BlocksBox(parsed.blocks), forKey: key, cost: text.utf8.count)
+        return parsed.blocks
     }
     @MainActor static func inline(_ text: String) -> AttributedString {
         // Mentions are marked after the cache: they depend on the bots known now, not on the text.
-        Mentions.mark(inlineCached(text), names: Mentions.names)
+        // Most paragraphs mention nobody: those skip the walk over their runs, which ran over every
+        // paragraph of a streaming reply on each token.
+        let a = inlineCached(text)
+        guard text.utf8.contains(UInt8(ascii: "@")) else { return a }
+        return Mentions.mark(a, names: Mentions.names)
     }
+    /// The inline text as a view, bot mentions drawn as chips (#321), in pieces when long for the text size (#361).
+    @MainActor static func inlineText(_ text: String) -> some View { InlineText(text: text) }
     static func inlineCached(_ text: String) -> AttributedString {
         let key = text as NSString
         if let hit = inlineCache.object(forKey: key) { return hit.text }
@@ -1557,6 +1793,14 @@ struct MarkdownView: View, Equatable {
 
     /// Selectable in place. Chat bubbles on the iPhone turn it off (see `selectable`).
     var inlineSelection = true
+    /// A code block's whole text on the Select Text sheet, under a title, when the reply shows only its start (#361).
+    var onShowAll: ((_ title: String, _ text: String) -> Void)? = nil
+
+    /// A code block's sheet title: "Code", or "Code · bash" when the fence names a language.
+    static func codeTitle(_ lang: String?) -> String {
+        guard let lang, !lang.isEmpty, !["text", "txt", "plaintext", "plain"].contains(lang.lowercased()) else { return "Code" }
+        return "Code · \(lang)"
+    }
 
     static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.style == b.style && a.inlineSelection == b.inlineSelection }
 
@@ -1593,9 +1837,9 @@ struct MarkdownView: View, Equatable {
         case .paragraph(let t):
             // Never squeezed to a line: on the Mac a reply under an opened Reasoning card lost
             // all but the first line of its last paragraph.
-            Text(Self.inline(t)).fixedSize(horizontal: false, vertical: true)
+            Self.inlineText(t).fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
+            Self.inlineText(t).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
         case .code(let lang, let code, let closed) where style.showsCards && closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.
@@ -1621,8 +1865,15 @@ struct MarkdownView: View, Equatable {
                     if closed { CopyButton(text: code) } else { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.top, 6)
-                Text(code).font(style.codeFont).textSelection(.enabled)
+                // Its start, in pieces: every piece is drawn whole, so a log of thousands of lines cost hundreds of
+                // megabytes; the rest is a Show all away (#361).
+                let shown = TextPieces.capped(code)
+                LongText(shown.text, code: true).font(style.codeFont).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true).padding(10)
+                if shown.more > 0 {
+                    MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(Self.codeTitle(lang), code) } })
+                        .padding(.horizontal, 10).padding(.bottom, 8)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
@@ -1631,7 +1882,7 @@ struct MarkdownView: View, Equatable {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, it in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         listMarker(it)
-                        Text(Self.inline(it.text))
+                        Self.inlineText(it.text)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(it.depth) * 18)
@@ -1644,7 +1895,7 @@ struct MarkdownView: View, Equatable {
         case .quote(let t):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 2).fill(.secondary).frame(width: 3)
-                Text(Self.inline(t)).foregroundStyle(.secondary)
+                Self.inlineText(t).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         case .rule:
@@ -1705,12 +1956,24 @@ struct MarkdownTableView: View {
     @State private var full = false
     @State private var more = MarkdownTableMetrics.Overflow()
 
+    /// What the reply shows: a table over 16 columns or 60 rows shows that much and says how much more there is; the
+    /// whole of it is on the sheet (a wide table made a grid wider than the graphics card draws, #361).
+    private var shownTable: MarkdownTable { table.prefix(columns: MarkdownTableMetrics.bubbleColumns, rows: MarkdownTableMetrics.bubbleRows) }
+
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 4) {
             if typeSize.isAccessibilitySize {
-                MarkdownTableStack(table: table)
+                MarkdownTableStack(table: shownTable)
             } else {
                 card
+            }
+            let columns = table.header.count - shownTable.header.count, rows = table.rows.count - shownTable.rows.count
+            if columns > 0 || rows > 0 {
+                Button { full = true } label: {
+                    Text([columns > 0 ? "\(columns) more columns" : nil, rows > 0 ? "\(rows) more rows" : nil].compactMap { $0 }.joined(separator: ", ") + " · Open the table")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain).foregroundStyle(.tint)
             }
         }
         // No menu of its own: a long press keeps the reply's (Reply, Speak, Copy, Share). The
@@ -1720,7 +1983,7 @@ struct MarkdownTableView: View {
     }
 
     private var grid: some View {
-        MarkdownTableGrid(table: table, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn, headerInset: 22)
+        MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn, headerInset: 22)
     }
 
     private var card: some View {
@@ -1824,6 +2087,7 @@ struct MarkdownImageView: View {
     /// still arrives later replaces it.
     private static let loadTimeout: Duration = .seconds(15)
 
+    @Environment(\.displayScale) private var displayScale
     @State private var picture: UIImage?
     @State private var failed = false
 
@@ -1859,7 +2123,7 @@ struct MarkdownImageView: View {
             let file = dir.appendingPathComponent(name)
             try data.write(to: file)
             guard !Task.isCancelled else { return }
-            if let decoded = await AttachmentThumbs.imageAsync(at: file, side: 1200) { picture = decoded } else { failed = true }
+            if let decoded = await AttachmentThumbs.imageAsync(at: file, side: 1200, scale: displayScale) { picture = decoded } else { failed = true }
         } catch {
             failed = true
         }
@@ -1916,33 +2180,38 @@ struct ToolCardView: View {
             if todos == nil, let s = activity.summary, !s.isEmpty, !expanded, !compact {
                 Text(s).font(.caption).lineLimit(2)
             }
-            if expanded {
-                if compact, todos == nil, let s = activity.summary, !s.isEmpty { Text(s).font(.caption).lineLimit(3) }
-                // The whole call: the args when the gateway sent them, else the context line in
-                // full (a tester opened a card and got a few more characters of a cut preview).
-                if todos == nil, let a = fullCall, !a.isEmpty {
-                    Text(activity.name == "terminal" || activity.name == "bash" ? "Command" : "Arguments").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    CodeBlock(text: a, lineCap: 40)
-                }
-                if showOutput, let r = activity.resultText, !r.isEmpty {
-                    Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    CodeBlock(text: r, lineCap: 30)
-                    // A tool that made or found pictures (a screenshot, a render): shown, not just named.
-                    let shots = MediaScan.imagePaths(inToolOutput: r)
-                    if !shots.isEmpty { MediaThumbStrip(refs: shots, profile: nil, side: 110) }
-                }
-                Button { showFull = true } label: {
-                    Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))
-                }
-                .buttonStyle(.borderless)
-                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+                    if compact, todos == nil, let s = activity.summary, !s.isEmpty { Text(s).font(.caption).lineLimit(3) }
+                    // The whole call: the args when the gateway sent them, else the context line in
+                    // full (a tester opened a card and got a few more characters of a cut preview).
+                    if todos == nil, let a = fullCall, !a.isEmpty {
+                        Text(activity.name == "terminal" || activity.name == "bash" ? "Command" : "Arguments").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        CodeBlock(text: a, lineCap: 40, onShowAll: { showFull = true })
+                    }
+                    if showOutput, let r = activity.resultText, !r.isEmpty {
+                        Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        CodeBlock(text: r, lineCap: 30, onShowAll: { showFull = true })
+                        // A tool that made or found pictures (a screenshot, a render): shown, not just named.
+                        let shots = MediaScan.imagePaths(inToolOutput: r)
+                        if !shots.isEmpty { MediaThumbStrip(refs: shots, profile: nil, side: 110) }
+                    }
+                    Button { showFull = true } label: {
+                        Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.top, 2)
             }
+            // In place from the start; the card's moving edge reveals and covers it (nothing slides).
+            .folded(open: expanded, spacing: compact ? 4 : 6)
         }
         .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall).sheetFrame(.wide).withAppModel() }
         .padding(compact ? 8 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A painted card, not glass: a thread can hold dozens of these, and each live glass
         // layer is composited every frame while the thread scrolls (the stutter on device).
+        // The opened part is revealed by the card growing, inside the card (Matt, 2026-10-11:
+        // tool expands need a proper animation; it faded in before).
+        .clipShape(.rect(cornerRadius: compact ? 10 : 14))
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: compact ? 10 : 14))
         .overlay(RoundedRectangle(cornerRadius: compact ? 10 : 14, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         .contentShape(.rect)
@@ -1974,20 +2243,22 @@ struct ToolCardView: View {
 struct CodeBlock: View {
     var text: String
     var lineCap: Int
+    /// The whole text on a page of its own (the tool's), when what is shown is capped.
+    var onShowAll: (() -> Void)? = nil
     @State private var showAll = false
 
-    private var lines: [Substring] { text.split(separator: "\n", omittingEmptySubsequences: false) }
-    private var shown: String {
-        showAll || lines.count <= lineCap ? String(text.prefix(20_000)) : lines.prefix(lineCap).joined(separator: "\n")
-    }
-
     var body: some View {
+        // Capped in characters as well as lines: a few lines of minified output can be a megabyte. What is shown is
+        // drawn in pieces (#361); the whole output is on the tool's page and in Copy.
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : lines.prefix(lineCap).joined(separator: "\n"))
         VStack(alignment: .leading, spacing: 4) {
-            Text(shown).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            LongText(shown.text, code: true).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true).padding(10).padding(.trailing, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
             .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
+            if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll) }
             if lines.count > lineCap {
                 Button(showAll ? "Show less" : "Show \(lines.count - lineCap) more lines") { withAnimation(.snappy) { showAll.toggle() } }
                     .font(.caption)
@@ -1998,6 +2269,7 @@ struct CodeBlock: View {
 
 struct AttachmentStrip: View {
     var attachments: [AttachmentPreview]
+    @Environment(\.displayScale) private var displayScale
     @State private var preview: URL?
 
     var body: some View {
@@ -2006,7 +2278,7 @@ struct AttachmentStrip: View {
                 Button { if let u = a.localURL { preview = u } } label: {
                     // A thumbnail, never the full photo: a 12-megapixel bitmap per row is what a
                     // thread of screenshots turns into otherwise.
-                    if a.kind == .image, let u = a.localURL, let img = AttachmentThumbs.image(at: u, side: 96) {
+                    if a.kind == .image, let u = a.localURL, let img = AttachmentThumbs.image(at: u, side: 96, scale: displayScale) {
                         Image(uiImage: img).resizable().scaledToFill().frame(width: 96, height: 96).clipShape(.rect(cornerRadius: 12))
                     } else {
                         Label(a.name, systemImage: a.kind == .pdf ? "doc.richtext" : a.kind == .audio ? "waveform" : a.kind == .video ? "video" : "doc")
@@ -2032,9 +2304,13 @@ struct CopyButton: View {
             Task { try? await Task.sleep(for: .seconds(1.5)); withAnimation { copied = false } }
         } label: {
             Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.caption).foregroundStyle(copied ? .green : .secondary)
-                .frame(width: 24, height: 20).contentShape(.rect)
+                // A 32 x 28 click target around the glyph (it was 24 x 20); a content shape
+                // larger than the frame did not take clicks on the Mac.
+                .frame(width: 32, height: 28).contentShape(.rect)
         }
         .buttonStyle(.plain)
+        // Laid out at 24 x 20 as before: the code header and the overlays place it by that frame.
+        .padding(-4)
         .accessibilityLabel(copied ? "Copied" : "Copy code")
     }
 }
@@ -2093,5 +2369,40 @@ struct TodoChecklist: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Todo list, \(done) of \(items.count) done")
+    }
+}
+
+/// The thread's window watch, one modifier so the thread's long chain stays within what the
+/// type checker will take: the scroll view's frame in window space, the window's shape, and the
+/// keyboard overlap, each reported as it changes.
+private struct ThreadWindowWatch: ViewModifier {
+    let geometry: WindowGeometry
+    let frame: (CGRect) -> Void
+    let shapeChanged: () -> Void
+    let keyboard: (CGFloat) -> Void
+    private var shape: [CGFloat] { [geometry.bounds.width, geometry.bounds.height, geometry.safeArea.bottom] }
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame($0) }
+            .onChange(of: shape) { shapeChanged() }
+            .onChange(of: geometry.keyboardOverlap, initial: true) { _, v in keyboard(v) }
+    }
+}
+
+/// The thread's room for the floating header (the blur under the header is the conversation's
+/// own band, see `ConversationView.headerBand`). On iOS the thread is also masked at its sides: the times wait 20 pt beyond the rows (the
+/// slide brings them in), which the screen's edge hid on a phone but the iPhone Duo's side
+/// strip and a second column would show. The sides only: the thread keeps running under the
+/// header's blur and the dock above and below.
+private struct ThreadTopEdge: ViewModifier {
+    let inset: CGFloat
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .mask { Rectangle().padding(.vertical, -4000) }
+            .contentMargins(.top, inset, for: .scrollContent)
+        #else
+        content.contentMargins(.top, inset, for: .scrollContent)
+        #endif
     }
 }

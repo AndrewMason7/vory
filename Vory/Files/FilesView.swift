@@ -114,14 +114,26 @@ struct FilesView: View {
             .navigationTitle("Files")
             .tabRoot(.files)
             .background(InteractivePopEnabler())
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search this folder")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button { path = nil } label: { Label("Home", systemImage: "house") } }
+            .pageSearchable(text: $searchText, prompt: "Search this folder")
+            .onChange(of: model.pageRequest) { _, r in
+                guard let r else { return }
+                switch r.kind {
+                case .filesHome: model.pageRequest = nil; path = nil
+                case .filesToggleHidden: model.pageRequest = nil; withAnimation { showHidden.toggle() }
+                case .filesUpload: model.pageRequest = nil; showImporter = true
+                default: break
+                }
+            }
+            .onChange(of: showHidden, initial: true) { _, h in model.filesShowHidden = h }
+            .pageToolbar {
+                ToolbarItem(placement: .topBarLeading) { if !MorphTopBar.active(model) { Button { path = nil } label: { Label("Home", systemImage: "house") } } }
                 ToolbarItem(placement: .primaryAction) {
+                    if !MorphTopBar.active(model) {
                     Button { withAnimation { showHidden.toggle() } } label: { Label(showHidden ? "Hide hidden files" : "Show hidden files", systemImage: showHidden ? "eye" : "eye.slash") }
                         .accessibilityValue(showHidden ? "Hidden files shown" : "Hidden files not shown")
+                    }
                 }
-                ToolbarItem(placement: .primaryAction) { Button { showImporter = true } label: { Label("Upload", systemImage: "square.and.arrow.up") } }
+                ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showImporter = true } label: { Label("Upload", systemImage: "square.and.arrow.up") } } }
             }
             .reloadable { await load() }
             #if os(macOS)

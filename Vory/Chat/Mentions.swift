@@ -7,7 +7,7 @@ import VoryCore
 /// blocks; an unknown @name stays plain text. A bot's mention is a link that opens its card
 /// (`vory://bot/<name>`, taken by the conversation's openURL) (#302).
 enum Mentions {
-    struct Names: Equatable, Sendable {
+    struct Names: Hashable, Sendable {
         /// Bot names and labels, as typed after the "@" (compared without case).
         var bots: [String] = []
         /// The person's own name from Settings; "you" always counts.
@@ -16,6 +16,19 @@ enum Mentions {
 
     /// The names the thread on screen knows, set by it from the gateway's bots and Settings.
     @MainActor static var names = Names()
+
+    /// Every name a bot answers to, for the thread's list: the folder name, the gateway's
+    /// display name, and the name Vory keeps for it (#315), without repeats.
+    static func botNames(for profiles: [ProfileInfo]) -> [String] {
+        var out: [String] = []
+        for p in profiles {
+            for n in [p.name, p.displayName ?? "", p.label] {
+                let t = n.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty, !out.contains(where: { $0.lowercased() == t.lowercased() }) { out.append(t) }
+            }
+        }
+        return out
+    }
 
     struct Mention: Equatable {
         var range: Range<String.Index>
@@ -111,5 +124,68 @@ enum Mentions {
     /// Plain words with their mentions marked (the voice transcript's lines).
     static func attributed(_ plain: String, names: Names) -> AttributedString {
         mark(AttributedString(plain), names: names)
+    }
+}
+
+// MARK: - Chips (#321)
+
+/// A bot's mention drawn as a chip: the text attribute `MentionChipRenderer` reads to draw the
+/// pill behind the run (the bot's colour, light), with the bot's face set before the name.
+struct MentionChipAttribute: TextAttribute {
+    var color: Color
+}
+
+extension Mentions {
+    /// The marked inline text as a `Text`, every bot mention as a chip: the bot's face (1 em),
+    /// then its name, tagged for the renderer; the link to the bot's card stays on the name.
+    /// Mentions of the person keep #302's stronger mark; code is never touched (it is not
+    /// marked). The chip adds nothing to the line's height beyond the face's 1 em.
+    @MainActor static func text(_ a: AttributedString) -> Text {
+        var out = Text("")
+        for run in a.runs {
+            let slice = AttributedString(a[run.range])
+            guard let link = run.link, let bot = bot(from: link) else { out = out + Text(slice); continue }
+            let color = BotColors.color(for: bot)
+            var name = slice
+            if name.characters.first == "@" { name = AttributedString(name[name.index(afterCharacter: name.startIndex)...]) }
+            var chip = Text(name)
+            if let face = face(for: bot) {
+                // A narrow no-break space: the face and the name never part at a line's end.
+                chip = Text(face).baselineOffset(-3) + Text("\u{202F}") + Text(name)
+            }
+            out = out + Text("\u{2009}") + chip.foregroundStyle(color).customAttribute(MentionChipAttribute(color: color)) + Text("\u{2009}")
+        }
+        return out
+    }
+
+    /// The bot's face at text size, where the app draws faces (the Mac adds its own).
+    @MainActor static func face(for bot: String) -> Image? {
+        // The same memoised face on both: the Mac draws it through its UIImage shims (NSImage).
+        Image(uiImage: BotAvatarImage.cached(profile: bot, size: 17)).renderingMode(.original)
+    }
+}
+
+/// Draws a light pill in the bot's colour behind each chip run, then the text as usual.
+struct MentionChipRenderer: TextRenderer {
+    func draw(layout: Text.Layout, in ctx: inout GraphicsContext) {
+        for line in layout {
+            // One pill per chip: the face and the name are separate runs on the line, joined here.
+            var pill: (rect: CGRect, color: Color)?
+            func flush() {
+                guard let p = pill else { return }
+                let r = p.rect.insetBy(dx: -4, dy: -1.5)
+                ctx.fill(Path(roundedRect: r, cornerRadius: r.height / 2, style: .continuous), with: .color(p.color.opacity(0.16)))
+                pill = nil
+            }
+            for run in line {
+                if let chip = run[MentionChipAttribute.self] {
+                    let r = run.typographicBounds.rect
+                    if let p = pill, p.color == chip.color, abs(p.rect.maxX - r.minX) < 6 { pill = (p.rect.union(r), p.color) }
+                    else { flush(); pill = (r, chip.color) }
+                } else { flush() }
+            }
+            flush()
+            for run in line { ctx.draw(run) }
+        }
     }
 }

@@ -41,7 +41,7 @@ struct MacBoardView: View {
             }
         }
         .navigationTitle(store?.selectedBoardMeta?.displayName ?? "Board")
-        .toolbar { toolbar }
+        .pageToolbar { toolbar }
         .task(id: active) { await follow() }
         .onChange(of: selectedID) { _, id in commands.selectedID = id }
         .onChange(of: commands.newTaskRequest) { _, _ in if active, store?.isPresent == true { showNew = true } }

@@ -63,9 +63,11 @@ struct HandsFreeView: View {
 
     private var mood: BotFaceView.Mood {
         switch state.phase {
-        case .listening, .transcribing: return BotFaceView.Mood(profile: chat.profileName, state: .idle)
+        // Listening and transcribing are the arcs; speaking is the plain bot (the brief's
+        // decision 3: the words are heard, not shown), 1.5 #304.
+        case .listening, .transcribing: return BotFaceView.Mood(profile: chat.profileName, state: BotFace.motionEngine ? .listening : .idle)
         case .thinking: return BotFaceView.Mood(thinking: true, profile: chat.profileName, state: .thinking)
-        case .speaking: return BotFaceView.Mood(profile: chat.profileName, state: .streaming)
+        case .speaking: return BotFaceView.Mood(profile: chat.profileName, state: BotFace.motionEngine ? .working : .streaming)
         case .needsApproval: return BotFaceView.Mood(profile: chat.profileName, state: .awaitingApproval)
         case .paused, .ended: return BotFaceView.Mood(profile: chat.profileName, state: .idle, still: true)
         }
@@ -74,13 +76,16 @@ struct HandsFreeView: View {
     private var bot: some View {
         VStack(spacing: 18) {
             ZStack {
-                // A ring breathes while the person is heard, and while the bot speaks.
-                Circle()
-                    .stroke(tint.opacity(0.5), lineWidth: 3)
-                    .frame(width: 196, height: 196)
-                    .scaleEffect(state.hearing || state.phase == .speaking ? 1.12 : 0.98)
-                    .opacity(state.hearing || state.phase == .speaking ? 1 : 0.25)
-                    .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: state.hearing || state.phase == .speaking)
+                // A ring breathes while the person is heard, and while the bot speaks; with the
+                // motion engine the bot's own listening arcs take its place (1.5 #304).
+                if !BotFace.motionEngine {
+                    Circle()
+                        .stroke(tint.opacity(0.5), lineWidth: 3)
+                        .frame(width: 196, height: 196)
+                        .scaleEffect(state.hearing || state.phase == .speaking ? 1.12 : 0.98)
+                        .opacity(state.hearing || state.phase == .speaking ? 1 : 0.25)
+                        .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: state.hearing || state.phase == .speaking)
+                }
                 BotAvatar(profile: chat.profileName, size: 164, active: state.phase == .thinking || state.phase == .speaking, mood: mood)
             }
             VStack(spacing: 6) {

@@ -31,7 +31,9 @@ public struct EmptyBody: Encodable, Sendable { public init() {} }
 
 /// REST client for one gateway. Applies auth + Access headers, `?profile=`, 401→refresh→retry, and HTML detection.
 public actor HermesAPI {
-    public let gateway: GatewayURL
+    /// Where calls go. A gateway with two addresses (#283) has its runtime point this at the one
+    /// in use before each connect.
+    public private(set) var gateway: GatewayURL
     public private(set) var signer: RequestSigner
     private let urlSession: URLSession
     /// Called on 401 for bearer modes; returns a refreshed signer or throws.
@@ -54,6 +56,8 @@ public actor HermesAPI {
     /// each change.
     public private(set) var lastRelayed = false
     private var onRouteUsed: (@Sendable (Bool) -> Void)?
+
+    public func setGateway(_ gateway: GatewayURL) { self.gateway = gateway }
 
     public init(gateway: GatewayURL, signer: RequestSigner, urlSession: URLSession = HermesAPI.makeSession()) {
         self.gateway = gateway
@@ -151,6 +155,20 @@ public actor HermesAPI {
         // The retry after a renewal is judged by its status alone, as before.
         if !refreshed, Self.looksLikeHTML(http: http, data: data) { throw HermesAPIError.htmlResponse(status: http.statusCode) }
         return (data, http)
+    }
+
+    /// The methods a route answers, from the gateway's own `Allow` on an OPTIONS probe: a route
+    /// that exists but takes other methods answers 405 with them (the first route on that path,
+    /// as Starlette orders them), a missing route 404 with none. Used to offer a call only
+    /// where the gateway has it (the profile rename, #315). The relay carries no headers, so
+    /// through it the answer is empty.
+    public func allowedMethods(_ path: String, profile: String? = nil) async throws -> Set<String> {
+        var items: [URLQueryItem] = []
+        if let profile, !profile.isEmpty { items.append(URLQueryItem(name: "profile", value: profile)) }
+        let (_, http, _) = try await answered("OPTIONS", path, items: items, body: nil, authenticated: true)
+        if http.statusCode == 401 { throw HermesAPIError.unauthorized("") }
+        let allow = http.value(forHTTPHeaderField: "Allow") ?? ""
+        return Set(allow.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).uppercased() }.filter { !$0.isEmpty })
     }
 
     /// A call made for another device (the watch, through its iPhone): the gateway's answer as

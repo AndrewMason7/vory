@@ -7,6 +7,19 @@ import OSLog
 @Observable
 public final class GatewayRuntime {
     public let connection: GatewayConnection
+    /// The address in use: the gateway's own, or for a gateway with a backup address (#283) the
+    /// one that answered when the socket last connected.
+    public private(set) var address: GatewayURL
+    /// The address in use in words, for where the gateway is named; nil with only one address.
+    public var addressLabel: String? { connection.alternate == nil ? nil : AddressChooser.label(for: address) }
+    /// Tests stand in for the status probe here; nil asks the addresses themselves.
+    public var addressProbe: AddressChooser.Probe?
+    private let addressMemory = AddressMemory()
+    /// The chosen address's index and identity, kept once the socket has opened with it.
+    private var chosenAddress: AddressChooser.Choice?
+    private var pathWatch: Task<Void, Never>?
+    /// The status probe's session: one for the runtime's life, invalidated in `stop()`.
+    private var probeSession: URLSession?
     public private(set) var secrets: GatewaySecrets
     public let api: HermesAPI
     public private(set) var socket: GatewaySocket!
@@ -19,11 +32,49 @@ public final class GatewayRuntime {
     public var isAway = false {
         didSet {
             guard oldValue, !isAway else { return }
-            for chat in registry.all { chat.cameBack() }
+            // The chats' views catch up once, when the app says (`scheduleCatchUp`); they stay
+            // held until then, so a live change meanwhile does not have them catch up early.
+            for chat in registry.all { chat.beginCatchUp() }
+            let catchUp: @MainActor () -> Void = { [weak self] in
+                guard let self, !self.isAway else { return }
+                for chat in self.registry.all { chat.cameBack() }
+            }
+            if let scheduleCatchUp { scheduleCatchUp(catchUp) } else { catchUp() }
             // A socket that died quietly while the app was away is found out now, not at the
             // next heartbeat (see `GatewaySocket.checkAlive`).
             Task { [socket] in await socket?.checkAlive() }
+            // What was owed while away, once, after the return's animation (the foreground
+            // transition is where the watchdog counts the main thread's seconds).
+            owedFlush?.cancel()
+            owedFlush = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(700))
+                guard let self, !Task.isCancelled, !self.isAway else { return }
+                self.payOwedRefreshes()
+            }
         }
+    }
+    /// When the chats' views catch up after a return: at once when not set (the Mac's wake, the
+    /// tests). The phone runs it just after the return's first frame, out of the scene update,
+    /// whose stretch on the main thread it lengthened by drawing the turn that ended away (#371).
+    public var scheduleCatchUp: (@MainActor (@escaping @MainActor () -> Void) -> Void)?
+
+    /// Refreshes held back while away (`publishSnapshot`, the sessions-changed notice): a long
+    /// turn sends a sessions.changed with every flush, and each one fetched the list, read and
+    /// wrote the widget snapshot in the Keychain, reloaded the widgets, and reloaded the chat
+    /// list with its Siri and Spotlight catalogs, all on a main thread the system wants quiet
+    /// in the background (#371: a quarter to half a core for as long as the turn ran).
+    private(set) var owedSnapshot = false
+    private(set) var owedSessionsRefresh = false
+    private(set) var owedListRefresh = false
+    private var owedFlush: Task<Void, Never>?
+
+    private func payOwedRefreshes() {
+        if owedListRefresh {
+            owedListRefresh = false
+            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
+            Task { await projects.refreshTree() }
+        }
+        if owedSnapshot { publishSnapshot(refreshSessions: owedSessionsRefresh) }
     }
     /// False where no socket is opened at all (a watch going through its iPhone): start,
     /// reconnect and new credentials leave it closed, and the capability probe skips it.
@@ -76,7 +127,10 @@ public final class GatewayRuntime {
         let loadedSecrets = store.secrets(for: connection.id)
         self.secrets = loadedSecrets
         self.selectedProfile = connection.lastProfile
-        self.api = HermesAPI(gateway: connection.gateway, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets))
+        let addresses = connection.addresses
+        let first = AddressMemory().lastGood(for: connection.id).flatMap { addresses.indices.contains($0) ? addresses[$0] : nil } ?? connection.gateway
+        self.address = first
+        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets))
         self.socket = GatewaySocket(
             urlProvider: { [weak self] in
                 guard let self else { throw SocketError.cancelled }
@@ -88,6 +142,7 @@ public final class GatewayRuntime {
                 guard let self else { return }
                 let wasOpen = self.socketState.isOpen
                 self.socketState = s
+                if !wasOpen, s.isOpen { self.rememberAddress() }
                 // The status widget shows whether the gateway is reachable: tell it on every flip.
                 // Where HTTP counts too (the watch), a socket that closed asks HTTP afresh rather
                 // than keep the last answer.
@@ -122,9 +177,9 @@ public final class GatewayRuntime {
         var refreshed: GatewaySecrets
         var signedInAgain = false
         do {
-            refreshed = try await NativeAuthClient.refresh(gateway: connection.gateway, secrets: secrets)
+            refreshed = try await NativeAuthClient.refresh(gateway: address, secrets: secrets)
         } catch HermesAPIError.sessionExpired {
-            guard let signInAgain, let renewed = await signInAgain(connection, secrets) else {
+            guard let signInAgain, let renewed = await signInAgain(connection.using(address), secrets) else {
                 refreshRefused = true
                 throw HermesAPIError.sessionExpired
             }
@@ -173,7 +228,8 @@ public final class GatewayRuntime {
     }
 
     private nonisolated func websocketURL() async throws -> (URL, [String: String]) {
-        let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
+        let gateway = await chooseAddress()
+        let (authMode, secrets) = await (connection.authMode, self.secrets)
         var ticket: String?
         if authMode.usesBearer {
             let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody(), directOnly: true)
@@ -186,7 +242,7 @@ public final class GatewayRuntime {
     /// A socket URL for a plugin's own endpoint (the kanban event stream), credentialled the
     /// same way as the main socket: a minted ticket for bearer gateways, `?token=` otherwise.
     nonisolated func pluginWebsocketURL(path: String, query: [URLQueryItem]) async throws -> (URL, [String: String]) {
-        let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
+        let (gateway, authMode, secrets) = await (address, connection.authMode, self.secrets)
         var items = query
         if authMode.usesBearer {
             let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody(), directOnly: true)
@@ -197,13 +253,79 @@ public final class GatewayRuntime {
         return (gateway.websocket(path, query: items), secrets.access.headers)
     }
 
+    // MARK: Two addresses (#283)
+
+    /// Before each connect, a gateway with a backup address asks both addresses which is
+    /// answering (`AddressChooser`: the one that worked last first, briefly, then the first good
+    /// answer; no credentials sent). No good answer keeps the address in use, as one address
+    /// always does.
+    private func chooseAddress() async -> GatewayURL {
+        let addresses = connection.addresses
+        guard addresses.count > 1 else { return address }
+        let probe = addressProbe ?? statusProbe()
+        let choice = await AddressChooser.choose(addresses: addresses, lastGood: addressMemory.lastGood(for: connection.id),
+                                                 known: addressMemory.identity(for: connection.id), probe: probe)
+        chosenAddress = choice
+        if let choice, addresses[choice.index] != address {
+            address = addresses[choice.index]
+            await api.setGateway(address)
+            log.info("address: \(AddressChooser.label(for: self.address), privacy: .public)")
+        }
+        return address
+    }
+
+    private func statusProbe() -> AddressChooser.Probe {
+        let session = probeSession ?? URLSession(configuration: AddressChooser.probeConfiguration())
+        probeSession = session
+        return AddressChooser.statusProbe(accessHeaders: connection.hasAccessHeaders ? secrets.access.headers : [:], session: session)
+    }
+
+    /// The socket opened, signed in, at `address`: it is this gateway. Remembered on this
+    /// device as the address that works and as what the gateway says about itself. When the
+    /// probe had no good answer (the gateway's sign-in changed, say), what this address says
+    /// now is asked afresh and kept, so the next choice is not stuck on the old answer.
+    private func rememberAddress() {
+        let addresses = connection.addresses
+        guard addresses.count > 1, let index = addresses.firstIndex(of: address) else { return }
+        addressMemory.setLastGood(index, for: connection.id)
+        if let chosen = chosenAddress, chosen.index == index {
+            addressMemory.setIdentity(chosen.identity, for: connection.id)
+            return
+        }
+        let probe = addressProbe ?? statusProbe()
+        let id = connection.id, at = address
+        Task { [weak self] in
+            guard let identity = await probe(at), let self, self.address == at else { return }
+            self.addressMemory.setIdentity(identity, for: id)
+        }
+    }
+
+    /// With two addresses, a change of network while connected is checked at once: the address
+    /// in use may be out of reach from the new network, and the heartbeat could take half a
+    /// minute to notice. A socket that does not answer reconnects, and the reconnect chooses.
+    private func watchNetwork() {
+        guard connection.alternate != nil, pathWatch == nil else { return }
+        pathWatch = Task { [weak self] in
+            for await _ in NetworkWatch.shared.pathChanges() {
+                guard let self, !Task.isCancelled else { return }
+                await self.networkChanged()
+            }
+        }
+    }
+
+    /// The network changed: a socket that does not answer within 3 s is dropped, and its
+    /// reconnect chooses the address again.
+    func networkChanged() async {
+        if socketState.isOpen { await socket.checkAlive(timeout: 3) }
+    }
+
     // MARK: Lifecycle
 
     public func start() async {
         projects.attach(self)
         kanban.attach(self)
         voice.attach(self)
-        if socketEnabled { await socket.connect() }
+        if socketEnabled { watchNetwork(); await socket.connect() }
         // The first HTTP call waits for the socket, briefly: on first open the route may still
         // be coming up, and a profile list asked for before it failed and put up an error the
         // connect loop was about to make moot (#305). The reconnect loads what this missed.
@@ -214,6 +336,8 @@ public final class GatewayRuntime {
     }
 
     public func stop() async {
+        pathWatch?.cancel(); pathWatch = nil
+        probeSession?.invalidateAndCancel(); probeSession = nil
         globalEventTask?.cancel()
         kanban.stopEvents()
         await socket.disconnect()
@@ -272,10 +396,15 @@ public final class GatewayRuntime {
         if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
     }
 
+    /// Whether the gateway has answered for its bots yet (an empty list counts): until then
+    /// `profiles` is empty because nothing is known, not because there are none.
+    public private(set) var profilesLoaded = false
+
     public func loadProfiles() async {
         do {
             let r: ProfilesResponse = try await api.get("/api/profiles")
             profiles = r.profiles
+            profilesLoaded = true
             if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
             else if selectedProfile == nil || !profiles.contains(where: { $0.name == selectedProfile }) {
                 let active: ActiveProfileResponse? = try? await api.get("/api/profiles/active")
@@ -434,6 +563,12 @@ public final class GatewayRuntime {
         return session
     }
 
+    /// Drops a bot's open chats from the registry without closing them on the gateway: the bot
+    /// was renamed (#315), so they are reopened under the new name from the reloaded list.
+    public func forgetChats(of profile: String) {
+        for c in registry.all where c.profileName == profile { registry.remove(c) }
+    }
+
     public func closeChat(_ chat: ChatSession) {
         registry.remove(chat)
         Task { _ = try? await socket.call("session.close", params: Self.params(["session_id": .string(chat.runtimeID)], owner: chat.profile)) }
@@ -463,8 +598,10 @@ public final class GatewayRuntime {
         case "session.reclaimed":
             if let sid = event.payload["session_id"]?.stringValue, let chat = registry.byRuntime(sid) { chat.handle(event: event) }
         case "sessions.changed":
-            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             publishSnapshot(refreshSessions: true)
+            // Away, the lists are read again once on the way back (see `owedListRefresh`).
+            guard !isAway else { owedListRefresh = true; break }
+            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             Task { await projects.refreshTree() }
         case "projects.changed":
             Task { await projects.refresh() }
@@ -506,8 +643,19 @@ public final class GatewayRuntime {
     public var onSnapshotPublished: (@MainActor (WidgetSnapshot) -> Void)?
     private var recentSessions: [StoredSession] = []
 
-    /// Refreshes the recent-sessions list and writes the widget snapshot. Cheap; safe to call often.
+    /// Refreshes the recent-sessions list and writes the widget snapshot. Safe to call often.
+    ///
+    /// Away with a turn running, it is owed rather than run (see `owedSnapshot`), and runs once
+    /// when the last turn ends (the state the widgets are left showing) or on the way back.
     public func publishSnapshot(refreshSessions: Bool = false) {
+        if isAway, registry.all.contains(where: \.isRunning) {
+            owedSnapshot = true
+            owedSessionsRefresh = owedSessionsRefresh || refreshSessions
+            return
+        }
+        let refreshSessions = refreshSessions || owedSessionsRefresh
+        owedSnapshot = false
+        owedSessionsRefresh = false
         Task {
             if refreshSessions || recentSessions.isEmpty {
                 if let r: SessionListResponse = try? await api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "8")], profile: selectedProfile) {
@@ -545,5 +693,8 @@ public extension Notification.Name {
     /// A reply finished (`storedID`, `text`: the whole assistant turn), for reading it aloud.
     public static let hermesReplyCompleted = Notification.Name("hermesReplyCompleted")
     public static let hermesCronChanged = Notification.Name("hermesCronChanged")
+    /// A bot's folder was renamed on the gateway (#315): userInfo "old" and "new". Open chats
+    /// of the old name are stale; the lists reload on `hermesSessionsChanged` as usual.
+    public static let hermesBotRenamed = Notification.Name("hermesBotRenamed")
     public static let hermesOpenSession = Notification.Name("hermesOpenSession")
 }

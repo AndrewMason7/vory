@@ -18,6 +18,16 @@ struct VoryMacApp: App {
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         Keychain.migrateToAccessGroupIfNeeded()
         BotFace.liveGlass = true
+        // The 1.5 motion: painted bots run on the model (#304), the same rule as the iPhone's
+        // VoryApp; `-vory-motion-engine NO` leaves the 1.4 drawing on for a comparison. Until
+        // 2026-10-11 nothing on the Mac set this, so every Mac face kept the 1.4 yaw turn and
+        // the Style picker scaled nothing (Matt: "make sure all bots are using the new animation
+        // on both iOS and MacOS").
+        BotFace.motionEngine = UserDefaults.standard.object(forKey: "vory-motion-engine") == nil || UserDefaults.standard.bool(forKey: "vory-motion-engine")
+        // Settings › Bots › Style, as the iPhone applies it at launch (the Mac has no gyroscope
+        // part); the 1.4 "Animate bots" switch folds into it first.
+        MacBotMotion.migrateAnimateSwitch()
+        MacBotMotion.apply()
         _model = State(initialValue: AppModel.shared)
     }
 
@@ -26,26 +36,42 @@ struct VoryMacApp: App {
     @State private var voiceSession = HandsFreeSession.shared
     @Environment(\.openWindow) private var openWindow
 
+    /// The chat in front: the open chat while the Chats page shows. The Chats page stays
+    /// mounted behind the other pages (MacRootView), so `visibleChat` keeps its chat there;
+    /// the Chat menu acts only on the one on screen, as it did when the page was torn down.
+    private var frontChat: ChatSession? { model.selectedTab == .chats ? model.visibleChat : nil }
+
     /// Voice mode on the open chat; with none open, a new chat with the default bot, and the
     /// loop starts on it as soon as it is in front. The main window may be closed (the app
     /// lives on in the menu bar): it comes back first, or the new chat would have no list to open in.
     private func toggleVoiceMode() {
         if voiceSession.isActive { voiceSession.end(); return }
-        if let chat = model.visibleChat { voiceSession.start(chat: chat); return }
+        if let chat = frontChat { voiceSession.start(chat: chat); return }
         openWindow(id: MacWindow.main)
         NSApp.activate()
         model.requestVoiceMode()
     }
-    /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
-    private var lastReply: String? { model.visibleChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }
+    /// The newest finished reply in the open chat, for Chat › Copy and Speak Last Reply. While a
+    /// turn runs it is the one kept from before the turn: reading the chat's items here made the
+    /// whole app scene (the main menu, the windows' bars) update on every streamed token.
+    private var lastReply: String? {
+        guard let chat = frontChat else { return nil }
+        let key = ObjectIdentifier(chat)
+        if chat.isRunning { return Self.keptReply[key] }
+        let reply = VoiceCoordinator.lastReply(in: chat.items)
+        Self.keptReply[key] = reply
+        return reply
+    }
+    /// The last finished reply read for each chat, for `lastReply` while a turn runs.
+    @MainActor private static var keptReply: [ObjectIdentifier: String] = [:]
     /// The Board page is the one showing: its menu's keys apply, the Chat menu's ⌘N and ⌘R do not.
     private var boardInFront: Bool { model.selectedTab == .kanban }
 
     /// The approval the open chat waits on, if any.
-    private var pendingApproval: PendingCard? { model.visibleChat?.cards.first { $0.method == "approval" } }
+    private var pendingApproval: PendingCard? { frontChat?.cards.first { $0.method == "approval" } }
 
     private func answerApproval(_ choice: String) {
-        guard let chat = model.visibleChat, let card = pendingApproval else { return }
+        guard let chat = frontChat, let card = pendingApproval else { return }
         Task { await chat.respond(card: card, result: ["choice": .string(choice)]) }
     }
 
@@ -63,11 +89,11 @@ struct VoryMacApp: App {
                 .task {
                     await model.activateSavedConnection()
                     await model.refreshCompanionUpdateFlag()
+                    ActivationRecheck.companion.noteRun()
                 }
                 // Foreground on the Mac is "the frontmost app": local notifications only while not.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     LocalNotifier.isForeground = true
-                    BotAmbient.shared.enabled = true
                     Task { await model.push.refreshAuthorization() }
                     // Anything changed on another device since: take it.
                     CloudSync.shared.syncNow()
@@ -77,6 +103,10 @@ struct VoryMacApp: App {
                     // A session that ran out while another app was in front: a remembered
                     // sign-in signs it in again now.
                     Task { await model.signInAgainIfExpired() }
+                    // A Companion installed from another device while the Mac ran: noticed
+                    // within a few minutes, not at the next relaunch (#243). Throttled, since
+                    // the Mac comes to the front at every app switch.
+                    ActivationRecheck.companion.runIfDue { await model.refreshCompanionUpdateFlag() }
                 }
                 .onChange(of: model.lock.isLocked) { _, locked in
                     if !locked { Task { await model.signInAgainIfExpired() } }
@@ -91,6 +121,11 @@ struct VoryMacApp: App {
                 .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)) { _ in model.lock.willEnterForeground(); BotAmbient.shared.displayAsleep = false }
         }
         .defaultSize(width: 980, height: 700)
+        // Opening Vory always shows its window (#328: a window closed before quitting meant a
+        // launch from Finder, Spotlight or Launchpad could show only the menu bar item). A launch at
+        // login shows it too (judgement call #7). Restoration stays on, so the window keeps its
+        // size and place.
+        .defaultLaunchBehavior(.presented)
         .commands {
             // Settings… (⌘,) is the Settings tab of the window; the app has one state, not two windows.
             CommandGroup(replacing: .appSettings) {
@@ -113,7 +148,7 @@ struct VoryMacApp: App {
                 Button("Previous Chat") { model.selectedTab = .chats; model.chatStepRequest = .init(direction: -1) }
                     .keyboardShortcut(.upArrow, modifiers: [.command, .option])
                     .disabled(model.runtime == nil)
-                Button("Refresh Chats") { NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil) }
+                Button("Refresh Chats") { NotificationCenter.default.post(name: .refreshChats, object: nil) }
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(model.runtime == nil || boardInFront)
                 Button("Find Chats") { model.selectedTab = .chats; model.focusSearchRequest = UUID() }
@@ -121,9 +156,9 @@ struct VoryMacApp: App {
                     .disabled(model.runtime == nil)
                 Divider()
                 // The open chat's turn: stop it, or answer the approval it waits on.
-                Button("Stop") { if let c = model.visibleChat { Task { await c.stop() } } }
+                Button("Stop") { if let c = frontChat { Task { await c.stop() } } }
                     .keyboardShortcut(".", modifiers: .command)
-                    .disabled(model.visibleChat?.isRunning != true)
+                    .disabled(frontChat?.isRunning != true)
                 Button("Approve Once") { answerApproval("once") }
                     .keyboardShortcut("y", modifiers: [.command, .shift])
                     .disabled(pendingApproval == nil)
@@ -180,6 +215,10 @@ struct VoryMacApp: App {
         } label: {
             // A waveform while a voice session is live, else the turns and approvals.
             Image(systemName: voiceSession.isActive ? "waveform.badge.mic" : board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
+                // VoiceOver read the symbol's own name ("Mostly Cloudy" for the cloud): the app's
+                // name instead, with what is going on, in the words the panel and the rail use (a
+                // separate value does not reach the status item, so it rides in the name).
+                .accessibilityLabel(voiceSession.isActive ? "Vory, voice mode" : board.attention > 0 ? "Vory, \(board.attention) need\(board.attention == 1 ? "s" : "") you" : board.running > 0 ? "Vory, \(board.running) working" : "Vory")
         }
         .menuBarExtraStyle(.window)
 

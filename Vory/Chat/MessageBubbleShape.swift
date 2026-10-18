@@ -8,13 +8,21 @@ struct MessageBubbleShape: Shape {
     var side: Side
     var tailed = true
     var radius: CGFloat = 18
+    /// Room kept for the tail inside the rect, on the speaker's side: the bubble is drawn that
+    /// much in from the edge, so the tail stays inside the view's bounds (`bubble(_:side:)`).
+    var tailRoom: CGFloat = 0
+    /// How far the tail reaches past the bubble's edge.
+    static let tail: CGFloat = 6
 
-    func path(in rect: CGRect) -> Path {
+    func path(in full: CGRect) -> Path {
+        var rect = full
+        rect.size.width -= tailRoom
+        if side == .leading { rect.origin.x += tailRoom }
         let r = min(radius, rect.height / 2, rect.width / 2)
         guard tailed else { return Path(roundedRect: rect, cornerRadius: r, style: .continuous) }
         // Drawn for a trailing tail; mirrored for a leading one.
         let x0 = rect.minX, x1 = rect.maxX, y0 = rect.minY, y1 = rect.maxY
-        let tail: CGFloat = 6
+        let tail = Self.tail
         var p = Path()
         p.move(to: CGPoint(x: x0 + r, y: y0))
         p.addLine(to: CGPoint(x: x1 - r, y: y0))
@@ -37,5 +45,31 @@ struct MessageBubbleShape: Shape {
             p = p.applying(CGAffineTransform(translationX: rect.midX, y: 0).scaledBy(x: -1, y: 1).translatedBy(x: -rect.midX, y: 0))
         }
         return p
+    }
+}
+
+extension View {
+    /// A message bubble: its fill in the bubble's shape, and its press-and-hold menu. On the phone
+    /// the view takes in the tail (it reaches past the bubble's edge), so the menu's lift keeps the
+    /// tail and lifts the bubble's own outline, and the bubble comes back whole after it: the lift
+    /// cut the tail off, and it grew back a few frames after the menu closed (Matt on 1.5 (21)).
+    /// The layout is as before. `wholeOnMac`: the Mac's right-click takes the whole bubble, its
+    /// padding too (#255). The Mac's right-click has no lift.
+    @ViewBuilder func bubble<S: ShapeStyle, M: View>(_ fill: S, side: MessageBubbleShape.Side, tailed: Bool = true, wholeOnMac: Bool = false, @ViewBuilder menu: () -> M) -> some View {
+        #if os(iOS)
+        let edge: Edge.Set = side == .trailing ? .trailing : .leading
+        let shape = MessageBubbleShape(side: side, tailed: tailed, tailRoom: MessageBubbleShape.tail)
+        padding(edge, MessageBubbleShape.tail)
+            .background(fill, in: shape)
+            .contentShape(.contextMenuPreview, shape)
+            .contextMenu { menu() }
+            .padding(edge, -MessageBubbleShape.tail)
+        #else
+        if wholeOnMac {
+            background(fill, in: MessageBubbleShape(side: side, tailed: tailed)).contentShape(.rect).contextMenu { menu() }
+        } else {
+            background(fill, in: MessageBubbleShape(side: side, tailed: tailed)).contextMenu { menu() }
+        }
+        #endif
     }
 }

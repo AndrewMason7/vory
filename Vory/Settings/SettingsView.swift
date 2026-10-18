@@ -62,9 +62,10 @@ struct SettingsView: View {
             SettingsList {
                 if search.isEmpty, !setupCardDone, model.runtime != nil, model.push.registeredAt == nil {
                     Section {
-                        NavigationLink { CompanionView() } label: {
+                        NavigationLink { CompanionView().pushedPage() } label: {
                             HStack(spacing: 12) {
-                                BotFaceView(spec: AboutView.voryBot, size: 46, active: true)
+                                // A picture that blinks: the live face kept the page redrawing at rest (#248).
+                                BotStill(spec: AboutView.voryBot, size: 46)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Unlock Vory's full potential").font(.headline)
                                     Text("Install the Companion for \(DeviceWords.companionBrings).").font(.caption).foregroundStyle(.secondary)
@@ -83,12 +84,13 @@ struct SettingsView: View {
                 }
                 if search.isEmpty {
                     Section {
-                        NavigationLink { GatewaysView() } label: {
+                        NavigationLink { GatewaysView().pushedPage() } label: {
                             HStack(spacing: 12) {
                                 GatewayTile()
                                 VStack(alignment: .leading) {
                                     Text(model.runtime?.connection.name ?? "No gateway").font(.headline)
-                                    Text(model.runtime?.connection.gateway.description ?? "Add a gateway").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    // The address in use: with a backup (#283), the one that answered.
+                                    Text(model.runtime.map { rt in [rt.addressLabel, rt.address.description].compactMap { $0 }.joined(separator: " · ") } ?? "Add a gateway").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer()
                                 if let s = model.runtime?.socketState { ConnectionPill(state: s) }
@@ -99,11 +101,16 @@ struct SettingsView: View {
                         if let rt = model.runtime, !rt.profiles.isEmpty {
                             Picker("Profile", selection: Binding(get: { rt.selectedProfile ?? "" }, set: { rt.selectedProfile = $0 })) {
                                 ForEach(rt.profiles) { p in
-                                    Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, size: 24, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                                    Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, size: 24, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
                                 }
                             }
                             // The menu's icons are rendered images; a new identity redraws them when a look changes.
                             .id("profile-picker|\(botColorsRaw)|\(botAvatarsRaw)|\(glassAll)|\(colorScheme == .light)")
+                            #if os(macOS)
+                            // The Mac's form shows "Profile" beside the pop-up as separate text: the
+                            // pop-up itself had no name.
+                            .accessibilityLabel("Profile")
+                            #endif
                         }
                     } header: { Text("Gateway") }
                 }
@@ -130,7 +137,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .tabRoot(.settings)
             .background(InteractivePopEnabler())
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search settings")
+            .pageSearchable(text: $search, prompt: "Search settings")
         }
     }
 }
@@ -176,6 +183,8 @@ struct GatewaysView: View {
     @Environment(AppModel.self) private var model
     @State private var showAdd = false
     @State private var pendingDelete: GatewayConnection?
+    /// The gateway whose form is open as a sheet: the Mac's way (judgement call #13).
+    @State private var editing: GatewayConnection?
 
     var body: some View {
         SettingsList {
@@ -198,7 +207,20 @@ struct GatewaysView: View {
                         }
                         .buttonStyle(.plain)
                         Spacer()
-                        NavigationLink { GatewayFormView(existing: c) } label: { EmptyView() }.frame(width: 20)
+                        #if os(macOS)
+                        // The Mac opens the form as a sheet, as the sidebar's gateway does: pushed,
+                        // its toolbar Back stood beside the form's own Cancel (judgement call #13).
+                        Button { editing = c } label: { Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                            .buttonStyle(.plain).frame(width: 20)
+                            .accessibilityLabel("Edit \(c.name)").accessibilityIdentifier("gateways.edit")
+                        #else
+                        // Its chevron where it was, with a 44 pt target and a name (an audit found a
+                        // 7 × 12 button with none); the row's own tap still makes the gateway active.
+                        NavigationLink { GatewayFormView(existing: c).pushedPage(keepsOwnBar: true) } label: { EmptyView() }
+                            .frame(width: 44, height: 44, alignment: .trailing)
+                            .contentShape(.rect)
+                            .accessibilityLabel("Edit \(c.name)")
+                        #endif
                     }
                     .rowActions { Button(role: .destructive) { pendingDelete = c } label: { Label("Delete", systemImage: "trash") } }
                 }
@@ -224,18 +246,22 @@ struct GatewaysView: View {
                 }
             }
             Section {
-                Button { showAdd = true } label: { Label("Add Gateway", systemImage: "plus") }
+                Button { Smooth.animate("gatewaySheet"); showAdd = true } label: { Label("Add Gateway", systemImage: "plus") }
+                    .accessibilityIdentifier("settings.addGateway")
                 if let rt = model.runtime {
                     Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
                     if case .authRejected(let why) = rt.socketState {
                         Text(why).font(.footnote).foregroundStyle(.red)
-                        NavigationLink("Sign in again") { GatewayFormView(existing: rt.connection) }
+                        NavigationLink("Sign in again") { GatewayFormView(existing: rt.connection).pushedPage(keepsOwnBar: true) }
                     }
                 }
             }
         }
         .untitledPage()
         .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame().withAppModel() }
+        #if os(macOS)
+        .sheet(item: $editing) { c in GatewayFormSheet(existing: c).withAppModel() }
+        #endif
         .alert("Remove gateway?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Remove", role: .destructive) { if let c = pendingDelete { Task { await model.deleteConnection(c.id) } } }
             Button("Cancel", role: .cancel) {}
@@ -398,7 +424,7 @@ struct NotificationsView: View {
                 #endif
             }
             Section {
-                NavigationLink { CompanionView() } label: { Label("Companion", systemImage: "puzzlepiece.extension") }
+                NavigationLink { CompanionView().pushedPage() } label: { Label("Companion", systemImage: "puzzlepiece.extension") }
                     .disabled(model.runtime == nil)
             } footer: {
                 Text("Approvals, questions, finished turns and errors while Vory is closed are delivered by the Companion on your gateway. In the foreground they arrive locally without it.")
@@ -445,6 +471,8 @@ struct BotsSettingsView: View {
     @AppStorage(BotMotionSource.enabledKey) private var motion = true
     @AppStorage(BotMotionSource.tiltKey) private var tilt = false
     @AppStorage(BotMotionSource.styleKey) private var style = "lively"
+    #else
+    @AppStorage(MacBotMotion.styleKey) private var style = "lively"
     #endif
     @AppStorage(GatewayRuntime.defaultProfileKey) private var defaultProfile = ""
 
@@ -456,7 +484,7 @@ struct BotsSettingsView: View {
                     Picker("Default bot", selection: $defaultProfile) {
                         Text("Follow the gateway").tag("")
                         ForEach(rt.profiles) { p in
-                            Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                            Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
                         }
                     }
                     .onChange(of: defaultProfile) { _, _ in rt.returnToDefaultProfile() }
@@ -487,11 +515,25 @@ struct BotsSettingsView: View {
                 .disabled(!motion)
                 .onChange(of: tilt) { _, _ in BotMotionSource.shared.apply() }
             } footer: {
-                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. Bots look where you scroll. With tilt on, they also lean with \(DeviceWords.the) and, on the Bots page, follow its angle with their eyes.")
+                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. With tilt on, they also lean with \(DeviceWords.the) and, on the Bots page, follow its angle with their eyes.")
+            }
+            #else
+            // The same styles on the Mac (decision E); the gyroscope lean is the phone's. No
+            // on/off switch (Matt, 2026-10-11): the bots always move, Still is the quiet choice.
+            Section {
+                Picker("Style", selection: $style) {
+                    Text("Lively").tag("lively")
+                    Text("Calm").tag("calm")
+                    Text("Still").tag("still")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: style) { _, _ in MacBotMotion.apply() }
+            } footer: {
+                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing.")
             }
             #endif
             Section {
-                NavigationLink { MotionDemoView() } label: { Label("Preview motion", systemImage: "play.circle") }
+                NavigationLink { MotionDemoView().pushedPage() } label: { Label("Preview motion", systemImage: "play.circle") }
             } footer: {
                 Text("Every pose the bots know, side by side: working, thinking, using a tool, waiting for a yes, and the rest. \(DeviceWords.isMac ? "Click one to see it react" : "Tap one to see its tap").")
             }
@@ -623,6 +665,7 @@ struct AppearanceView: View {
     @AppStorage(ChatStyle.showTurnStats) private var showTurnStats = true
     @AppStorage(ChatStyle.showSystemNotes) private var showSystemNotes = true
     @AppStorage(ChatStyle.showBots) private var showBots = false
+    @AppStorage(ChatStyle.contextAsTokens) private var contextAsTokens = false
     @AppStorage(ChatStyle.timeReveal) private var timeReveal = true
     @AppStorage(ChatStyle.collapseAfterTurn) private var collapseAfterTurn = false
     @AppStorage(ChatStyle.showToolOutput) private var showToolOutput = true
@@ -645,7 +688,6 @@ struct AppearanceView: View {
 
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
     #if os(macOS)
-    @AppStorage(BotAmbient.animateKey) private var animateBots = true
     private func tabBinding(_ tab: AppModel.AppTab) -> Binding<Bool> {
         Binding(get: { layout.contains(tab) }, set: { on in var l = layout; l.set(tab, enabled: on); layoutRaw = l.encoded })
     }
@@ -684,12 +726,6 @@ struct AppearanceView: View {
                 Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow \(DeviceWords.isMac ? "System Settings" : "\(DeviceWords.your)'s own settings").")
             }
             #if os(macOS)
-            // Bots cost CPU while they move (#248): a switch to hold them still for good.
-            Section {
-                Toggle("Animate bots", isOn: $animateBots)
-            } footer: {
-                Text("Off, the bots hold still. On, they move while Vory is in front and can be seen, and idle bots blink only while a bot is working; Reduce Motion in System Settings holds them still too.")
-            }
             // The Mac's sidebar holds every page: a switch each, arrows for the order.
             Section {
                 ForEach(layout.tabs, id: \.self) { tab in
@@ -809,6 +845,7 @@ struct AppearanceView: View {
                 Toggle("Show tokens per second", isOn: $showTurnStats)
                 Toggle("Show system notes", isOn: $showSystemNotes)
                 Toggle("Bot beside replies", isOn: $showBots)
+                Toggle("Context as tokens in the message bar", isOn: $contextAsTokens)
                 #if os(iOS)
                 Toggle("Pull left for times", isOn: $timeReveal)
                 #endif
@@ -969,7 +1006,7 @@ struct AboutView: View {
             }
             // Out of plain sight: Reset lives one page further in, not on the Settings list.
             Section {
-                NavigationLink { ResetView() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
+                NavigationLink { ResetView().pushedPage() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
                     .accessibilityIdentifier("about.reset")
             }
         }
@@ -1028,7 +1065,7 @@ struct RainOverlay: View {
         return Drop(x: 0.18 + col * 0.64 + jitter, speed: speed, phase: phase, len: len)
     }
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 40)) { tl in
+        TimelineView(.animation) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
             Canvas { ctx, size in
                 for d in Self.drops {
@@ -1058,7 +1095,7 @@ struct SoftwareUpdateView: View {
                     if setup.companionCheckedAt == nil {
                         Label { Text("Checking for updates…") } icon: { ProgressView() }.foregroundStyle(.secondary)
                     } else if setup.installedVersion == nil {
-                        NavigationLink { SetupWizardHost() } label: {
+                        NavigationLink { SetupWizardHost().pushedPage() } label: {
                             HStack(spacing: 12) {
                                 BotFaceView(spec: AboutView.voryBot, size: 44, active: true)
                                 VStack(alignment: .leading, spacing: 2) {
@@ -1123,13 +1160,23 @@ struct BotColorRow: View {
     var label: String
     @AppStorage(BotColors.storageKey) private var raw = ""
     @State private var color: Color = .accentColor
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ColorPicker(selection: $color, supportsOpacity: false) {
-            HStack(spacing: 10) { BotAvatar(profile: profile, size: 26); Text(label) }
+            // A picture, never a live face: a row per bot, each blinking live now and then,
+            // made this page scroll in jerks (Matt, 2026-10-11: "not animate at all in this pane").
+            HStack(spacing: 10) {
+                Image(uiImage: BotAvatarImage.cached(profile: profile, size: 26, scheme: colorScheme)).resizable().frame(width: 26, height: 26)
+                Text(label)
+            }
         }
         .onAppear { color = BotColors.color(for: profile) }
         .onChange(of: color) { _, c in
+            // Only a real change: the colour set on appear tripped this too, and each of those
+            // writes re-rendered the whole page and every row (the first scroll down to the bots
+            // stalled, Matt, 2026-10-11).
+            guard c.hexString.uppercased() != BotColors.hex(for: profile).uppercased() else { return }
             BotColors.set(c, for: profile)
             raw = String(data: (try? JSONEncoder().encode(BotColors.stored())) ?? Data(), encoding: .utf8) ?? raw
         }

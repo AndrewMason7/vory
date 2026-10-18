@@ -143,6 +143,9 @@ final class HandsFreeSession {
 
     func start(chat: ChatSession) {
         if isActive { end() }
+        // The session follows the chat's turn through observation, with the app away too
+        // (a locked phone): the chat keeps telling it, and tells now what it held back.
+        chat.keepsObserversLive = true
         self.chat = chat
         state = HandsFreeState()
         state.turnRunning = chat.isRunning
@@ -215,6 +218,7 @@ final class HandsFreeSession {
 
     func end() {
         guard chat != nil else { return }
+        chat?.keepsObserversLive = false
         if isLive { closeLive() }
         run(state.handle(.end))
         listener.stop()

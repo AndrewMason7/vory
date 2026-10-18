@@ -29,6 +29,19 @@ import Testing
         #expect(MediaScan.imagePaths(inToolOutput: "path=/srv/out/render.jpeg").first?.id == "/srv/out/render.jpeg")
     }
 
+    /// Remembered by the output (#371: a tool card asked on every body): the same output gives
+    /// the scan's answer again, and another output its own.
+    @Test func aToolOutputsImagePathsAreRememberedAndAreTheScansAnswer() {
+        let lines = (0..<400).map { "2026-10-13 shard-\($0 % 97) INFO request \($0 * 7919 % 10007) served" }.joined(separator: "\n")
+        let output = lines + "\nchart at /srv/out/chart-\(UUID().uuidString).png"
+        let first = MediaScan.imagePaths(inToolOutput: output)
+        #expect(first == MediaScan.scanImagePaths(inToolOutput: output))
+        #expect(first.count == 1)
+        #expect(MediaScan.imagePaths(inToolOutput: output) == first)
+        #expect(MediaScan.imagePaths(inToolOutput: lines).isEmpty)
+        #expect(MediaScan.imagePaths(inToolOutput: "").isEmpty)
+    }
+
     @Test func attachedImagesInAStoredUserRowAreNamedAndLookedForInTheProfilesImagesDir() {
         let text = "Look at this [User attached image: upload_20261004_093000_1.png] and [User attached image: upload_20261004_093000_2.jpg]"
         #expect(MediaScan.attachedImageNames(in: text) == ["upload_20261004_093000_1.png", "upload_20261004_093000_2.jpg"])

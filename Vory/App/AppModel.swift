@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -23,6 +24,10 @@ struct PendingRoute: Hashable, Sendable {
     var action: String?
     /// The card this app posted the notification for (`LocalNotifier`), beside `requestID`.
     var cardID: String?
+    /// The chat's title when the opener knows it, so its header does not read "New chat" first.
+    var title: String?
+    /// The tab to go back to when this chat closes (the way the compose circle's chats do).
+    var returnTab: AppModel.AppTab?
 
     /// What Approve or Deny answers (`ChatSession.approvalToAnswer(named:)`): that and nothing
     /// else, or with none the chat's approval when it has just one.
@@ -84,6 +89,21 @@ final class AppModel {
     var approvalConfirm: ApprovalConfirm?
     var activationError: String?
     var selectedTab: AppTab = .chats
+    /// The Chats tab's detail path: the chat (or group chat) open beside the list on a wide
+    /// window, pushed over the list on a narrow one. Held here, not in a view, so folding the
+    /// Duo or resizing an iPad window (the split view collapsing or expanding) keeps the open
+    /// chat; the routes are Codable for the same reason.
+    var chatPath = NavigationPath()
+    /// The chat list's highlighted row (the open chat's selection id): in the model, not the
+    /// list's own state, so a layout switch that rebuilds the list (the open Duo turned upright
+    /// and back) keeps the highlight.
+    var chatSelectionID: String?
+    /// The window is regular width (iPad, the open Duo): the chat list stands beside the open
+    /// chat, and the tab bar stays while a chat is open. Set by the root from the size class.
+    var wideLayout = false
+    /// The tab bar stands as a vertical strip on a side edge (the closed iPhone Duo, the open
+    /// Duo in landscape): nothing is reserved along the bottom then. Set by the root.
+    var tabBarVertical = false
     /// The gateway's companion plugin is older than the one this build ships: Settings › Notifications ›
     /// Background Notifications carry a badge until it is updated.
     var companionUpdateAvailable = false
@@ -176,10 +196,12 @@ final class AppModel {
         }
     }
 
-    /// One of the recent chats, from Siri, a Shortcut or Spotlight (#310).
-    func openStoredChat(id: String, profile: String?) {
+    /// One of the recent chats, from Siri, a Shortcut or Spotlight (#310), or from Home's Pick up
+    /// (#378), which comes back to Home when the chat closes.
+    func openStoredChat(id: String, profile: String?, title: String? = nil, returningTo back: AppTab? = nil) {
         selectedTab = .chats
-        pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil)
+        pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil,
+                                    title: title, returnTab: back)
     }
 
     /// Next (+1) or previous (−1) chat in the list, from the Mac's Chat menu.
@@ -199,6 +221,49 @@ final class AppModel {
     var composeProfile: String?
     /// The custom tab bar hides while a chat is open on the Chats tab (path-driven, instant)…
     var chatsPathOpen = false
+    /// How far an interactive back swipe has pulled the chat away (0 to 1): while the bar is
+    /// hidden for that chat, it slides in by this much, so it tracks the finger like the
+    /// system's bars and goes back out when the swipe is cancelled (Matt, 2026-10-11).
+    var popProgress: CGFloat = 0
+    /// The morph prototype's bar (drawn outside the stacks) asks the open chat for one of its
+    /// actions, or the Chats list for one of its own; each carries an id so repeats are seen.
+    struct ChatRequest: Equatable { enum Kind { case back, profile, rename, context, newChat, close }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
+    var chatRequest: ChatRequest?
+    struct ChatListRequest: Equatable { enum Kind { case newBot, manageProjects, selectChats }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
+    var chatListRequest: ChatListRequest?
+    /// The other root pages' bar actions, asked for by the morph prototype's bar; each page
+    /// answers its own.
+    struct PageRequest: Equatable {
+        enum Kind { case botsNewBot, filesHome, filesToggleHidden, filesUpload, projectsNew, tasksAdd, boardNew, sessionsAdvanced }
+        let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind }
+    }
+    var pageRequest: PageRequest?
+    /// Files' hidden-files switch, mirrored for the bar's icon.
+    var filesShowHidden = false
+    #if os(iOS)
+    /// Each root page's pull-to-refresh state, for the bar's title capsule to host the wheel.
+    var pullStates: [AppTab: PullRefreshState] = [:]
+    #endif
+    /// The bot the Chats list's chip shows. Opening a chat selects that chat's bot, and the
+    /// list goes back to the default bot once the chat is gone: while the chat covers the list
+    /// the chip shows the bot it will come back to, not the drifted one (the chip read one
+    /// colour through the swipe back and switched after it, Matt 2026-10-12). With the chat
+    /// beside the list (two columns, the Mac) the list in view is the chat's bot's, so the chip
+    /// is too: it showed the default bot over another bot's chats there.
+    var listChipProfile: String? {
+        guard let rt = runtime else { return nil }
+        if chatCoversList, let chat = visibleChat, rt.selectedProfile == chat.profileName, let d = rt.defaultProfile { return d }
+        return rt.selectedProfile
+    }
+    /// A chat stands over the list (one column: the phone, the closed Duo, a narrow window)
+    /// rather than beside it.
+    private var chatCoversList: Bool {
+        #if os(macOS)
+        false
+        #else
+        !wideLayout
+        #endif
+    }
     /// …and while any view marked `hidesTabBar()` is on screen on that tab. Counted per tab: a
     /// tap on the bar as it slides away switches tabs, and the new tab must show it again while
     /// the old one keeps its chat open.
@@ -207,11 +272,23 @@ final class AppModel {
     /// tab while deeper in it bumps `popToRoot`, which re-creates that tab at its root.
     var tabAtRoot: [AppTab: Bool] = [:]
     var popToRoot: [AppTab: Int] = [:]
+    /// Bumped by the bar's Back on a pushed page: the tab's stack pops one page.
+    var popOne: [AppTab: Int] = [:]
     /// Bumped on every tap of the already-selected tab (root or not): lists scroll to the top.
     var tabReselected: [AppTab: Int] = [:]
     /// A keyboard is up somewhere: the bar hides rather than floating over it.
     var keyboardUp = false
-    var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
+    var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen && !wideLayout) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
+    /// Chats and rooms pushed on the Chats tab's one-column stack, counted while on screen.
+    /// A pop empties the path the moment the swipe is let go (or Back is tapped), half a
+    /// second before the chat has slid away; the bar's reserved size snapping back right then
+    /// re-laid out the chat under the finger (the thread bounced, Matt, 2026-10-11). The bar's
+    /// slide still starts with the path; the room it takes waits for the chat to be gone.
+    var chatsOnScreen = 0
+    /// Of those, group chats: they keep their own header, and the morph bar steps aside.
+    var roomsOnScreen = 0
+    /// Whether the pages make room for the bar along their edge right now.
+    var tabBarReserved: Bool { !tabBarHidden && !(selectedTab == .chats && !wideLayout && chatsOnScreen > 0) }
 
     init() {
         let store = ConnectionStore()
@@ -223,6 +300,8 @@ final class AppModel {
         #if DEBUG
         DemoMode.addGateway(to: store)
         #endif
+        // The bots' own names (#315) before anything reads a label.
+        BotNames.install()
         CloudSync.shared.start(store: store)
         NotificationCenter.default.addObserver(forName: .hermesPushRegistrationNeedsSync, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -238,6 +317,8 @@ final class AppModel {
         NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.store.remembered.reload() }
         }
+        // A runtime started away (a launch in the background) is in front once the app is.
+        AwayAtLaunch.clearOnActive { [weak self] in self?.runtime }
         #endif
     }
 
@@ -324,6 +405,12 @@ final class AppModel {
         rt.activityReporterFactory = { MenuBarTurnReporter() }   // the menu-bar item is the Mac's Live Activity
         #endif
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
+        #if os(iOS)
+        // Started in the background (no scene to say so): away until the app is active.
+        rt.isAway = AwayAtLaunch.startsAway(UIApplication.shared.applicationState)
+        // Back from away, the chats catch up just after the return's first frame (#371).
+        rt.scheduleCatchUp = { AfterFirstFrame.run($0) }
+        #endif
         // A session that runs out for good signs in again by itself, after Face ID, when this
         // device remembers the gateway's sign-in; otherwise the person is asked, as before.
         rt.signInAgain = { [weak self] c, s in await self?.rememberedSignIn.signInAgain(c, access: s.access) }

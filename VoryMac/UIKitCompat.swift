@@ -84,7 +84,14 @@ final class UIGraphicsImageRenderer {
 /// The general pasteboard, with UIKit's questions answered from `NSPasteboard`.
 struct UIPasteboard {
     static var general: UIPasteboard { UIPasteboard() }
-    private var pb: NSPasteboard { NSPasteboard.general }
+    private var pb: NSPasteboard {
+        #if DEBUG
+        // The demo copies to a pasteboard of its own: its checks never replace what the person
+        // at the Mac had copied.
+        if DemoMode.isOn { return NSPasteboard(name: NSPasteboard.Name("com.vorantx.vory.demo")) }
+        #endif
+        return NSPasteboard.general
+    }
 
     var string: String? {
         get { pb.string(forType: .string) }

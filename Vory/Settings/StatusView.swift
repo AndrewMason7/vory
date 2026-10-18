@@ -22,6 +22,8 @@ struct StatusView: View {
     @Environment(AppModel.self) private var model
     @State private var setup = PushSetupModel()
     @State private var activitiesAllowed = activitiesEnabled
+    /// The gateway form for signing in, as a sheet on the Mac (judgement call #13).
+    @State private var signingIn = false
 
     enum Light { case good, warn, bad, off
         var color: Color { switch self { case .good: .green; case .warn: .orange; case .bad: .red; case .off: .secondary } }
@@ -36,7 +38,15 @@ struct StatusView: View {
                     let s = rt.socketState
                     row("Gateway", light: s.isOpen ? .good : (isFailed(s) ? .bad : .warn),
                         detail: s.isOpen ? "Connected to \(rt.connection.name)" : gatewayDetail(s, rt)) { GatewaysView() }
-                    row("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)) { GatewayFormView(existing: rt.connection) }
+                    #if os(macOS)
+                    // A sheet on the Mac, as the sidebar's gateway opens it (judgement call #13).
+                    Button { signingIn = true } label: { HStack { rowLabel("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(.rect) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Sign-in: \(signInDetail(s, rt))").accessibilityIdentifier("status.signIn")
+                        .sheet(isPresented: $signingIn) { GatewayFormSheet(existing: rt.connection).withAppModel() }
+                    #else
+                    row("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)) { GatewayFormView(existing: rt.connection).pushedPage(keepsOwnBar: true) }
+                    #endif
                 } else {
                     row("Gateway", light: .off, detail: model.activationError ?? "No gateway connected") { GatewaysView() }
                 }
@@ -72,16 +82,18 @@ struct StatusView: View {
     }
 
     private func row<D: View>(_ title: String, light: Light, detail: String, @ViewBuilder destination: () -> D) -> some View {
-        NavigationLink { destination().untitledPage() } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Circle().fill(light.color).frame(width: 10, height: 10).padding(.top, 2)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                    Text(detail).font(.footnote).foregroundStyle(.secondary)
-                }
+        NavigationLink { destination().untitledPage() } label: { rowLabel(title, light: light, detail: detail) }
+        .accessibilityLabel("\(title): \(detail)")
+    }
+
+    private func rowLabel(_ title: String, light: Light, detail: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Circle().fill(light.color).frame(width: 10, height: 10).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail).font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .accessibilityLabel("\(title): \(detail)")
     }
 
     // MARK: Connection

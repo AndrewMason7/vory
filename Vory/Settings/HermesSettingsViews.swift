@@ -137,7 +137,7 @@ struct ConfigFormView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search config keys")
+        .pageSearchable(text: $search, prompt: "Search config keys", always: true)
         .overlay { if schema == nil && error == nil { ProgressView() } }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
@@ -265,8 +265,12 @@ struct EnvView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } }
+        .pageSearchable(text: $search, always: true)
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } } }
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .tasksAdd else { return }
+            model.pageRequest = nil; showAdd = true
+        }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
@@ -372,7 +376,7 @@ struct SkillsView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
+        .pageSearchable(text: $search, always: true)
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
     }
@@ -577,7 +581,7 @@ struct CronView: View {
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             if jobs.isEmpty, error == nil { ContentUnavailableView("No cron jobs", systemImage: "clock", description: Text("Jobs scheduled on any profile of this gateway appear here.")) }
             ForEach(jobs, id: \.identity) { j in
-                NavigationLink { CronJobDetailView(job: j, raw: raw[j.identity] ?? .null, onChange: { Task { await load() } }) } label: {
+                NavigationLink { CronJobDetailView(job: j, raw: raw[j.identity] ?? .null, onChange: { Task { await load() } }).pushedPage(keepsOwnBar: true) } label: {
                     HStack(spacing: 12) {
                         Image(systemName: j.enabled == false || j.state == "paused" ? "pause.circle" : "clock").foregroundStyle(j.enabled == false || j.state == "paused" ? Color.secondary : Color.green)
                         VStack(alignment: .leading, spacing: 2) {
@@ -766,7 +770,7 @@ struct CronJobDetailView: View {
         }
         .navigationTitle(job.name?.isEmpty == false ? job.name! : "Scheduled task")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(!dirty) } }
+        .pageToolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(!dirty) } }
         .task {
             guard !loaded else { return }
             loaded = true
@@ -907,15 +911,21 @@ struct SessionsView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
+        .pageSearchable(text: $search, always: true)
         .onChange(of: search) { _, _ in Task { await load() } }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
-        .toolbar {
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .sessionsAdvanced else { return }
+            model.pageRequest = nil; showAdvanced = true
+        }
+        .pageToolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                if !MorphTopBar.active(model) {
                 Menu {
                     Button { showAdvanced = true } label: { Label("Advanced", systemImage: "internaldrive") }
                 } label: { Label("Options", systemImage: "gearshape") }
+                }
             }
         }
         .sheet(isPresented: $showAdvanced) { SessionStoreSheet(stats: stats).sheetFrame().withAppModel() }

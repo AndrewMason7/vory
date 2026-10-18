@@ -48,6 +48,45 @@ enum MarkdownTableMetrics {
     static func overflow(contentWidth: CGFloat, visibleMinX: CGFloat, visibleMaxX: CGFloat) -> Overflow {
         Overflow(leading: visibleMinX > 1, trailing: visibleMaxX < contentWidth - 1)
     }
+
+    /// A cell's text as a grid shows it: at most `TextPieces.limit` characters, then an ellipsis. A cell with a huge
+    /// unbroken value (a hash, base64) was laid out on one line to size its column, and drawn as one picture taller
+    /// than the graphics card allows on the sheet, where cells are not cut to three lines (#361). The whole cell is in
+    /// Copy as Markdown and on a long press on the sheet.
+    static func shownCell(_ markdown: String, limit: Int = TextPieces.limit) -> String {
+        guard markdown.utf8.count > limit else { return markdown }
+        return String(markdown.prefix(limit)) + "…"
+    }
+
+    /// Most columns and rows a table shows in a reply; the whole table is on its sheet.
+    static let bubbleColumns = 16
+    static let bubbleRows = 60
+}
+
+extension MarkdownTable {
+    /// The table's first `columns` columns and `rows` rows.
+    func prefix(columns: Int, rows: Int) -> MarkdownTable {
+        guard header.count > columns || self.rows.count > rows else { return self }
+        return MarkdownTable(header: Array(header.prefix(columns)), alignments: Array(alignments.prefix(columns)),
+                             rows: self.rows.prefix(rows).map { Array($0.prefix(columns)) })
+    }
+}
+
+/// "Copy Cell" on a long press, on the table's sheet only (in a reply the long press keeps the reply's own menu).
+private struct CopyCellMenu: ViewModifier {
+    /// The table on its sheet; nil in a reply.
+    var table: MarkdownTable?
+    var row: Int
+    var column: Int
+    func body(content: Content) -> some View {
+        if let table {
+            content.contextMenu {
+                Button { UIPasteboard.general.string = MarkdownTable.plain(table.cell(row: row, column: column)) } label: { Label("Copy Cell", systemImage: "doc.on.doc") }
+            }
+        } else {
+            content
+        }
+    }
 }
 
 /// Lays a table's cells out row by row (header first, `columns` to a row) with the widths from
@@ -61,36 +100,95 @@ struct MarkdownTableLayout: Layout {
     /// The width to stretch to when the columns need less. Nil uses the proposed width, which
     /// inside a sideways scroll view is none (the table keeps its own width there).
     var fillWidth: CGFloat? = nil
+    /// Everything the cells' sizes come from. With it the measured sizes outlive an update that
+    /// changed none of it and a row the lazy thread builds again: every cell was measured again
+    /// on each pass, a cost in the thread's first scroll through a long chat (1.5 (24)).
+    var sizes: SizeKey? = nil
 
-    struct Cache {
-        var natural: [CGFloat]?
-        var rows: (widths: [CGFloat], heights: [CGFloat])?
+    struct SizeKey: Hashable, Sendable {
+        var table: MarkdownTable
+        var font: Font
+        var lineLimit: Int?
+        var headerInset: CGFloat
+        var typeSize: DynamicTypeSize
+        var bold: Bool
+        var scale: CGFloat
+        /// The names an "@" in a cell can mean: a known one is drawn semibold, wider than the
+        /// table's font, and the names arrive or change after the table may have been measured.
+        /// Nil for a table with no "@", which they cannot change.
+        var names: Mentions.Names?
+
+        static func names(for table: MarkdownTable, _ names: Mentions.Names) -> Mentions.Names? {
+            let at = UInt8(ascii: "@")
+            let any = table.header.contains { $0.utf8.contains(at) } || table.rows.contains { $0.contains { $0.utf8.contains(at) } }
+            return any ? names : nil
+        }
     }
 
-    func makeCache(subviews: Subviews) -> Cache { Cache() }
-    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
+    struct Cache {
+        var key: SizeKey?
+        var natural: [CGFloat]?
+        /// Row heights by column widths: a card is measured at its ideal width and at the
+        /// bubble's, and ViewThatFits tries both of its candidates.
+        var rows: [[CGFloat]: [CGFloat]] = [:]
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { SizeStore.shared.cache(for: sizes) }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        guard sizes == nil || cache.key != sizes else { return }
+        cache = SizeStore.shared.cache(for: sizes)
+    }
 
     private func widths(_ proposal: ProposedViewSize, _ subviews: Subviews, _ cache: inout Cache) -> [CGFloat] {
         let natural: [CGFloat]
-        if let n = cache.natural {
+        if let n = cache.natural, n.count == columns {
             natural = n
         } else {
             var n = [CGFloat](repeating: 0, count: columns)
             for (i, s) in subviews.enumerated() { n[i % columns] = max(n[i % columns], s.sizeThatFits(.unspecified).width) }
             cache.natural = n
+            SizeStore.shared.keep(cache)
             natural = n
         }
         return MarkdownTableMetrics.columnWidths(natural: natural, fill: fillWidth ?? proposal.width, min: minColumn, max: maxColumn)
     }
 
     private func heights(_ widths: [CGFloat], _ subviews: Subviews, _ cache: inout Cache) -> [CGFloat] {
-        if let r = cache.rows, r.widths == widths { return r.heights }
-        var h = [CGFloat](repeating: 0, count: (subviews.count + columns - 1) / columns)
+        let count = (subviews.count + columns - 1) / columns
+        if let h = cache.rows[widths], h.count == count { return h }
+        var h = [CGFloat](repeating: 0, count: count)
         for (i, s) in subviews.enumerated() {
             h[i / columns] = max(h[i / columns], s.sizeThatFits(ProposedViewSize(width: widths[i % columns], height: nil)).height)
         }
-        cache.rows = (widths, h)
+        if cache.rows.count >= 8 { cache.rows.removeAll() }
+        cache.rows[widths] = h
+        SizeStore.shared.keep(cache)
         return h
+    }
+
+    /// The measured sizes of the tables drawn lately, by what they were measured from. NSCache
+    /// is thread-safe and bounded; the wrapper only says so to the compiler.
+    final class SizeStore: @unchecked Sendable {
+        static let shared = SizeStore()
+        private let store: NSCache<Key, Box> = { let c = NSCache<Key, Box>(); c.countLimit = 200; return c }()
+
+        final class Key: NSObject {
+            let key: SizeKey
+            private let hashed: Int
+            init(_ key: SizeKey) { self.key = key; hashed = key.hashValue }
+            override var hash: Int { hashed }
+            override func isEqual(_ other: Any?) -> Bool { (other as? Key)?.key == key }
+        }
+        final class Box { let cache: Cache; init(_ c: Cache) { cache = c } }
+
+        func cache(for key: SizeKey?) -> Cache {
+            guard let key else { return Cache() }
+            return store.object(forKey: Key(key))?.cache ?? Cache(key: key)
+        }
+        func keep(_ cache: Cache) {
+            guard let key = cache.key else { return }
+            store.setObject(Box(cache), forKey: Key(key))
+        }
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
@@ -131,10 +229,16 @@ struct MarkdownTableGrid: View {
     var pinned = false
     /// The header row stays in view as the rows scroll under it, on an opaque ground (the sheet).
     var opaqueHeader = false
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.legibilityWeight) private var legibility
+    @Environment(\.displayScale) private var scale
 
     var body: some View {
         let n = table.header.count
-        MarkdownTableLayout(columns: n, maxColumn: maxColumn, fillWidth: fillWidth) {
+        let sizes = MarkdownTableLayout.SizeKey(table: table, font: font, lineLimit: lineLimit, headerInset: headerInset,
+                                                typeSize: typeSize, bold: legibility == .bold, scale: scale,
+                                                names: MarkdownTableLayout.SizeKey.names(for: table, Mentions.names))
+        MarkdownTableLayout(columns: n, maxColumn: maxColumn, fillWidth: fillWidth, sizes: sizes) {
             ForEach(0..<n, id: \.self) { c in headerCell(c) }
             ForEach(0..<table.rows.count, id: \.self) { r in
                 ForEach(0..<n, id: \.self) { c in bodyCell(row: r, column: c) }
@@ -172,10 +276,11 @@ struct MarkdownTableGrid: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment(c))
             .overlay(alignment: .top) { hairline }
+            .modifier(CopyCellMenu(table: opaqueHeader ? table : nil, row: r, column: c))
     }
 
     private func text(_ markdown: String, column c: Int, header: Bool) -> some View {
-        Text(MarkdownView.inline(markdown))
+        Text(MarkdownView.inline(MarkdownTableMetrics.shownCell(markdown)))
             .font(header ? font.weight(.semibold) : font)
             .lineLimit(lineLimit)
             .truncationMode(.tail)
@@ -238,7 +343,7 @@ struct MarkdownTableStack: View {
 
     private func line(row r: Int, column c: Int) -> some View {
         let name = table.header[c]
-        let value = Text(MarkdownView.inline(table.cell(row: r, column: c)))
+        let value = Text(MarkdownView.inline(MarkdownTableMetrics.shownCell(table.cell(row: r, column: c), limit: TextPieces.Limits.largestAccessibility.chars)))
         let shown = name.isEmpty ? value : Text("\(Text(MarkdownView.inline(name)).fontWeight(.semibold)): \(value)")
         return shown.font(font)
             .fixedSize(horizontal: false, vertical: true)

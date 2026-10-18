@@ -5,18 +5,45 @@ import SwiftUI
 import VoryCore
 
 /// What a row scans for pictures, with a cheap look first: most rows have none, and the rows
-/// are evaluated often.
+/// are evaluated often (a streaming reply's on every token).
 enum TranscriptMedia {
     static func images(in text: String) -> [MediaRef] {
-        guard text.contains("MEDIA:") || text.contains("![") || text.contains("\n/") || text.contains("\n~/") || text.hasPrefix("/") || text.hasPrefix("~/")
-                || text.contains("\r\n/") || text.contains("\r\n~/") else { return [] }
+        let m = marks(in: text)
+        guard m.mediaOrPath || m.image else { return [] }
         return MediaScan.images(in: text)
     }
     /// Files that are not pictures (#309), with the same cheap look first.
     static func files(in text: String) -> [MediaRef] {
-        guard text.contains("MEDIA:") || text.contains("](") || text.contains("\n/") || text.contains("\n~/") || text.hasPrefix("/") || text.hasPrefix("~/")
-                || text.contains("\r\n/") || text.contains("\r\n~/") else { return [] }
+        let m = marks(in: text)
+        guard m.mediaOrPath || m.link else { return [] }
         return MediaScan.files(in: text)
+    }
+
+    /// The cheap look: one pass over the text's bytes for what the scans start from ("MEDIA:", a
+    /// path at the start of a line, "![" for a picture, "](" for a link). It was eight
+    /// `String.contains` per scan, each walking the whole reply as Characters: sixteen walks on
+    /// every streamed token, the main thread's busiest app code on a long reply.
+    static func marks(in text: String) -> (mediaOrPath: Bool, image: Bool, link: Bool) {
+        var text = text
+        return text.withUTF8 { b in
+            let n = b.count
+            let slash: UInt8 = 0x2F, tilde: UInt8 = 0x7E
+            var path = n > 0 && (b[0] == slash || (n > 1 && b[0] == tilde && b[1] == slash))
+            var image = false, link = false
+            var i = 0
+            while i + 1 < n, !(path && image && link) {
+                let c = b[i], d = b[i + 1]
+                switch c {
+                case 0x21 where d == 0x5B: image = true                                    // ![
+                case 0x5D where d == 0x28: link = true                                     // ](
+                case 0x0A where d == slash || (d == tilde && i + 2 < n && b[i + 2] == slash): path = true   // \n/ \n~/
+                case 0x4D where i + 5 < n && d == 0x45 && b[i + 2] == 0x44 && b[i + 3] == 0x49 && b[i + 4] == 0x41 && b[i + 5] == 0x3A: path = true  // MEDIA:
+                default: break
+                }
+                i += 1
+            }
+            return (path, image, link)
+        }
     }
     static func attachedImages(in text: String, profile: String?) -> [MediaRef] {
         guard text.contains("[User attached image:") else { return [] }
@@ -96,6 +123,7 @@ struct MediaThumb: View {
     var ref: MediaRef
     var profile: String?
     var side: CGFloat
+    @Environment(\.displayScale) private var displayScale
     @State private var image: UIImage?
     @State private var failed = false
 
@@ -124,14 +152,14 @@ struct MediaThumb: View {
         guard let rt = AppModel.shared.runtime else { failed = true; return }
         let gateway = rt.connection.id.uuidString
         if let url = await MediaStore.shared.cached(ref, gateway: gateway) {
-            image = await AttachmentThumbs.imageAsync(at: url, side: side)
+            image = await AttachmentThumbs.imageAsync(at: url, side: side, scale: displayScale)
             failed = image == nil
             return
         }
         do {
             let url = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             guard !Task.isCancelled else { return }
-            image = await AttachmentThumbs.imageAsync(at: url, side: side)
+            image = await AttachmentThumbs.imageAsync(at: url, side: side, scale: displayScale)
             failed = image == nil
         } catch {
             failed = true
@@ -145,6 +173,7 @@ struct ImageViewerSheet: View {
     var ref: MediaRef
     var profile: String?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
     @State private var url: URL?
     @State private var image: UIImage?
     @State private var error: String?
@@ -303,7 +332,7 @@ struct ImageViewerSheet: View {
         do {
             let file = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             url = file
-            image = await AttachmentThumbs.imageAsync(at: file, side: 2400)
+            image = await AttachmentThumbs.imageAsync(at: file, side: 2400, scale: displayScale)
             if image == nil { error = "This file is not an image the device can show." }
         } catch {
             self.error = "The gateway could not give this file: \(error.localizedDescription)"

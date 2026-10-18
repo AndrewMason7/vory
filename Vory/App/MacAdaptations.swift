@@ -119,7 +119,7 @@ extension View {
     /// is taken out of the toolbar instead.
     @ViewBuilder func untitledPage() -> some View {
         #if os(macOS)
-        navigationTitle("").toolbar(removing: .title)
+        modifier(MacUntitledPage())
         #else
         navigationTitle("").navigationBarTitleDisplayMode(.inline)
         #endif
@@ -135,12 +135,160 @@ extension View {
         #endif
     }
 
-    /// Pull to refresh on the phone; a Refresh button in the toolbar (⌘R) on the Mac.
+    /// Pull to refresh on the phone (Vory's own, the wheel beside the title: `PullRefresh`); a
+    /// Refresh button in the toolbar (⌘R) on the Mac.
     @ViewBuilder func reloadable(_ action: @escaping @MainActor () async -> Void) -> some View {
         #if os(macOS)
-        toolbar { ToolbarItem(placement: .automatic) { ReloadButton(action: action) } }
+        modifier(MacReloadable(action: action))
         #else
-        refreshable { await action() }
+        pullRefresh(ownWheel: true, action)
         #endif
     }
 }
+
+extension View {
+    /// A page's search field: the phone's drawer under the title; on the Mac a field in the
+    /// window's toolbar, declared only while the page is on show. The Mac keeps visited pages
+    /// mounted, and the window's toolbar takes one search field: a second (a kept page's beside
+    /// the shown page's) stopped the app (NSToolbar: "Duplicate items of this type are not
+    /// allowed", 2026-10-12).
+    @ViewBuilder func pageSearchable(text: Binding<String>, prompt: LocalizedStringKey? = nil, always: Bool = false) -> some View {
+        #if os(macOS)
+        modifier(MacPageSearchable(text: text, prompt: prompt))
+        #else
+        searchable(text: text, placement: .navigationBarDrawer(displayMode: always ? .always : .automatic), prompt: prompt.map { Text($0) })
+        #endif
+    }
+}
+
+extension View {
+    /// `.toolbar` for a page and the pages pushed on it. On the Mac its items stand in the window's
+    /// toolbar only while the page is on show: visited pages stay mounted behind the one in front
+    /// (MainSplitView), and their items stood in its bar. On the phone, `.toolbar` as it is.
+    func pageToolbar<Items: ToolbarContent>(@ToolbarContentBuilder _ items: () -> Items) -> some View {
+        modifier(PageToolbar(items: items()))
+    }
+}
+
+private struct PageToolbar<Items: ToolbarContent>: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    let items: Items
+    func body(content: Content) -> some View { content.toolbar { if shown { items } } }
+}
+
+extension View {
+    /// A page pushed on a page's stack. On the Mac its Back stands in the window's toolbar only
+    /// while its page is on show: visited pages stay mounted with what was pushed on them (as the
+    /// phone's tabs do), and a hidden page's Back stood over the page in front. On the phone the
+    /// morph bar owns Back, except on a page that `keepsOwnBar`: one with its own Cancel, Done or
+    /// Save (a form) keeps the system bar, its items, title and back, and the morph bar steps
+    /// aside while it is up (the root's probe reads the marker). The Mac ignores it.
+    @ViewBuilder func pushedPage(keepsOwnBar: Bool = false) -> some View {
+        #if os(macOS)
+        modifier(MacPushedPage())
+        #else
+        // One structure whether or not it is set, so a page whose answer changes (the Board, once
+        // it knows it has several boards) keeps its state.
+        background { if keepsOwnBar { OwnBarMarker().frame(width: 0, height: 0).accessibilityHidden(true) } }
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct MacPushedPage: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    func body(content: Content) -> some View { content.navigationBarBackButtonHidden(!shown) }
+}
+#endif
+
+#if os(macOS)
+/// See `untitledPage`. The title comes out of the toolbar only while the page is on show: the Mac
+/// keeps visited pages mounted, and a hidden Home took the title out of every page's bar.
+private struct MacUntitledPage: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    func body(content: Content) -> some View {
+        content.navigationTitle("").toolbar(removing: shown ? .title : nil)
+            // Pushed on a hidden page's stack, its Back must not stand over the page on show.
+            .navigationBarBackButtonHidden(!shown)
+    }
+}
+#endif
+
+#if os(macOS)
+/// The Refresh button (⌘R) only while its page is on show: the Mac keeps visited pages mounted
+/// behind the one in front, and a hidden page's button stood in its toolbar and answered ⌘R.
+private struct MacReloadable: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    var action: @MainActor () async -> Void
+    func body(content: Content) -> some View {
+        content.toolbar { if shown { ToolbarItem(placement: .automatic) { ReloadButton(action: action) } } }
+    }
+}
+
+/// See `pageSearchable`. The field hangs off an empty background, so the page itself keeps its
+/// identity (and its state) as the field comes and goes with the page.
+private struct MacPageSearchable: ViewModifier {
+    @Environment(\.macPageShown) private var shown
+    var text: Binding<String>
+    var prompt: LocalizedStringKey?
+    func body(content: Content) -> some View {
+        content.background {
+            if shown { Color.clear.searchable(text: text, placement: .toolbar, prompt: prompt.map { Text($0) }) }
+        }
+    }
+}
+#endif
+
+/// Whether the Mac page a view sits in is the one on show. The Mac keeps visited pages mounted
+/// behind the one in front (MainSplitView); a page that is mounted but hidden declares no window
+/// toolbar items while this is false, or its items would stand in the bar beside the shown
+/// page's. Always true where nothing sets it: the iPhone, sheets, the page on show.
+extension EnvironmentValues {
+    @Entry var macPageShown: Bool = true
+}
+
+/// A menu item's label with a system symbol. On the iPhone it is `Label(title, systemImage:)`.
+/// On the Mac the symbol comes from `SymbolImages`, drawn once per name: SwiftUI looked every
+/// menu item's symbol up in the asset catalog again each time a toolbar's menus were rebuilt,
+/// some 30 of them each time Chats came back (judgement call #5).
+struct MenuLabel: View {
+    private enum Title { case key(LocalizedStringKey), string(String) }
+    private let title: Title
+    private let systemImage: String
+
+    init(_ key: LocalizedStringKey, systemImage: String) { title = .key(key); self.systemImage = systemImage }
+    @_disfavoredOverload init<S: StringProtocol>(_ string: S, systemImage: String) { title = .string(String(string)); self.systemImage = systemImage }
+
+    var body: some View {
+        #if os(macOS)
+        if SymbolImages.cached {
+            Label { text } icon: { Image(nsImage: SymbolImages.image(systemImage)) }
+        } else {
+            plain
+        }
+        #else
+        plain
+        #endif
+    }
+
+    private var text: Text { switch title { case .key(let k): Text(k); case .string(let s): Text(s) } }
+    private var plain: Label<Text, Image> {
+        switch title { case .key(let k): Label(k, systemImage: systemImage); case .string(let s): Label(s, systemImage: systemImage) }
+    }
+}
+
+#if os(macOS)
+/// The menus' symbols as images, each drawn once. `defaults write <app id> mac.symbolCache.off
+/// -bool YES` goes back to SwiftUI's own lookup (judgement call #5's way back).
+@MainActor enum SymbolImages {
+    static let cached = !UserDefaults.standard.bool(forKey: "mac.symbolCache.off")
+    private static var images: [String: NSImage] = [:]
+
+    static func image(_ name: String) -> NSImage {
+        if let image = images[name] { return image }
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage()
+        images[name] = image
+        return image
+    }
+}
+#endif

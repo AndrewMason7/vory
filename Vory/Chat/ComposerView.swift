@@ -4,6 +4,28 @@ import SwiftUI
 import UniformTypeIdentifiers
 import VoryCore
 
+/// What a composer is for: a chat's own, or the New Message sheet's first message (#27), on a
+/// draft (`ChatSession.isDraft`): its send starts the chat, its mic starts voice mode while the
+/// message is empty (Matt, 2026-10-13: the sheet's mic as it was), and to several bots (a group
+/// chat) it takes words and "@" only, since a group starts with words and each bot keeps its model.
+enum ComposerRole {
+    case chat
+    case newMessage(NewMessage)
+
+    struct NewMessage {
+        /// Several bots in To:.
+        var group: Bool
+        /// A bot is chosen: until then nothing can be written.
+        var enabled: Bool
+        var placeholder: String
+        /// The words to start the chat with (the draft holds the files and the picks).
+        var send: (String) -> Void
+        var voice: () -> Void
+        /// Changed when a bot is added in To:: the cursor goes to the message.
+        var focus: Int = 0
+    }
+}
+
 struct ComposerView: View {
     @Bindable var chat: ChatSession
     @Binding var text: String
@@ -12,12 +34,21 @@ struct ComposerView: View {
     /// The dock's morph namespace: the text capsule (alone, not the whole stack — the steer strip
     /// and the command list come and go under it) is what an approval card morphs from.
     var namespace: Namespace.ID
+    var role: ComposerRole = .chat
+    private var newMessage: ComposerRole.NewMessage? { if case .newMessage(let n) = role { n } else { nil } }
+    /// Several bots: no + panel, no "/" list, no model chip.
+    private var group: Bool { newMessage?.group == true }
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
     /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
+    /// A drag is over the card (the Mac): the outline says it will take the drop.
+    @State private var dropTargeted = false
+    /// The pointer is over the model chip or a mention row (the Mac).
+    @State private var chipHovered = false
+    @State private var mentionHovered: String?
     private var holdStartsVoiceMode: Bool {
         #if os(iOS)
         return VoiceSettings.HoldMicAction(rawValue: holdMicRaw) == .voiceMode
@@ -48,10 +79,39 @@ struct ComposerView: View {
     /// Shown after a paste that dropped a lot of text into the field.
     @State private var longTextOffer = false
     @State private var showAttach = false
+    /// The context breakdown sheet, from the ring in the bar (the … menu opens the same one).
+    @State private var showContextSheet = false
+    /// Settings › Appearance: the figure beside the ring as tokens ("18/200K") instead of "9%".
+    @AppStorage(ChatStyle.contextAsTokens) private var contextAsTokens = false
     @State private var attachPanelHeight: CGFloat = 356
+    /// Where the + button sits in the composer stack: the panel's glass starts as that circle.
+    @State private var attachButtonFrame = CGRect(x: 10, y: 60, width: 36, height: 36)
+    /// The rows are in the tree only while the panel is open or folding away: hidden rows in a
+    /// closed panel stayed in the accessibility tree (reachable, and a test found them).
+    @State private var attachRowsShown = false
+    #if os(iOS)
+    /// Where the text field sits in the composer stack, and the stack's width: the "/" list's
+    /// glass starts as a circle at the field's leading edge and opens to the stack's width.
+    @State private var fieldFrame = CGRect(x: 10, y: 10, width: 300, height: 36)
+    @State private var stackWidth: CGFloat = 360
+    /// The rows last shown, kept through the fold-away (the items empty the moment it starts).
+    @State private var shownSlashItems: [SlashMenu.Item] = []
+    #endif
     @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowGeometry) private var windowGeometry
     @Environment(AppModel.self) private var model
+    /// The fold of a partly open Duo, when it runs across the window above the composer (a
+    /// laptop pose): the lists that grow up from the field stop under it (Step D).
+    @Environment(\.reservedRegions) private var regions
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var composerFrame = CGRect.zero
+    /// How far up from the field's top a list may grow before the fold: nil with no such fold.
+    private var roomUnderFold: CGFloat? {
+        guard let ceiling = regions.ceiling(for: composerFrame), composerFrame.height > 0 else { return nil }
+        // The field's top: the stack's bottom edge less a one-line field and its padding.
+        return max(SlashMenuList.rowHeight + 8, composerFrame.maxY - 46 - 10 - ceiling)
+    }
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
     private var mentionQuery: String? {
@@ -86,7 +146,7 @@ struct ComposerView: View {
 
     /// The chooser above the field: the gateway's commands and skills while a "/word" is typed,
     /// its models after "/model " (see SlashMenu).
-    private var menuContext: SlashMenu.Context? { showingRecalled ? nil : SlashMenu.context(for: text) }
+    private var menuContext: SlashMenu.Context? { showingRecalled || group ? nil : SlashMenu.context(for: text) }
 
     /// The chooser's context while it is open (not closed with Escape).
     private var openMenuContext: SlashMenu.Context? { menuDismissed ? nil : menuContext }
@@ -94,9 +154,9 @@ struct ComposerView: View {
     private var menuItems: [SlashMenu.Item] {
         guard let ctx = openMenuContext else { return [] }
         switch ctx.kind {
-        case .command: return catalog.map { SlashMenu.commandItems($0, query: ctx.query) } ?? []
+        case .command: return catalog.map { SlashMenu.commandItems($0, query: ctx.query, draft: chat.isDraft) } ?? []
         case .model:
-            return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, currentProvider: chat.info?.provider, query: ctx.query) } ?? []
+            return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, currentProvider: chat.providerSlug, query: ctx.query) } ?? []
         }
     }
 
@@ -108,15 +168,30 @@ struct ComposerView: View {
     /// The model list is on its way: the chooser says so rather than staying shut.
     private var menuLoading: Bool { openMenuContext?.kind == .model && modelOptions == nil && modelOptionsLoading }
 
-    /// The command list scrolls inside a cap: about 30 % of the screen, so with the keyboard up
+    /// The command list scrolls inside a cap: about 30 % of the window, so with the keyboard up
     /// it stops well short of the bot header at the top.
-    private var commandListCap: CGFloat { max(120, min(280, UIScreen.main.bounds.height * 0.30)) }
+    private var commandListCap: CGFloat {
+        let cap = max(120, min(280, visibleHeight * 0.30))
+        return roomUnderFold.map { min(cap, $0) } ?? cap
+    }
+
+    /// The window's height less the keyboard: what the caps are a share of. The Mac's views get
+    /// the empty window geometry (its layout is the window's own), so there the window itself
+    /// answers; without it the card stopped at four lines and the "/" list at 120 pt.
+    private var visibleHeight: CGFloat {
+        #if os(macOS)
+        return NSApp.keyWindow?.contentLayoutRect.height ?? NSApp.windows.first { $0.isVisible }?.contentLayoutRect.height ?? 800
+        #else
+        return windowGeometry.bounds.height - windowGeometry.keyboardOverlap
+        #endif
+    }
 
     /// A row tapped or taken with Return, or completed with Tab (see SlashMenu.outcome): a
     /// command that takes nothing runs as if typed and sent, a model switches this chat the way
     /// the model menu does (with a line in the thread), the chat's own model stays, and anything
     /// else goes in the field.
     private func pick(_ item: SlashMenu.Item, completing: Bool = false) {
+        Perf.stamp("slash: pick \(item.name)")
         menuMark = nil
         // With a reply quoted or files staged the text goes out as a message, not a command
         // (ChatSession.send), so the command waits in the field instead.
@@ -207,119 +282,111 @@ struct ComposerView: View {
     }
 
     var body: some View {
-        // One glass container for the composer, so the + button's glass can become the
-        // panel's and fold back into it (#285): the matching glassEffectIDs below did nothing
-        // outside a container, and the panel just scaled in.
+        // One glass container for the composer: the card's glass carries the "dock" id the
+        // chat morphs with. The + panel used to morph out of the button's glass here (#285);
+        // it now grows out of the button by a scale and fade (see the overlay below).
         GlassEffectContainer(spacing: 0) { composerStack }
+            // The panels above the card are measured against this view (the stack's own size).
+            .coordinateSpace(.named("composerStack"))
+            // Each panel in a glass container of its own, outside the card's: a glass shape
+            // changing inside the card's container re-hosted the card's views, and the text
+            // view lost the keyboard every time a panel opened (Matt, 2026-10-11). Behind the
+            // card, not over it: a panel folding away ends behind the + (or the field) instead
+            // of as a last shape drawn over it (Matt: "have it go behind the existing +").
+            .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { attachOverlay } }
+            #if os(iOS)
+            .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { slashOverlay } }
+            #endif
+            // Anything tapped outside the + panel closes it: a clear catcher far larger than
+            // the composer, behind the panels.
+            .background {
+                if showAttach {
+                    Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
+                        .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+                }
+            }
+            // Where the composer stands in the window, for the fold above it (`roomUnderFold`).
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composerFrame = $0 }
     }
+
+    /// The + panel, always in the tree: closed, a faint circle the size of the + button on
+    /// the button; open, its shape, size and place animate to the full panel above the card
+    /// while the rows scale up inside it and fade in. No insert transition: a glass container
+    /// draws its members without their shadows while a transition runs, and the shadows came
+    /// back in one frame a third of a second after the panel had settled (the spring's late
+    /// end), under the card, the circles and the panel (Matt, 2026-10-11: "the dimmed part
+    /// late after the animation").
+    private var attachOverlay: some View {
+        let open = showAttach, button = attachButtonFrame
+        return Group {
+            if attachRowsShown || open {
+                attachPanel
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                        attachPanelHeight = h
+                        // How long the panel took to lay out after the tap (DEBUG "perf" log).
+                        if let t = attachTappedAt { attachTappedAt = nil; Perf.note("attach panel laid out \(Int(Date().timeIntervalSince(t) * 1000)) ms after the tap") }
+                    }
+            } else {
+                Color.clear.frame(width: 272, height: attachPanelHeight)
+            }
+        }
+            // The rows shrink with the shape and fade on their own quick curve: on the
+            // spring alone they showed as a clipped corner while the shape was small, and
+            // the first icon lingered on the + after a close (the spring's long tail).
+            .opacity(open ? 1 : 0)
+            .animation(open ? .easeIn(duration: 0.26) : .easeOut(duration: 0.14), value: open)
+            // Closed, nothing at all (no size) at the + button's centre, behind the card: the
+            // shape grows out from behind the + and folds back behind it.
+            .scaleEffect(open ? 1 : 0.02, anchor: .bottomLeading)
+            .frame(width: open ? 272 : 0, height: open ? attachPanelHeight : 0, alignment: .bottomLeading)
+            .clipShape(.rect(cornerRadius: open ? 30 : 0))
+            // The glass stays on: closed, the shape has no size and draws nothing. Switching
+            // the glass back on at an open placed it a frame late where the panel last was.
+            .modifier(PanelSurface(shape: .rect(cornerRadius: open ? 30 : 0)))
+            .opacity(open ? 1 : 0)
+            .offset(x: open ? 0 : button.midX, y: open ? -(attachPanelHeight + 10) : button.midY)
+            .allowsHitTesting(open)
+            .accessibilityHidden(!open)
+    }
+
+    #if os(iOS)
+    /// The "/" list (commands, skills, models) as a glass panel above the card, grown out of
+    /// the field's leading edge the way the + panel grows out of its button. It used to sit
+    /// inside the card: the card stretched to hold it, the thread's bottom margin followed
+    /// the card's height frame by frame and the whole thread re-laid out while it opened
+    /// (Matt, 2026-10-11: "/ commands ... still choppy"). The card keeps its height now.
+    private var slashOverlay: some View {
+        // Re-evaluated when the keyboard moves the dock: the rows' accessibility frames went
+        // stale otherwise (a UI test tapped a row where it had been before the keyboard rose).
+        let keyboard = windowGeometry.keyboardOverlap
+        let open = !menuItems.isEmpty || menuLoading, field = fieldFrame
+        let items = open ? menuItems : shownSlashItems
+        let height = min(commandListCap, CGFloat(max(items.count, menuLoading ? 1 : 0)) * SlashMenuList.rowHeight + 8)
+        // Closed, the panel is nothing at all (no size) at the field's leading edge: a closed
+        // circle of glass showed through its own opacity as an orb over the + while the panel
+        // folded away (Matt, 2026-10-11: "i dont want to see that at all").
+        return SlashMenuList(items: items, selection: markedIndex, loading: menuLoading, cap: commandListCap, glass: false) { pick($0) }
+            .frame(width: stackWidth)
+            .opacity(open ? 1 : 0)
+            .animation(open ? .easeIn(duration: 0.22) : .easeOut(duration: 0.12), value: open)
+            .scaleEffect(open ? 1 : 0.02, anchor: .bottomLeading)
+            .frame(width: open ? stackWidth : 0, height: open ? height : 0, alignment: .bottomLeading)
+            .clipShape(.rect(cornerRadius: open ? 22 : 0))
+            .modifier(PanelSurface(shape: .rect(cornerRadius: open ? 22 : 0)))
+            .opacity(open ? 1 : 0)
+            // Grows straight up from 10 pt above the card's top edge: its bottom edge never moves,
+            // so no part of it passes behind the card (seen through the card's glass as a shade).
+            .offset(x: open ? 0 : field.minX + 8, y: -(open ? height : 0) - 10 + 0 * keyboard)
+            // Its own spring: outside the card's animated subtree the shape snapped shut.
+            .animation(.snappy(duration: 0.28), value: open)
+            .allowsHitTesting(open)
+            .accessibilityHidden(!open)
+    }
+    #endif
 
     private var composerStack: some View {
         VStack(spacing: 8) {
-            if !menuItems.isEmpty || menuLoading {
-                SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap) { pick($0) }
-                    // In place, not sliding up from under the keyboard.
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))            }
-            if let holdNote {
-                Text(holdNote)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .accessibilityIdentifier("composer.holdNote")
-                    .transition(.opacity)
-            }
-            if !mentionSuggestions.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(mentionSuggestions) { p in
-                            Button { pickMention(p) } label: {
-                                HStack(spacing: 10) {
-                                    BotAvatar(profile: p.name, size: 26)
-                                    Text("@" + p.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                                    if let m = p.model?.split(separator: "/").last { Text(String(m)).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                                    Spacer(minLength: 0)
-                                }
-                                .frame(height: 34)
-                                .padding(.vertical, 3)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            if p.id != mentionSuggestions.last?.id { Divider() }
-                        }
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 4)
-                }
-                .frame(height: min(commandListCap, CGFloat(mentionSuggestions.count) * 40 + 8))
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
-            }
-            if longTextOffer {
-                // A big paste: offer to send it as a file rather than a wall of text.
-                HStack(spacing: 10) {
-                    Image(systemName: "doc.text").foregroundStyle(.secondary)
-                    Text("That's a lot of text.").font(.subheadline)
-                    Spacer(minLength: 0)
-                    Button("Keep") { withAnimation(.snappy) { longTextOffer = false } }.font(.subheadline)
-                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).buttonStyle(.glassProminent)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            if !chat.staged.isEmpty {
-                // Cards with a real preview of each file, the kind on a pill, × on the corner.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(chat.staged) { a in
-                            StagedCard(attachment: a, onOpen: { stagedPreview = a.localURL },
-                                       onRemove: { withAnimation(.snappy) { chat.removeStaged(a.id) } })
-                                .transition(.scale(scale: 0.9).combined(with: .opacity))
-                        }
-                    }
-                    .padding(.leading, 2)
-                }
-                .quickLookPreview($stagedPreview)
-            }
-            if !quote.isEmpty {
-                // What the reply answers: the first lines of the bubble, with a way out.
-                HStack(alignment: .top, spacing: 8) {
-                    RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                    Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain).accessibilityLabel("Cancel reply")
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                // The bar beside the words is flexible in height; without this the strip took
-                // the whole screen.
-                .fixedSize(horizontal: false, vertical: true)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            // Same shape as the Messages app: a round attach button outside the field, and one
-            // thin capsule holding the text with the mic or send control inside its trailing edge.
-            HStack(alignment: .bottom, spacing: 8) {
-                attachMenu
-                HStack(alignment: .bottom, spacing: 6) {
-                    if dictation.isListening {
-                        // The field is the waveform while the mic listens; the words land when it stops.
-                        DictationWaveform(dictation: dictation)
-                            .padding(.leading, 14).padding(.vertical, 7)
-                            .transition(.opacity)
-                    } else {
-                        textField
-                    }
-                    trailingControl
-                        .padding(.trailing, 4).padding(.bottom, 4)
-                }
-                .frame(minHeight: 36)
-                // Plain glass, not interactive: an interactive capsule answers touches itself,
-                // and on the phone that swallowed the taps meant for the text field's Paste menu.
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
-                .glassEffectID("dock", in: namespace)
-            }
+            card
             if chat.isRunning, !text.isEmpty {
                 HStack {
                     Text("Agent is working. Send queues the message.").font(.caption2).foregroundStyle(.secondary)
@@ -329,40 +396,33 @@ struct ComposerView: View {
                 .padding(.horizontal, 8)
             }
         }
-        // The attach panel grows out of the + button and sits above the whole composer, the reply
-        // strip included (anchored to the button it overlapped the strip).
-        .overlay(alignment: .topLeading) {
-            if showAttach {
-                attachPanel
-                    .glassEffectID("attach", in: namespace)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                        attachPanelHeight = h
-                        // How long the panel took to lay out after the tap (DEBUG "perf" log).
-                        if let t = attachTappedAt { attachTappedAt = nil; Perf.note("attach panel laid out \(Int(Date().timeIntervalSince(t) * 1000)) ms after the tap") }
-                    }
-                    .offset(y: -(attachPanelHeight + 10))
-                    // The glass grows out of the button and folds back into it; the rows fade.
-                    .glassEffectTransition(.matchedGeometry)
-                    .transition(.opacity)
-                    .zIndex(2)
-            }
+        #if os(iOS)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stackWidth = $0 }
+        .onChange(of: menuItems.map(\.id)) { _, _ in if !menuItems.isEmpty { shownSlashItems = menuItems } }
+        .onChange(of: !menuItems.isEmpty || menuLoading) { _, open in
+            Smooth.animate("slashMenu")
+            // The kept rows go once the fold has ended, so a closed list has none.
+            if !open { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { if menuItems.isEmpty, !menuLoading { shownSlashItems = [] } } }
         }
-        // Anything tapped outside the panel closes it: a clear catcher far larger than the
-        // composer, under the panel.
-        .background {
-            if showAttach {
-                Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
-                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
-            }
+        .onChange(of: showAttach) { _, open in
+            if open { attachRowsShown = true } else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { if !showAttach { attachRowsShown = false } } }
         }
+        #endif
         .animation(.snappy(duration: 0.25), value: menuItems.map(\.id))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
-        // Files dropped on the composer (the Finder on a Mac, another app on an iPad) are staged like picked ones.
+        #if os(macOS)
+        // Files dropped on the card from the Finder, cards dragged out of a chat, and pictures,
+        // PDFs, movies or sounds dragged out of another app as data: staged like picked ones, the
+        // card outlined while the drag is over it (`dropTargeted`).
+        .onDrop(of: [.fileURL, .content], delegate: ComposerDropDelegate(targeted: $dropTargeted, perform: dropped))
+        #else
+        // Files dropped on the composer (another app on an iPad) are staged like picked ones.
         .dropDestination(for: URL.self) { urls, _ in
             for u in urls { importFile(u) }
             return !urls.isEmpty
         }
+        #endif
         #if os(macOS)
         // File › Import from iPhone or iPad (Continuity Camera): a photo or a scan taken on the
         // phone is staged here, the Mac's stand-in for the camera row.
@@ -384,11 +444,16 @@ struct ComposerView: View {
         #if os(iOS)
         // The camera question answered before the + panel can need it (see cameraAvailable).
         .task { try? await Task.sleep(for: .seconds(1)); _ = Self.cameraAvailable }
+        // The model list behind the chip, fetched before its first open.
+        .task { await chat.warmModelOptions() }
+        // The cursor comes back after a layout switch rebuilt the chat (`ChatViewMemory`).
+        .onAppear { if !chat.isDraft, ChatViewMemory.focused.contains(ChatViewMemory.key(for: chat)) { focused = true } }
+        .onDisappear { if !chat.isDraft { ChatViewMemory.setFocused(focused, for: chat) } }
         #endif
         #if os(macOS)
         // A new chat on the Mac (⌘N, the list's button, an intent) opens with the cursor in
         // the box, ready to type, as the box is after a message goes out (#212).
-        .onAppear { if chat.items.isEmpty { focused = true } }
+        .onAppear { if chat.items.isEmpty, !chat.isDraft { focused = true } }
         #endif
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
@@ -407,7 +472,8 @@ struct ComposerView: View {
     /// The field itself (its own view: the body's one expression grew past what the compiler
     /// types in reasonable time).
     private var textField: some View {
-        ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
+        ComposerTextView(text: $text, placeholder: newMessage?.placeholder ?? "Type / for commands", focused: $focused, maxLines: visibleLines,
+                         accessibilityID: newMessage != nil ? "newchat.text" : "composer.text",
                          onSend: { Task { await send() } },
                          onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
                          onArrow: { moveSelection($0) || recallHistory($0) },
@@ -416,8 +482,12 @@ struct ComposerView: View {
                          menuOpen: !menuItems.isEmpty || menuLoading,
                          onTab: { completeOnTab() },
                          onEscape: { dismissMenu() })
-            .padding(.leading, 14).padding(.vertical, 7)
-            .task { catalog = await chat.commandsCatalog() }
+            .padding(.horizontal, 4).padding(.top, 2)
+            .frame(minHeight: 30)
+            .task(id: chat.profile) { if !group { catalog = await chat.commandsCatalog() } }
+            // Another bot in the New Message sheet's To: is another draft: its own model list.
+            .onChange(of: ObjectIdentifier(chat)) { _, _ in modelOptions = nil; menuMark = nil }
+            .onChange(of: newMessage?.focus) { _, f in if f != nil, newMessage?.enabled == true { focused = true } }
             // The model list loads when "/model " is first typed, and is kept for this chat.
             .task(id: menuContext?.kind == .model) { if menuContext?.kind == .model { await loadModelOptions() } }
             // A new word (or the model list after "/model") opens a dismissed chooser again,
@@ -434,9 +504,251 @@ struct ComposerView: View {
             }
     }
 
+    /// One rounded glass card (#320, Matt: "expands up as you type or do / commands", the
+    /// attachments added at the top): the staged files' thumbnails along the top, the reply
+    /// strip, then whatever opens for "/" or "@" above the words, the words themselves (growing
+    /// upward to about 40% of the visible height, then scrolling inside), and under them a row
+    /// of controls: +, the chat's model and reasoning level (the existing menus), the mic or
+    /// send (stop while a turn runs). Shared with the Mac, which adds its own keys, drops and
+    /// hover.
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !chat.staged.isEmpty { thumbnails }
+            if !quote.isEmpty { quoteStrip }
+            #if os(macOS)
+            if !menuItems.isEmpty || menuLoading {
+                SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap, glass: false) { pick($0) }
+                    // In place, not sliding up from under the keyboard.
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                Divider()
+            }
+            #endif
+            if let holdNote {
+                Text(holdNote)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .accessibilityIdentifier("composer.holdNote")
+                    .transition(.opacity)
+            }
+            if !mentionSuggestions.isEmpty {
+                mentionList
+                Divider()
+            }
+            if longTextOffer {
+                // A big paste: offer to send it as a file rather than a wall of text.
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.text").foregroundStyle(.secondary)
+                    Text("That's a lot of text.").font(.subheadline)
+                    Spacer(minLength: 0)
+                    Button("Keep") { withAnimation(.snappy) { longTextOffer = false } }.font(.subheadline)
+                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).buttonStyle(.glassProminent)
+                }
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            if dictation.isListening {
+                // The field is the waveform while the mic listens; the words land when it stops.
+                DictationWaveform(dictation: dictation)
+                    .padding(.horizontal, 6).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            } else {
+                textField
+                    // The New Message sheet: nothing to write until a bot is chosen.
+                    .disabled(newMessage?.enabled == false)
+                    #if os(iOS)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { fieldFrame = $0 }
+                    #endif
+            }
+            HStack(alignment: .center, spacing: 8) {
+                if !group {
+                    attachMenu.layoutPriority(1).disabled(newMessage?.enabled == false)
+                    // The chip gives way first: at the accessibility sizes it shortened to its
+                    // level alone and the send button was cut by the card's edge.
+                    modelChip
+                }
+                Spacer(minLength: 0)
+                contextRing
+                trailingControl.layoutPriority(1)
+            }
+        }
+        .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
+        // Plain glass, not interactive: an interactive shape answers touches itself, and on the
+        // phone that swallowed the taps meant for the text field's Paste menu.
+        // While a drag is over the card (the Mac) the glass itself takes the tint: an overlay
+        // alone came through the glass as a faint rim.
+        .glassEffect(.regular.tint(dropTargeted ? Color.vory.opacity(0.35) : nil), in: .rect(cornerRadius: 22))
+        .glassEffectID("dock", in: namespace)
+        // The Mac's drop outline: drawn on the card's own shape while a drag is over it.
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.vory, lineWidth: 2)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.15), value: dropTargeted)
+    }
+
+    /// The staged files, along the top of the card: a real preview of each, × on the corner.
+    private var thumbnails: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(chat.staged) { a in
+                    // In a group's first message the files stay behind (the sheet says so): dimmed.
+                    StagedCard(attachment: a, notSent: group, onOpen: { stagedPreview = a.localURL },
+                               onRemove: { withAnimation(.snappy) { chat.removeStaged(a.id) } })
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                }
+            }
+            .padding(.leading, 2).padding(.vertical, 2)
+        }
+        .quickLookPreview($stagedPreview)
+    }
+
+    /// What the reply answers: the first lines of the bubble, with a way out.
+    private var quoteStrip: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .buttonStyle(.plain).accessibilityLabel("Cancel reply")
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        // The bar beside the words is flexible in height; without this the strip took the whole screen.
+        .fixedSize(horizontal: false, vertical: true)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    /// The bots "@" can mean, in the card above the words.
+    private var mentionList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(mentionSuggestions) { p in
+                    Button { pickMention(p) } label: {
+                        HStack(spacing: 10) {
+                            BotAvatar(profile: p.name, size: 26)
+                            Text("@" + p.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                            if let m = p.model?.split(separator: "/").last { Text(String(m)).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                            Spacer(minLength: 0)
+                        }
+                        .frame(height: 34)
+                        .padding(.vertical, 3)
+                        .padding(.horizontal, 6)
+                        .background(mentionHovered == p.id ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 10))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    #if os(macOS)
+                    .onHover { over in if over { mentionHovered = p.id } else if mentionHovered == p.id { mentionHovered = nil } }
+                    #endif
+                    if p.id != mentionSuggestions.last?.id { Divider() }
+                }
+            }
+            .padding(.horizontal, 6).padding(.vertical, 4)
+        }
+        .frame(height: min(commandListCap, CGFloat(mentionSuggestions.count) * 40 + 8))
+        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+    }
+
+    /// The chat's model and reasoning level on one small chip; a tap opens the same menus the
+    /// header's … menu has (models by provider, then the reasoning levels).
+    private var modelChip: some View {
+        Menu {
+            Section("Model") { ModelMenuContent(chat: chat) }
+            ReasoningEffortMenu(chat: chat)
+        } label: {
+            // Matt's wording (2026-10-10, via the planner): the model's name in the text's own
+            // tone, the level after it in a lighter one, no "Reasoning:"; at the accessibility
+            // sizes the level stands alone.
+            HStack(spacing: 6) {
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Text(chat.modelName.isEmpty ? "Model" : Self.shortModel(chat.modelName)).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(.primary.opacity(0.85))
+                }
+                Text(ReasoningEffort.name(of: chat.reasoningEffort ?? "medium")).lineLimit(1)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            // Under the pointer the capsule firms up (the Mac); a touch has no hover.
+            .background(.quaternary.opacity(chipHovered ? 1 : 0.85), in: .capsule)
+            .contentShape(.capsule)
+        }
+        .menuOrder(.fixed)
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture().onEnded { Smooth.animate("modelChip") })
+        #if os(macOS)
+        .onHover { chipHovered = $0 }
+        #endif
+        .accessibilityIdentifier("composer.modelChip")
+        .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.name(of: chat.reasoningEffort ?? "medium"))")
+    }
+
+    static func shortModel(_ m: String) -> String {
+        let last = m.split(separator: "/").last.map(String.init) ?? m
+        return last.count > 22 ? String(last.prefix(21)) + "…" : last
+    }
+
+    /// Lines the words may grow to before they scroll inside the card: about 40% of what is
+    /// visible above the keyboard, never under four.
+    private var visibleLines: Int {
+        max(4, Int(visibleHeight * 0.4 / 22))
+    }
+
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
+    /// How full the chat's context is (#325): a ring and the percentage left of the mic or
+    /// send, the same number as … › Context usage, which a tap opens too. Nothing until the
+    /// chat has usage numbers. Quiet until 80 %, orange from there, red from 95 %. Its own
+    /// size and a fixed gap from the button; the model chip truncates before it does.
+    @ViewBuilder private var contextRing: some View {
+        if let pct = chat.usage?.computedContextPercent {
+            let fill = CGFloat(min(100, max(0, pct))) / 100
+            let tint: Color = pct >= 95 ? .red : pct >= 80 ? .orange : Color.primary.opacity(0.55)
+            Button { showContextSheet = true } label: {
+                HStack(spacing: 5) {
+                    ZStack {
+                        Circle().stroke(Color.primary.opacity(0.12), lineWidth: 2.5)
+                        Circle().trim(from: 0, to: fill)
+                            .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    .frame(width: 15, height: 15)
+                    Text(contextAsTokens ? Self.tokensLabel(chat.usage) : "\(pct)%").font(.caption.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(pct >= 80 ? tint : Color.secondary)
+                }
+                .fixedSize()
+                .padding(.trailing, 4)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .layoutPriority(1)
+            // The numbers change as the turn runs and never animate: no motion in the bar while
+            // typing, and nothing of it moves with the + panel or the keyboard.
+            .transaction { $0.animation = nil }
+            .accessibilityLabel("Context \(pct) percent used")
+            .accessibilityIdentifier("composer.context")
+            .sheet(isPresented: $showContextSheet) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
+        }
+    }
+
+    /// "18/200K": the context used and its window, in thousands (one decimal under 10K).
+    static func tokensLabel(_ u: Usage?) -> String {
+        guard let u, let max = u.contextMax, max > 0 else { return "" }
+        let used = u.contextUsed ?? u.total ?? 0
+        func k(_ n: Int) -> String { n < 10_000 ? String(format: "%.1f", Double(n) / 1000) : "\(Int((Double(n) / 1000).rounded()))" }
+        return "\(k(used))/\(k(max))K"
+    }
+
     @ViewBuilder private var trailingControl: some View {
-        if dictation.isListening {
+        if let newMessage {
+            newMessageControl(newMessage)
+        } else if dictation.isListening {
             TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
         } else if dictation.isTranscribing {
             // The recording is being turned into words (on the gateway or here).
@@ -471,10 +783,12 @@ struct ComposerView: View {
     /// in Messages, grown out of the button and folded back into it.
     private var attachMenu: some View {
         Button {
-            // The panel takes the keyboard's place, as the + tray does in Messages: with the
-            // keyboard up it grew over the thread and covered the header (a tester, on the
-            // first build with Voice mode in it).
-            if !showAttach { focused = false; attachTappedAt = Date() }
+            // The keyboard stays up (Matt, 2026-10-11: "it shouldn't close the keyboard"); the
+            // panel is capped to the room between the header and the card and scrolls inside it,
+            // where it used to take the keyboard's place and, uncapped, covered the header.
+            // The slash list closes with it: on the Duo the two stood open together, the panel pushed up onto the fold.
+            if !showAttach { attachTappedAt = Date(); menuDismissed = true }
+            Smooth.animate("plusPanel")
             withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding
@@ -483,7 +797,8 @@ struct ComposerView: View {
                 .rotationEffect(.degrees(showAttach ? 45 : 0))
                 .frame(width: 36, height: 36)
                 .glassEffect(.regular.interactive(), in: .circle)
-                .glassEffectID(showAttach ? "attach-open" : "attach", in: namespace)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { attachButtonFrame = $0 }
+            .accessibilityIdentifier(newMessage != nil ? "newchat.attach" : "composer.attach")
         }
         .buttonStyle(.plain)
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
@@ -511,14 +826,57 @@ struct ComposerView: View {
         items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
         // Not while voice mode has the microphone: the recorder would reset the session under it.
         items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red, disabled: HandsFreeSession.shared.isActive) { showRecorder = true })
-        items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) })
+        items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) {
+            if let newMessage { newMessage.voice() } else { HandsFreeSession.shared.start(chat: chat) }
+        })
         items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
         items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
-        return AttachPanel(items: items) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+        return AttachPanel(items: items, surface: false, cap: attachCap) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+    }
+
+    /// The room above the card for the + panel: down from the header (the status bar plus the
+    /// pill, about 60 pt) to 10 pt above the card, wherever the keyboard has put the card.
+    private var attachCap: CGFloat {
+        #if os(iOS)
+        guard composerFrame.minY > 0 else { return 400 }
+        let room = composerFrame.minY - windowGeometry.safeArea.top - 60 - 10
+        return max(180, roomUnderFold.map { min(room, $0) } ?? room)
+        #else
+        return 600
+        #endif
+    }
+
+    /// The New Message sheet's slot: the mic while nothing is written (voice mode with the bot
+    /// chosen, after whatever is attached), the send arrow once there are words or files.
+    @ViewBuilder private func newMessageControl(_ n: ComposerRole.NewMessage) -> some View {
+        // A group starts with words only: its files do not count toward sending.
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, n.group || chat.staged.isEmpty {
+            Button { n.voice() } label: {
+                Image(systemName: "mic.fill").font(.body.weight(.semibold))
+                    .foregroundStyle(n.enabled && !n.group ? Color.primary : Color.secondary)
+                    .frame(width: 28, height: 28).contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .disabled(!n.enabled || n.group)
+            .accessibilityLabel("Voice mode")
+            .accessibilityIdentifier("newchat.voice")
+        } else {
+            Button { Task { await send() } } label: {
+                Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
+                    .frame(width: 28, height: 28).background(n.enabled ? AnyShapeStyle(Color.vory) : AnyShapeStyle(.tertiary), in: .circle)
+            }
+            .buttonStyle(.plain)
+            .disabled(!n.enabled)
+            .accessibilityLabel("Send")
+            .accessibilityIdentifier("newchat.send")
+        }
     }
 
     private func send() async {
+        // The New Message sheet starts the chat with the words; the draft holds the rest.
+        if let newMessage { newMessage.send(text); return }
         var t = text
+        Perf.stamp("slash: send \(t.prefix(30))")
         if !quote.isEmpty {
             // A Markdown quote the bot reads as context; the quoted bubble is left out of the
             // app's own history recall.
@@ -577,6 +935,46 @@ struct ComposerView: View {
         }
     }
 
+    #if os(macOS)
+    /// A drop on the card: file URLs (the Finder) go through `importFile`; a picture, PDF, movie
+    /// or sound carried as data (dragged out of Safari, Photos, Preview) is staged under its
+    /// own type. True when anything was taken, so the drag's cursor says so.
+    private func dropped(_ providers: [NSItemProvider]) -> Bool {
+        var took = false
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                took = true
+                p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                    let url = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                    guard let url else { return }
+                    Task { @MainActor in importFile(url) }
+                }
+            } else if let type = p.registeredTypeIdentifiers.compactMap({ UTType($0) }).first(where: { $0.conforms(to: .content) }) {
+                // A card dragged out of a chat (any file: a PDF, a CSV, a log), or a picture, PDF
+                // or clip out of another app. The file representation keeps the file's own name:
+                // the pasteboard drops `suggestedName` on the way over, so "report.pdf" arrived as
+                // "Dropped.pdf". The file is gone when the handler returns, so it is read there.
+                // Plain text with no file behind it is not taken: the field handles text drags.
+                let family = [UTType.image, .pdf, .movie, .audio].first { type.conforms(to: $0) }
+                guard family != nil || p.hasRepresentationConforming(toTypeIdentifier: type.identifier, fileOptions: []) else { continue }
+                took = true
+                let fallback = (p.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped") + "." + (type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? "bin")
+                _ = p.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
+                    guard let url, let data = try? Data(contentsOf: url) else { return }
+                    // The representation's file is named after the item and typed again by the
+                    // provider ("report.pdf.pdf"): one extension, the type's.
+                    let ext = type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? url.pathExtension
+                    var base = url.deletingPathExtension().lastPathComponent
+                    if !ext.isEmpty, base.lowercased().hasSuffix("." + ext.lowercased()) { base = String(base.dropLast(ext.count + 1)) }
+                    let name = url.pathExtension.isEmpty ? fallback : (ext.isEmpty ? base : base + "." + ext)
+                    Task { @MainActor in stagePasted(data, name: name, type: type) }
+                }
+            }
+        }
+        return took
+    }
+    #endif
+
     /// Something other than text pasted into the field (the edit menu, or the keyboard's
     /// "Paste from Screenshots"): staged like a picked file.
     private func stagePasted(_ data: Data, name: String, type: UTType) {
@@ -584,6 +982,26 @@ struct ComposerView: View {
         withAnimation(.snappy) { chat.stageAttachment(data: data, name: name, kind: kind) }
     }
 }
+
+#if os(macOS)
+/// The card's drop target. A delegate rather than `onDrop(isTargeted:)`: on the Mac that
+/// binding never went true for a drag over the card (the drops landed, the outline never
+/// showed), while `dropEntered` and `dropExited` are called for every validated drag.
+struct ComposerDropDelegate: DropDelegate {
+    @Binding var targeted: Bool
+    var perform: ([NSItemProvider]) -> Bool
+    static let types: [UTType] = [.fileURL, .content]
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: Self.types) }
+    func dropEntered(info: DropInfo) { targeted = true }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        return perform(info.itemProviders(for: Self.types))
+    }
+}
+#endif
 
 struct HistorySheet: View {
     var history: [String]

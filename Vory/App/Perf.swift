@@ -73,9 +73,12 @@ enum Perf {
     }
     /// One line in the perf log, for a timing measured in place (a panel's first layout, say).
     static func note(_ line: String) { log.notice("\(line, privacy: .public)") }
+    /// A note with the time in ms, for the order of events across views (the back swipe).
+    static func stamp(_ line: String) { note("\(Int((DispatchTime.now().uptimeNanoseconds / 1_000_000) % 1_000_000)) " + line) }
     #else
     @inline(__always) static func tick(_ name: String) {}
     @inline(__always) static func watchMainThread() {}
     @inline(__always) static func note(_ line: String) {}
+    @inline(__always) static func stamp(_ line: String) {}
     #endif
 }

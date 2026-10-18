@@ -21,13 +21,12 @@ struct NewBotSheet: View {
     @State private var busy = false
     @State private var error: String?
     @FocusState private var nameFocused: Bool
+    /// Rename bot… under the name when editing, where the gateway has the route (#315).
+    @State private var renameSupported = false
+    @State private var renamingBot = false
 
     /// Profile names are folder names on the gateway: letters, digits, dash and underscore.
-    private var cleanName: String {
-        name.lowercased().map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" }
-            .reduce(into: "") { if !($0.last == "-" && $1 == "-") { $0.append($1) } }
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    }
+    private var cleanName: String { BotRename.cleaned(name) }
     /// The studio stores looks by profile name; while the name is being typed they live under
     /// a draft key and move to the real name on create.
     private var draftKey: String { editing?.name ?? (cleanName.isEmpty ? "new-bot" : cleanName) }
@@ -54,12 +53,21 @@ struct NewBotSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .disabled(editing != nil)
                         .foregroundStyle(editing != nil ? .secondary : .primary)
+                        .accessibilityIdentifier("botSheet.name")
                     if editing == nil, !name.isEmpty, cleanName != name { Text("Saved as \(cleanName)").font(.caption).foregroundStyle(.secondary) }
                     if editing == nil, runtime.profiles.contains(where: { $0.name == cleanName }) { Text("A bot with this name already exists.").font(.caption).foregroundStyle(.red) }
                     TextField("Description", text: $description, axis: .vertical).lineLimit(1...3)
+                        .accessibilityIdentifier("botSheet.description")
+                    if let e = editing, renameSupported, e.isDefault != true {
+                        Button { renamingBot = true } label: { Label("Rename bot…", systemImage: "folder.badge.gearshape") }
+                            .disabled(busy)
+                            .accessibilityIdentifier("editBot.renameBot")
+                    }
                 } header: { Text("Bot") } footer: {
-                    Text(editing != nil ? "The name is the bot's folder on the gateway, and Hermes has no rename yet; make a new bot with the name you want and start it from this one. The description is what other Hermes surfaces show for this bot."
-                                        : "The description is what other Hermes surfaces show for this bot.")
+                    Text(editing == nil ? "The description is what other Hermes surfaces show for this bot."
+                         : renameSupported && editing?.isDefault != true
+                         ? "The name is the bot's folder on the gateway; Rename bot… moves it and restarts the bot. The description is what other Hermes surfaces show for this bot."
+                         : "The name is the bot's folder on the gateway and stays; give the bot a name of its own from its card. The description is what other Hermes surfaces show for this bot.")
                 }
                 Section {
                     if let o = options {
@@ -85,9 +93,9 @@ struct NewBotSheet: View {
                         Button(role: .destructive) { confirmDelete = true } label: { Label("Delete \(e.label)", systemImage: "trash") }
                             .disabled(busy || e.isDefault == true)
                             // Asked from its own button, so the bubble opens beside it and not at the top of the form.
-                            .confirmationDialog("Delete \(editing?.label ?? "this bot")?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                            .confirmationDialog(BotDelete.question(editing?.label ?? "this bot"), isPresented: $confirmDelete, titleVisibility: .visible) {
                                 Button("Delete bot", role: .destructive) { Task { await deleteBot() } }
-                            } message: { Text("Its SOUL.md, config and chats on the gateway are removed. This cannot be undone.") }
+                            } message: { Text(BotDelete.consequence) }
                     } footer: {
                         Text(e.isDefault == true ? "The default bot cannot be deleted." : "Removes the profile and its folder from the gateway: its SOUL.md, config and chats go with it.")
                     }
@@ -112,6 +120,11 @@ struct NewBotSheet: View {
                     choice = BotAvatarStore.choice(for: e.name)
                 }
                 options = try? await runtime.api.get("/api/model/options", profile: runtime.selectedProfile)
+                if editing != nil { renameSupported = await BotRename.supported(on: runtime.api) }
+            }
+            .sheet(isPresented: $renamingBot) {
+                // This sheet edits the old name; the renamed bot's card is the place for the rest.
+                if let e = editing { BotRenameSheet(profileName: e.name) { _ in dismiss() }.sheetFrame().withAppModel() }
             }
         }
         .presentationDetents([.large])
@@ -137,10 +150,7 @@ struct NewBotSheet: View {
         guard let e = editing else { return }
         busy = true; defer { busy = false }
         do {
-            let _: JSONValue = try await runtime.api.send("DELETE", "/api/profiles/\(e.name)", body: EmptyBody())
-            if runtime.selectedProfile == e.name { runtime.selectedProfile = runtime.profiles.first { $0.name != e.name }?.name }
-            await runtime.loadProfiles()
-            NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
+            try await BotDelete.delete(e.name, runtime: runtime)
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
@@ -165,5 +175,19 @@ struct NewBotSheet: View {
             NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Deleting a bot: its profile and its folder on the gateway. Edit Bot's Delete and the Bots
+/// page's menu (#139) both ask first, with the same words (`question`, `consequence`).
+enum BotDelete {
+    static func question(_ label: String) -> String { "Delete \(label)?" }
+    static let consequence = "Its SOUL.md, config and chats on the gateway are removed. This cannot be undone."
+
+    @MainActor static func delete(_ name: String, runtime: GatewayRuntime) async throws {
+        let _: JSONValue = try await runtime.api.send("DELETE", "/api/profiles/\(name)", body: EmptyBody())
+        if runtime.selectedProfile == name { runtime.selectedProfile = runtime.profiles.first { $0.name != name }?.name }
+        await runtime.loadProfiles()
+        NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
     }
 }

@@ -50,10 +50,28 @@ enum BotAvatarImage {
     @MainActor private static let cache = NSCache<NSString, UIImage>()
     /// `make`, memoised by look: the thread draws one of these beside every reply, and a live
     /// bot view per row (glass, timeline) is what made a long thread stutter while scrolling.
-    @MainActor static func cached(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light) -> UIImage {
-        let key = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)" as NSString
+    /// `closed`: the same face mid-blink, for a list row's blink by picture swap.
+    @MainActor static func cached(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light, closed: Bool = false) -> UIImage {
+        let key = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(closed ? "shut" : "open")" as NSString
         if let hit = cache.object(forKey: key) { return hit }
+        BotFace.stillBlink = closed ? 1 : 0
         let img = make(profile: profile, size: size, scheme: scheme)
+        BotFace.stillBlink = 0
+        cache.setObject(img, forKey: key)
+        return img
+    }
+
+    /// A look that is not a bot's own (the Look tab's shape and eye tiles, the Companion card's
+    /// bot): memoised by its spec. `closed`: mid-blink, for the blink by picture swap.
+    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool = false) -> UIImage {
+        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        BotFace.stillBlink = closed ? 1 : 0
+        let r = ImageRenderer(content: BotFaceView(spec: spec, size: size, active: false, drawn: true).environment(\.colorScheme, scheme))
+        r.scale = 3
+        r.isOpaque = false
+        let img = (r.uiImage ?? UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in }).withRenderingMode(.alwaysOriginal)
+        BotFace.stillBlink = 0
         cache.setObject(img, forKey: key)
         return img
     }
@@ -98,25 +116,53 @@ struct JumpToBottomButton: View {
 /// own selectable text offers Copy and Share for the whole thing and nothing in between (a
 /// tester: "the select text window doesn't work").
 #if os(macOS)
-/// On the Mac SwiftUI's selectable text already selects by range, so no AppKit view is needed.
+/// On the Mac an AppKit text view too, as on the iPhone: SwiftUI's selectable `Text` drew the whole text as one
+/// picture, and a long output past the graphics card's largest texture was an empty box (#361). The text view lays
+/// out and draws only what is on screen, and selects by range as before.
 struct SelectableText: View {
     var text: String
     var monospaced = false
+    /// What VoiceOver calls the text (the sheet's title).
+    var label = "Text"
     var body: some View {
-        ScrollView {
-            Text(text)
-                .font(monospaced ? .system(.footnote, design: .monospaced) : .body)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+        SelectableTextView(text: text, monospaced: monospaced, label: label)
+            .frame(minWidth: 420, minHeight: 320)
+    }
+}
+
+private struct SelectableTextView: NSViewRepresentable {
+    var text: String
+    var monospaced: Bool
+    var label: String
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        if let v = scroll.documentView as? NSTextView {
+            v.isEditable = false
+            v.isSelectable = true
+            v.drawsBackground = false
+            v.textContainerInset = NSSize(width: 12, height: 12)
         }
-        .frame(minWidth: 420, minHeight: 320)
+        return scroll
+    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let v = scroll.documentView as? NSTextView else { return }
+        if v.string != text { v.string = text }
+        // Only when it changes: setting the font lays the whole text out again (100 KB on a Show all sheet).
+        let font: NSFont = monospaced ? .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
+                                      : .preferredFont(forTextStyle: .body)
+        if v.font != font { v.font = font }
+        if v.textColor != .labelColor { v.textColor = .labelColor }
+        if v.accessibilityLabel() != label { v.setAccessibilityLabel(label) }
     }
 }
 #else
 struct SelectableText: UIViewRepresentable {
     var text: String
     var monospaced = false
+    /// What VoiceOver calls the text (the sheet's title).
+    var label = "Text"
     func makeUIView(context: Context) -> UITextView {
         let v = UITextView()
         v.isEditable = false
@@ -130,23 +176,30 @@ struct SelectableText: UIViewRepresentable {
         return v
     }
     func updateUIView(_ v: UITextView, context: Context) {
-        v.font = monospaced ? UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular) : UIFont.preferredFont(forTextStyle: .body)
-        v.textColor = .label
+        // Only what changed: setting the font lays the whole text out again (100 KB on a Show all sheet).
+        let font = monospaced ? UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular) : UIFont.preferredFont(forTextStyle: .body)
+        if v.font != font { v.font = font }
+        if v.textColor != .label { v.textColor = .label }
+        if v.accessibilityLabel != label { v.accessibilityLabel = label }
         if v.text != text { v.text = text }
     }
 }
 #endif
 
 struct SelectTextSheet: View {
+    /// What the text is: "Select Text" for a message's own, the bot's name and "Reasoning" for a reasoning shown whole.
+    var title = "Select Text"
     var text: String
+    var monospaced = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
-            SelectableText(text: text)
-            .navigationTitle("Select Text")
+            SelectableText(text: text, monospaced: monospaced, label: title)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                // Done, a swipe down on the phone, Escape on the Mac.
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .primaryAction) { Button { UIPasteboard.general.string = text } label: { Label("Copy all", systemImage: "doc.on.doc") } }
             }
         }
@@ -155,24 +208,26 @@ struct SelectTextSheet: View {
 
 /// Small decoded previews of attachment images, by file and size, so a row never holds the
 /// full-resolution bitmap.
+/// `scale` is the display's scale where the picture will show (`\.displayScale` in the view
+/// that asks), not the main screen's: an external display or the Duo's other display can differ.
 enum AttachmentThumbs {
     @MainActor private static let cache = NSCache<NSString, UIImage>()
-    private static func key(_ url: URL, _ side: CGFloat) -> NSString { "\(url.path)|\(Int(side))" as NSString }
+    private static func key(_ url: URL, _ side: CGFloat, _ scale: CGFloat) -> NSString { "\(url.path)|\(Int(side))|\(scale)" as NSString }
 
-    @MainActor static func image(at url: URL, side: CGFloat) -> UIImage? {
-        let key = key(url, side)
+    @MainActor static func image(at url: URL, side: CGFloat, scale: CGFloat) -> UIImage? {
+        let key = key(url, side, scale)
         if let hit = cache.object(forKey: key) { return hit }
-        guard let image = decode(at: url, pixels: Int(side * UIScreen.main.scale)) else { return nil }
+        guard let image = decode(at: url, pixels: Int(side * scale)) else { return nil }
         cache.setObject(image, forKey: key)
         return image
     }
 
     /// The same, decoded off the main thread: a row's thumbnails and the viewer's picture are
     /// made where a scroll does not wait for them.
-    @MainActor static func imageAsync(at url: URL, side: CGFloat) async -> UIImage? {
-        let key = key(url, side)
+    @MainActor static func imageAsync(at url: URL, side: CGFloat, scale: CGFloat) async -> UIImage? {
+        let key = key(url, side, scale)
         if let hit = cache.object(forKey: key) { return hit }
-        let pixels = Int(side * UIScreen.main.scale)
+        let pixels = Int(side * scale)
         let box = await Task.detached(priority: .userInitiated) { Box(decode(at: url, pixels: pixels)) }.value
         if let image = box.image { cache.setObject(image, forKey: key) }
         return box.image

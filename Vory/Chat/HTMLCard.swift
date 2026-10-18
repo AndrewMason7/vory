@@ -113,10 +113,11 @@ enum HTMLCard {
         return await t.value
     }
 
-    /// The most a card may take of the screen in the thread; the rest is in Full Screen.
-    @MainActor static var heightCap: CGFloat {
+    /// The most a card may take of the window in the thread; the rest is in Full Screen.
+    /// `windowHeight` is the window's, as it is now (a fold or a resize changes it).
+    static func heightCap(windowHeight: CGFloat) -> CGFloat {
         #if os(iOS)
-        return max(240, UIScreen.main.bounds.height * 0.6)
+        return max(240, windowHeight * 0.6)
         #else
         return 480
         #endif
@@ -174,6 +175,7 @@ enum HTMLCard {
 /// The card in the thread: sized to its content up to the cap, a loading state until the page
 /// is in, a button to open it full screen, and Show source / Copy HTML in its menu.
 struct HTMLCardView: View {
+    @Environment(\.windowGeometry) private var windowGeometry
     var html: String
     /// The thread's Show Source, for the card's own menu.
     var onShowSource: (() -> Void)? = nil
@@ -191,7 +193,7 @@ struct HTMLCardView: View {
     static let awayGrace: TimeInterval = 4
 
     var body: some View {
-        let cap = HTMLCard.heightCap
+        let cap = HTMLCard.heightCap(windowHeight: windowGeometry.bounds.height)
         let actions = HTMLCard.Actions(full: { full = true }, showSource: onShowSource, copy: { UIPasteboard.general.string = html })
         ZStack(alignment: .topLeading) {
             if near {
@@ -256,7 +258,7 @@ struct HTMLCardSheet: View {
             Group {
                 if source {
                     ScrollView {
-                        Text(html).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                        LongText(html, code: true).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading).padding()
                     }
                 } else {

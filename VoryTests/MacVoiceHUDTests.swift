@@ -25,6 +25,22 @@ import Testing
         #expect(thinking.title == "Thinking…" && thinking.line == "Measuring /var/log" && thinking.mood == .thinking && thinking.faceActive && !thinking.showsWaveform)
     }
 
+    @Test func theEngineShowsTheArcsWhileListeningAndThePlainBotWhileSpeaking() {
+        let kept = BotFace.motionEngine
+        defer { BotFace.motionEngine = kept }
+        var s = HandsFreeState()
+        _ = s.handle(.start)
+        BotFace.motionEngine = true
+        #expect(make(s).mood == .listening)
+        BotFace.motionEngine = false
+        #expect(make(s).mood == .idle)
+        _ = s.handle(.speechStarted); _ = s.handle(.speechEnded); _ = s.handle(.transcript("go")); _ = s.handle(.sent)
+        _ = s.handle(.replyDelta("It is the logs.")); _ = s.handle(.audioStarted)
+        BotFace.motionEngine = true
+        // The presentation still says speaking; the face it maps to is the plain working bot.
+        #expect(make(s).mood == .speaking)
+    }
+
     @Test func speakingAndApprovalPointAtTheChat() {
         var s = HandsFreeState()
         _ = s.handle(.start); _ = s.handle(.speechStarted); _ = s.handle(.speechEnded); _ = s.handle(.transcript("go")); _ = s.handle(.sent)

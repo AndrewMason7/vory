@@ -238,11 +238,11 @@ struct PushSetupView: View {
             }
         }
         #if os(macOS)
-        // A button the size of a button, under the form's column; the second one reads as a link.
+        // A button the size of a button; the second one reads as a link.
         .buttonStyle(.borderless)
-        .frame(maxWidth: 340)
-        .frame(maxWidth: .infinity)
         #endif
+        // Under the form's column on a wide layout.
+        .readingColumn(340)
         .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
         .background(
             // Solid behind the buttons, fading out above them so the form scrolls under.
@@ -597,6 +597,8 @@ struct CompanionUpdateRows: View {
 struct RestartCountdownRows: View {
     @Bindable var setup: PushSetupModel
     var runtime: GatewayRuntime
+    /// The gateway form, as a sheet on the Mac (judgement call #13).
+    @State private var signingIn = false
 
     var body: some View {
         if setup.restarting {
@@ -655,7 +657,12 @@ struct RestartCountdownRows: View {
             Button { Task { await setup.restartNow(runtime: runtime) } } label: { Label("Restart Gateway now", systemImage: "arrow.clockwise") }
             Button { Task { await setup.checkRestartNow(runtime: runtime) } } label: { Label("Check now", systemImage: "waveform.path.ecg") }
             if setup.restartError?.localizedCaseInsensitiveContains("expired") == true || setup.restartError?.localizedCaseInsensitiveContains("401") == true {
-                NavigationLink { GatewayFormView(existing: runtime.connection) } label: { Label("Sign in again", systemImage: "person.badge.key") }
+                #if os(macOS)
+                Button { signingIn = true } label: { Label("Sign in again", systemImage: "person.badge.key") }
+                    .sheet(isPresented: $signingIn) { GatewayFormSheet(existing: runtime.connection).withAppModel() }
+                #else
+                NavigationLink { GatewayFormView(existing: runtime.connection).pushedPage(keepsOwnBar: true) } label: { Label("Sign in again", systemImage: "person.badge.key") }
+                #endif
                 Text("If the gateway already came back, Settings › Companion will show it running; sign in again and the restart is not needed.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -682,11 +689,8 @@ struct StepPage<Content: View, Header: View>: View {
             .contentMargins(.top, headerHeight + 10, for: .scrollContent)
             .contentMargins(.bottom, 120, for: .scrollContent)
             .overlay(alignment: .top) { top }
-            #if os(macOS)
-            // The wizard's column, as wide as a settings page.
-            .frame(maxWidth: 700)
-            .frame(maxWidth: .infinity)
-            #endif
+            // The wizard's column on a wide layout, as wide as a settings page.
+            .readingColumn(700)
     }
 
     /// Vory and the step's title, over the form; the form scrolls under it.
@@ -790,10 +794,10 @@ struct CompanionView: View {
             if let rt {
                 let push = model.push
                 Section {
-                    NavigationLink { PushSetupView(setup: setup) } label: {
+                    NavigationLink { PushSetupView(setup: setup).pushedPage() } label: {
                         Label(setup.isCompleted(for: rt) ? "Configure" : "Configure the Companion", systemImage: "wand.and.stars")
                     }
-                    NavigationLink { SoftwareUpdateView() } label: {
+                    NavigationLink { SoftwareUpdateView().pushedPage() } label: {
                         HStack {
                             Label("Software Update", systemImage: "arrow.down.circle")
                             Spacer(minLength: 8)
@@ -831,7 +835,7 @@ struct CompanionView: View {
                     }
                 }
                 Section {
-                    NavigationLink { CompanionDiagnosticsView(setup: setup, push: push) } label: { Label("Diagnostics", systemImage: "stethoscope") }
+                    NavigationLink { CompanionDiagnosticsView(setup: setup, push: push).pushedPage() } label: { Label("Diagnostics", systemImage: "stethoscope") }
                 } footer: {
                     Text(DeviceWords.isMac ? "The last notification and the last push the Companion sent." : "The last notification, the Live Activity's tokens and log, and the last push the Companion sent.")
                 }

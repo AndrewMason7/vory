@@ -198,9 +198,11 @@ struct CloudMerge {
     private func reconcileLooks(_ mode: Mode, joined: Double, stamps: inout [String: Double], seen: inout [String: String], out: inout Outcome) {
         var colors = Self.map(defaults.string(forKey: BotColors.storageKey))
         var avatars = Self.map(defaults.string(forKey: BotAvatarStore.storageKey))
-        let original = (colors, avatars)
+        // The bot's own name and title (#315) travel in the same entry as its look.
+        var ownNames = Self.mapOfMaps(defaults.string(forKey: BotNames.storageKey))
+        let original = (colors, avatars, ownNames)
 
-        var names = Set(colors.keys).union(avatars.keys)
+        var names = Set(colors.keys).union(avatars.keys).union(ownNames.keys)
         for key in cloud.cloudKeys where key.hasPrefix(Self.lookPrefix) {
             if let n = (cloud.cloudValue(key) as? [String: Any])?["n"] as? String { names.insert(n) }
         }
@@ -210,32 +212,43 @@ struct CloudMerge {
             let entry = cloud.cloudValue(ck) as? [String: Any]
             let gone = entry?["gone"] as? Bool == true
             let hex = colors[name], avatar = avatars[name]
-            let local: String? = (hex == nil && avatar == nil) ? nil
-                : Self.lookFingerprint(hex: hex, avatar: avatar, photo: avatar == "photo" ? photoStamp(name) : nil)
+            let own = ownNames[name], ownName = own?["n"], ownTitle = own?["t"]
+            let local: String? = (hex == nil && avatar == nil && ownName == nil && ownTitle == nil) ? nil
+                : Self.lookFingerprint(hex: hex, avatar: avatar, photo: avatar == "photo" ? photoStamp(name) : nil, name: ownName, title: ownTitle)
             let cloudFP: String? = (entry == nil || gone) ? nil
-                : Self.lookFingerprint(hex: entry?["hex"] as? String, avatar: entry?["avatar"] as? String, photo: entry?["ph"] as? String)
+                : Self.lookFingerprint(hex: entry?["hex"] as? String, avatar: entry?["avatar"] as? String, photo: entry?["ph"] as? String,
+                                       name: entry?["dn"] as? String, title: entry?["bt"] as? String)
 
             step(ck, local: local, cloud: cloudFP, cloudTime: entry?["t"] as? Double, mode: mode, joined: joined, stamps: &stamps, seen: &seen, out: &out,
                  push: { t in
                     guard local != nil else { cloud.setCloudValue(["n": name, "gone": true, "t": t], for: ck); return }
                     var e: [String: Any] = ["n": name, "t": t]
                     e["hex"] = hex; e["avatar"] = avatar
+                    e["dn"] = ownName; e["bt"] = ownTitle
                     if avatar == "photo", let data = photoData(name), data.count <= Self.photoLimit {
                         e["photo"] = data; e["ph"] = Self.hash(data)
                     }
                     cloud.setCloudValue(e, for: ck)
                  },
                  apply: {
-                    guard let entry, !gone else { colors[name] = nil; avatars[name] = nil; return nil }
+                    guard let entry, !gone else { colors[name] = nil; avatars[name] = nil; ownNames[name] = nil; return nil }
                     colors[name] = entry["hex"] as? String
                     avatars[name] = entry["avatar"] as? String
+                    var e: [String: String] = [:]
+                    if let dn = entry["dn"] as? String, !dn.isEmpty { e["n"] = dn }
+                    if let bt = entry["bt"] as? String, !bt.isEmpty { e["t"] = bt }
+                    ownNames[name] = e.isEmpty ? nil : e
                     if let data = entry["photo"] as? Data { savePhoto(name, data) }
-                    return Self.lookFingerprint(hex: colors[name], avatar: avatars[name], photo: avatars[name] == "photo" ? photoStamp(name) : nil)
+                    return Self.lookFingerprint(hex: colors[name], avatar: avatars[name], photo: avatars[name] == "photo" ? photoStamp(name) : nil,
+                                                name: ownNames[name]?["n"], title: ownNames[name]?["t"])
                  })
         }
 
         if colors != original.0 { defaults.set(Self.string(colors), forKey: BotColors.storageKey) }
         if avatars != original.1 { defaults.set(Self.string(avatars), forKey: BotAvatarStore.storageKey) }
+        if ownNames != original.2 {
+            if ownNames.isEmpty { defaults.removeObject(forKey: BotNames.storageKey) } else { defaults.set(Self.stringOfMaps(ownNames), forKey: BotNames.storageKey) }
+        }
     }
 
     // MARK: What is there
@@ -269,8 +282,17 @@ struct CloudMerge {
     /// the cloud (a Bool is a number on both sides).
     static func fingerprint(_ value: Any) -> String { "\(value)" }
 
-    static func lookFingerprint(hex: String?, avatar: String?, photo: String?) -> String {
-        "\(hex ?? "")|\(avatar ?? "")|\(photo ?? "")"
+    static func lookFingerprint(hex: String?, avatar: String?, photo: String?, name: String? = nil, title: String? = nil) -> String {
+        "\(hex ?? "")|\(avatar ?? "")|\(photo ?? "")|\(name ?? "")|\(title ?? "")"
+    }
+
+    /// `{bot: {field: value}}` as stored for the bots' own names.
+    static func mapOfMaps(_ raw: String?) -> [String: [String: String]] {
+        guard let raw, let data = raw.data(using: .utf8), let m = try? JSONDecoder().decode([String: [String: String]].self, from: data) else { return [:] }
+        return m
+    }
+    static func stringOfMaps(_ m: [String: [String: String]]) -> String {
+        (try? JSONEncoder().encode(m)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
     /// The cloud's keys hold 64 bytes: a long bot name goes in by its hash.
@@ -412,6 +434,10 @@ enum CloudGateways {
 
         func copy(of c: GatewayConnection) -> CloudGateway {
             let secrets = store.secrets(for: c.id)
+            // The backup address travels in its own item (`CloudAlternates`): a device on 1.5 (20)
+            // writes this file back without it, and would drop it for everyone.
+            var c = c
+            c.alternate = nil
             return CloudGateway(connection: c, sessionToken: c.authMode == .sessionToken ? secrets.sessionToken : nil, access: secrets.access, updatedAt: now)
         }
 
@@ -489,6 +515,79 @@ enum CloudGateways {
         defaults.set(seen, forKey: seenKey)
         if file != before { storage.save(file); out.pushed = true }
         return out
+    }
+}
+
+/// The gateways' backup addresses (#283), synced beside the gateway list in an item of their
+/// own. A device on 1.5 (20) reads and writes the list without knowing the field and would
+/// write it back without the backups; it never touches this item. Keyed by gateway id, with
+/// the same memory the list has: edited here goes up, edited elsewhere comes down. A removed
+/// backup goes up as a nil address, so the other devices drop it too.
+@MainActor
+enum CloudAlternates {
+    static let account = "gateways.alternates"
+    static let stampsKey = "cloudSync.alternateStamps"
+    static let seenKey = "cloudSync.alternateSeen"
+
+    struct Entry: Codable, Equatable {
+        var alternate: String?
+        var updatedAt: Double
+    }
+
+    struct Storage {
+        var load: () -> [String: Entry]
+        var save: ([String: Entry]) -> Void
+
+        @MainActor static let keychain = Storage(
+            load: { Keychain.getSynced(account: CloudAlternates.account).flatMap { try? JSONDecoder().decode([String: Entry].self, from: $0) } ?? [:] },
+            save: { file in if let data = try? JSONEncoder().encode(file) { try? Keychain.setSynced(data, account: CloudAlternates.account) } })
+    }
+
+    /// One pass, both ways. Returns the gateways whose backup came down (to reconnect).
+    @discardableResult
+    static func reconcile(store: any GatewayStoring, storage: Storage = .keychain, listedIDs: Set<String>? = nil,
+                          defaults: UserDefaults = .standard, now: Double = Date().timeIntervalSince1970) -> [UUID] {
+        var file = storage.load()
+        let before = file
+        var changed: [UUID] = []
+        var stamps = (defaults.dictionary(forKey: stampsKey) as? [String: Double]) ?? [:]
+        var seen = (defaults.dictionary(forKey: seenKey) as? [String: String]) ?? [:]
+        let none = "\u{0}"   // what "no backup" is remembered as
+        for c in store.connections where !CloudGateways.isLoopback(c) {
+            let id = c.id.uuidString
+            let mine = c.alternate?.description
+            guard let theirs = file[id] else {
+                if let mine { file[id] = Entry(alternate: mine, updatedAt: now) }
+                stamps[id] = now; seen[id] = mine ?? none
+                continue
+            }
+            if theirs.alternate == mine {
+                stamps[id] = theirs.updatedAt; seen[id] = mine ?? none
+            } else if seen[id] == nil, mine != nil {
+                // The first meeting with different backups: both stay until one is edited.
+                stamps[id] = theirs.updatedAt; seen[id] = mine ?? none
+            } else if let last = seen[id], last != (mine ?? none) {
+                // Edited here since the last agreement: it goes up.
+                file[id] = Entry(alternate: mine, updatedAt: now)
+                stamps[id] = now; seen[id] = mine ?? none
+            } else if theirs.updatedAt > (stamps[id] ?? 0) || seen[id] == nil {
+                // Edited on another device (or new to this one): taken.
+                var conn = c
+                conn.alternate = theirs.alternate.flatMap { try? GatewayURL.normalize($0) }
+                if (try? store.upsert(conn, secrets: store.secrets(for: c.id))) != nil {
+                    changed.append(c.id)
+                    stamps[id] = theirs.updatedAt; seen[id] = theirs.alternate ?? none
+                }
+            }
+        }
+        // Gateways gone from this device and from the list: their backups go too.
+        let ids = Set(store.connections.map(\.id.uuidString))
+        let listed = listedIDs ?? Set(CloudGateways.load().gateways.map(\.connection.id.uuidString))
+        for id in file.keys where !ids.contains(id) && !listed.contains(id) { file[id] = nil }
+        defaults.set(stamps, forKey: stampsKey)
+        defaults.set(seen, forKey: seenKey)
+        if file != before { storage.save(file) }
+        return changed
     }
 }
 
@@ -687,7 +786,8 @@ final class CloudSync {
         let defaults = UserDefaults.standard
         let awaiting = defaults.bool(forKey: Self.awaitingGatewaysKey)
         let out = CloudGateways.reconcile(store: store, importNew: Self.importsGateways(hasConnections: !store.connections.isEmpty, awaiting: awaiting))
-        reconnectIfChanged(out.changed)
+        let backups = CloudAlternates.reconcile(store: store)
+        reconnectIfChanged(out.changed + backups.filter { !out.changed.contains($0) })
         if awaiting, !store.connections.isEmpty {
             defaults.removeObject(forKey: Self.awaitingGatewaysKey)
             if !out.added.isEmpty { gatewaysArrived(out.added, store: store) }
@@ -743,6 +843,7 @@ final class CloudSync {
         var parts = CloudMerge.syncedSettings.map { d.object(forKey: $0).map(CloudMerge.fingerprint) ?? "" }
         parts.append(d.string(forKey: BotColors.storageKey) ?? "")
         parts.append(d.string(forKey: BotAvatarStore.storageKey) ?? "")
+        parts.append(d.string(forKey: BotNames.storageKey) ?? "")
         return parts.joined(separator: "\u{1f}")
     }
 

@@ -24,6 +24,19 @@ struct DashboardView: View {
     @State private var sinceSummary: String?
     @State private var summarizing = false
     @State private var visitStart: Double = 0
+    /// The page's own liveness (the phone's tab in front; on the Mac the page on show in a window
+    /// in front): its loads wait while it is hidden.
+    @Environment(\.botsLive) private var pageLive
+    /// The Mac keeps the page mounted behind the others: a visit starts and ends with it on show.
+    @Environment(\.macPageShown) private var pageShown
+    @State private var visits = 0
+    @State private var loadedKey = ""
+    /// The range changed: its load's numbers count over and the card's height glides (#377).
+    @State private var rangeMoved = false
+    /// The range moves under the title at the accessibility sizes.
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// The gateway the last finished load ran against (see `shouldLoad`).
+    @State private var loadedConnection: UUID?
 
     private var runtime: GatewayRuntime? { model.runtime }
     private var layout: HomeLayout { HomeLayout.parse(layoutRaw) }
@@ -51,7 +64,7 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 10)
                     }
                     .buttonStyle(.bordered).tint(editingHome ? Color.vory : .secondary)
-                    NavigationLink { HomeSettingsView() } label: {
+                    NavigationLink { HomeSettingsView().pushedPage() } label: {
                         Label("Settings", systemImage: "slider.horizontal.3").font(.subheadline.weight(.medium))
                             .frame(maxWidth: .infinity).padding(.vertical, 10)
                     }
@@ -64,12 +77,8 @@ struct DashboardView: View {
             }
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
             .animation(.snappy, value: layoutRaw)
-            #if os(macOS)
-            // A reading width in the middle of the window, not cards the width of the screen.
-            .frame(maxWidth: 640)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 12)
-            #endif
+            // A reading width in the middle of a wide window, not cards the width of the screen.
+            .readingColumn(640)
         }
         .scrollPosition($scrollPosition)
         // A tap on the Home tab while it is in front brings the page back to its top, as the
@@ -79,11 +88,38 @@ struct DashboardView: View {
         .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
-        .reloadable { await Task { await load() }.value }
-        .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)") { await load() }
+        .reloadable { await Task { await load(); await summarizeSince(force: true) }.value }
+        // See `shouldLoad`. The rows and numbers are replaced in place, so a return shows no reload.
+        .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)|\(pageLive)") {
+            let connection = runtime?.connection.id
+            let key = "\(connection?.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)"
+            guard Self.shouldLoad(pageLive: pageLive, connection: connection, loadedConnection: loadedConnection, key: key, loadedKey: loadedKey) else { return }
+            let gotList = await load()
+            // Counted only when it ran to the end against a gateway and got the chat list: a load
+            // with none (Home mounted before activation), one cut short by a hide, or one the
+            // gateway did not answer (the launch load before the route is up) loads again.
+            if Self.counts(cancelled: Task.isCancelled, hasGateway: runtime != nil, gotList: gotList) { loadedKey = key; loadedConnection = connection }
+        }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
         .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }
-        .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
+        .onChange(of: pageShown) { _, shown in
+            if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { lastVisit = max(lastVisit, visitStart); editingHome = false }
+        }
+        .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).pushedPage() }
+        .onChange(of: rangeDays) { _, _ in rangeMoved = true }
+    }
+
+    /// Whether Home loads now. Hidden (the phone's other tab in front, or another Mac page), it loads
+    /// only for a gateway it has not loaded from yet: at launch, where Home mounts behind the tab in
+    /// front before the gateway is up and its load also refreshes the Overview widget, and after a
+    /// switch of gateway. Other changes made while it is hidden (another bot, the range) wait for its
+    /// return, as does each new Mac visit (`key` counts them). Live, it loads whenever the key moved.
+    static func counts(cancelled: Bool, hasGateway: Bool, gotList: Bool) -> Bool { !cancelled && hasGateway && gotList }
+
+    static func shouldLoad(pageLive: Bool, connection: UUID?, loadedConnection: UUID?, key: String, loadedKey: String) -> Bool {
+        guard key != loadedKey else { return false }
+        if pageLive { return true }
+        return connection != nil && connection != loadedConnection
     }
 
     @State private var editingHome = false
@@ -232,17 +268,23 @@ struct DashboardView: View {
 
     private func overviewCard(full: Bool) -> some View {
         cardBackground(VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Overview").font(.headline)
-                Spacer()
-                GlassSegments(options: [(7, "7d"), (30, "30d"), (90, "90d")], selection: $rangeDays)
-                    .accessibilityLabel("Range")
+            // The range beside the title where it fits at its own size; on a row of its own under
+            // it at the accessibility sizes, or wherever it does not fit (planner's call #35).
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) { Text("Overview").font(.headline); rangePicker }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text("Overview").font(.headline); Spacer(); rangePicker.fixedSize() }
+                    VStack(alignment: .leading, spacing: 10) { Text("Overview").font(.headline); rangePicker }
+                }
             }
             let t = usage?.totals
             let tokens = (t?.totalInput ?? 0) + (t?.totalOutput ?? 0) + (t?.totalCacheRead ?? 0)
             let messages = periodSessions.reduce(0) { $0 + ($1.messageCount ?? 0) }
             let activeDays = Set((usage?.daily ?? []).filter { ($0.sessions ?? 0) > 0 }.map(\.day)).count
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            // Three to a row everywhere: six tiles fill two rows that way, where four left a short
+            // second row on the Mac (the even-column rule is for the card grids, not these tiles).
+            LazyVGrid(columns: EvenColumns.items(3, spacing: 8), spacing: 8) {
                 tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
                 tile("Messages", Format.count(messages))
                 tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")
@@ -265,6 +307,20 @@ struct DashboardView: View {
         })
     }
 
+    /// The system's segmented control (#377, call #35): its glass thumb slides to the range, and
+    /// a finger can drag it along. Ours snapped: its lens jumped from one option to the next. The
+    /// short labels are spoken in full. The numbers that hang on the range alone move with it.
+    /// "Range" names the group for VoiceOver; the Mac drew it beside the segments as well.
+    private var rangePicker: some View {
+        Picker("Range", selection: $rangeDays.animation(.snappy(duration: 0.3))) {
+            Text("7d").accessibilityLabel("7 days").tag(7)
+            Text("30d").accessibilityLabel("30 days").tag(30)
+            Text("90d").accessibilityLabel("90 days").tag(90)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
     /// What each tile counts, for a tap on it.
     private static let tileNotes: [String: String] = [
         "Sessions": "Chats started in the period, as the gateway's analytics count them. On a gateway without the analytics API it is the chats in the list instead.",
@@ -283,6 +339,8 @@ struct DashboardView: View {
             Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Text(value).font(isText ? .subheadline.weight(.semibold) : .title3.weight(.semibold).monospacedDigit())
                 .lineLimit(isText ? 2 : 1).minimumScaleFactor(0.6).fixedSize(horizontal: false, vertical: true)
+                // A change of range counts the number over (#377).
+                .contentTransition(.numericText())
         }
         .frame(minHeight: 58, alignment: .top)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -332,7 +390,7 @@ struct DashboardView: View {
                         let (working, waiting) = botStatus(rt, p)
                         Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
                             HStack(spacing: 12) {
-                                BotAvatar(profile: p.name, size: 36, active: working != nil)
+                                BotAvatar(profile: p.name, size: 36, active: working != nil, mood: BotFaceView.Mood(session: working?.storedID, state: waiting ? .awaitingApproval : (working?.botState ?? .idle)))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(p.label).font(.body.weight(.medium))
                                     Text(waiting ? "Needs you" : (working.map { ChatGoals.shared.goal(for: $0.storedID) ?? $0.statusLine ?? "Working…" } ?? "Idle"))
@@ -353,7 +411,7 @@ struct DashboardView: View {
                                 Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
                                     VStack(spacing: 4) {
                                         ZStack(alignment: .topTrailing) {
-                                            BotAvatar(profile: p.name, size: 44, active: working != nil)
+                                            BotAvatar(profile: p.name, size: 44, active: working != nil, mood: BotFaceView.Mood(session: working?.storedID, state: waiting ? .awaitingApproval : (working?.botState ?? .idle)))
                                             if waiting || working != nil {
                                                 Circle().fill(waiting ? Color.red : Color.blue).frame(width: 10, height: 10).offset(x: 2, y: -2)
                                             }
@@ -388,22 +446,34 @@ struct DashboardView: View {
                 Text(loading ? "Loading…" : (error == nil ? "No chats yet. Start one from the Chats tab." : "The chat list did not load. Pull down to try again.")).font(.subheadline).foregroundStyle(.secondary)
             }
             ForEach(list) { s in
-                NavigationLink(value: ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile)) {
-                    HStack(spacing: 10) {
-                        BotAvatar(profile: s.profile ?? runtime?.selectedProfile ?? "default", size: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(s.displayTitle).font(.subheadline.weight(.medium)).lineLimit(1)
-                            Text(s.preview ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        if let d = s.lastDate { Text(d, format: .relative(presentation: .named)).font(.caption2).foregroundStyle(.tertiary) }
-                        Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
-                    }
-                    .contentShape(Rectangle())
+                // Under the phone's morph bar a chat has its bar (its bot, its actions, the morph)
+                // on Chats only: pushed here it got the page Back alone and late, and with a chat
+                // left open on Chats a bar stuck on Home's title with no Back (#378). It opens on
+                // Chats as from the list, and its Back comes back to Home. Elsewhere (the Mac, a
+                // wide window) the chat's own header stands over it here.
+                if MorphTopBar.active(model) {
+                    Button { model.openStoredChat(id: s.id, profile: s.profile, title: s.displayTitle, returningTo: .dashboard) } label: { pickUpRow(s) }
+                        .buttonStyle(.plain)
+                } else {
+                    NavigationLink(value: ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile)) { pickUpRow(s) }
+                        .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         })
+    }
+
+    private func pickUpRow(_ s: StoredSession) -> some View {
+        HStack(spacing: 10) {
+            BotAvatar(profile: s.profile ?? runtime?.selectedProfile ?? "default", size: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(s.displayTitle).font(.subheadline.weight(.medium)).lineLimit(1)
+                Text(s.preview ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            if let d = s.lastDate { Text(d, format: .relative(presentation: .named)).font(.caption2).foregroundStyle(.tertiary) }
+            Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
     }
 
     // MARK: Since you were here
@@ -420,8 +490,8 @@ struct DashboardView: View {
             HStack {
                 Text(lastVisit > 0 ? "Since you were here" : "The last day").font(.headline)
                 Spacer()
+                // A pull on Home sums it up afresh; the card's own refresh button is gone (#377).
                 if summarizing { ProgressView().controlSize(.small) }
-                else { Button { Task { await summarizeSince(force: true) } } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain).foregroundStyle(.secondary) }
             }
             if let sinceSummary {
                 Text(sinceSummary).font(.subheadline).lineLimit(full ? nil : 3)
@@ -437,7 +507,7 @@ struct DashboardView: View {
                 }
             }
         })
-        .task(id: changedSinceVisit.map(\.id).joined()) { await summarizeSince(force: false) }
+        .task(id: "\(changedSinceVisit.map(\.id).joined())|\(pageLive)") { if pageLive { await summarizeSince(force: false) } }
     }
 
     private func summarizeSince(force: Bool) async {
@@ -490,23 +560,32 @@ struct DashboardView: View {
         catch { return (nil, false) }
     }
 
-    private func load() async {
-        guard let rt = runtime else { return }
+    /// Whether the chat list arrived (a failed one may still leave the last list showing).
+    @discardableResult private func load() async -> Bool {
+        guard let rt = runtime else { return false }
         loading = true; defer { loading = false }
         // The gateway caps a page at 100 (a larger ask is refused outright).
         let allBots = homeAllBots
         async let u: (UsageAnalytics?, keep: Bool) = Self.usage(rt, days: rangeDays)
         async let s: [StoredSession]? = try? Self.chats(rt, allBots: allBots)
         let (usageResult, list) = await (u, s)
-        if let a = usageResult.0 { usage = a } else if !usageResult.keep { usage = nil }
-        if let list { sessions = list; error = nil }
-        else if sessions.isEmpty { error = "Could not load the chat list." }
+        // After a change of range the numbers count over, the grid's blocks fade to their new
+        // shades and the card's height glides, so the cards below move with it instead of jumping
+        // (#377). Any other load lands at once, as before.
+        let animated = rangeMoved
+        rangeMoved = false
+        withAnimation(animated ? .snappy(duration: 0.4) : nil) {
+            if let a = usageResult.0 { usage = a } else if !usageResult.keep { usage = nil }
+            if let list { sessions = list; error = nil }
+            else if sessions.isEmpty { error = "Could not load the chat list." }
+        }
         // The Overview widget and complications draw from the shared snapshot.
         if let a = usageResult.0, var snap = WidgetSnapshot.load() {
             snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list, previous: snap.usage)
             snap.save()
             WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
         }
+        return list != nil
     }
 }
 
@@ -575,39 +654,6 @@ enum Format {
         case ..<1_000_000: return String(format: "%.1fk", Double(n) / 1000)
         case ..<1_000_000_000: return String(format: "%.1fM", Double(n) / 1_000_000)
         default: return String(format: "%.2fB", Double(n) / 1_000_000_000)
-        }
-    }
-}
-
-
-/// A small choice drawn the way the tab bar is: labels on a glass capsule, a clear lens sliding
-/// under the chosen one (the lens morphs between positions inside the container).
-struct GlassSegments<T: Hashable>: View {
-    var options: [(T, String)]
-    @Binding var selection: T
-    @Namespace private var lens
-
-    var body: some View {
-        GlassEffectContainer(spacing: 6) {
-            HStack(spacing: 0) {
-                ForEach(options, id: \.0) { option in
-                    Text(option.1).font(.caption.weight(.semibold))
-                        .foregroundStyle(selection == option.0 ? .primary : .secondary)
-                        .frame(width: 42, height: 26)
-                        .contentShape(.rect)
-                        .background {
-                            if selection == option.0 {
-                                Capsule().fill(.clear)
-                                    .glassEffect(.clear.interactive(), in: .capsule)
-                                    .glassEffectID("lens", in: lens)
-                            }
-                        }
-                        .onTapGesture { withAnimation(.snappy(duration: 0.3)) { selection = option.0 } }
-                        .accessibilityAddTraits(selection == option.0 ? [.isButton, .isSelected] : .isButton)
-                }
-            }
-            .padding(3)
-            .glassEffect(.regular, in: .capsule)
         }
     }
 }

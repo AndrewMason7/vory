@@ -60,7 +60,32 @@ public enum MediaScan {
     }
 
     /// Paths with image extensions anywhere in a tool's output (a screenshot tool's result, say).
+    ///
+    /// Remembered by the output itself (the answer depends on nothing else): a tool card asks
+    /// every time its body runs, and the scan is a regular expression over the whole output, which
+    /// a long turn's cards re-ran with every event (#371, a fifth of the main thread's time in the
+    /// background). Bounded by the outputs' size; the system may empty it under memory pressure.
     public static func imagePaths(inToolOutput text: String) -> [MediaRef] {
+        let key = text as NSString
+        if let known = toolOutputPaths.object(forKey: key) { return known.paths }
+        let paths = scanImagePaths(inToolOutput: text)
+        toolOutputPaths.setObject(KnownPaths(paths), forKey: key, cost: text.utf8.count)
+        return paths
+    }
+
+    private final class KnownPaths {
+        let paths: [MediaRef]
+        init(_ paths: [MediaRef]) { self.paths = paths }
+    }
+
+    /// NSCache is safe to use from any thread.
+    nonisolated(unsafe) private static let toolOutputPaths: NSCache<NSString, KnownPaths> = {
+        let cache = NSCache<NSString, KnownPaths>()
+        cache.totalCostLimit = 4 << 20
+        return cache
+    }()
+
+    static func scanImagePaths(inToolOutput text: String) -> [MediaRef] {
         var out: [MediaRef] = []
         var seen = Set<String>()
         for m in text.matches(of: /(?:^|[\s"'`(=:])((?:~|\/)[^\s"'`)<>]+\.(?:png|jpe?g|gif|webp|heic|heif|bmp))/.ignoresCase()) {

@@ -99,6 +99,53 @@ import Testing
         #expect(M.overflow(contentWidth: 600, visibleMinX: 150, visibleMaxX: 450) == .init(leading: true, trailing: true))
         #expect(M.overflow(contentWidth: 600, visibleMinX: 300, visibleMaxX: 600) == .init(leading: true, trailing: false))
     }
+
+    @Test func measuredSizesAreKeptByWhatTheyWereMeasuredFrom() throws {
+        typealias L = MarkdownTableLayout
+        let t = try #require(onlyTable(Self.wide))
+        let key = L.SizeKey(table: t, font: .footnote, lineLimit: 3, headerInset: 22, typeSize: .large, bold: false, scale: 2)
+        var kept = L.Cache(key: key)
+        kept.natural = [70, 180, 120, 100, 160, 90]
+        kept.rows[[64, 180, 120, 100, 160, 90]] = [30, 44, 44]
+        L.SizeStore.shared.keep(kept)
+        // A row the lazy thread builds again finds them.
+        #expect(L.SizeStore.shared.cache(for: key).natural == kept.natural)
+        #expect(L.SizeStore.shared.cache(for: key).rows[[64, 180, 120, 100, 160, 90]] == [30, 44, 44])
+        // A cell that changed (a table still streaming), another text size or Bold Text measure afresh.
+        var edited = t
+        edited.rows[0][1] = "**Lab A — Model 1.1**"
+        var other = key
+        other.table = edited
+        #expect(L.SizeStore.shared.cache(for: other).natural == nil)
+        other = key
+        other.typeSize = .xLarge
+        #expect(L.SizeStore.shared.cache(for: other).natural == nil)
+        other = key
+        other.bold = true
+        #expect(L.SizeStore.shared.cache(for: other).natural == nil)
+        #expect(L.SizeStore.shared.cache(for: nil).key == nil)
+    }
+
+    @Test func aTableWithAMentionIsMeasuredAgainWhenTheNamesChange() throws {
+        typealias L = MarkdownTableLayout
+        // The bots' names arrive after the table was first measured: "@work" is then drawn
+        // semibold, wider, so the sizes measured without the names do not stand.
+        let t = try #require(onlyTable("| Owner | Task |\n|---|---|\n| @work | the deploy |\n"))
+        let before = Mentions.Names(), after = Mentions.Names(bots: ["work"], person: nil)
+        #expect(L.SizeKey.names(for: t, before) == before)
+        let key = L.SizeKey(table: t, font: .footnote, lineLimit: 3, headerInset: 22, typeSize: .large, bold: false, scale: 2,
+                            names: L.SizeKey.names(for: t, before))
+        var kept = L.Cache(key: key)
+        kept.natural = [64, 80]
+        L.SizeStore.shared.keep(kept)
+        var named = key
+        named.names = L.SizeKey.names(for: t, after)
+        #expect(L.SizeStore.shared.cache(for: key).natural == [64, 80])
+        #expect(L.SizeStore.shared.cache(for: named).natural == nil)
+        // A table with no "@" keeps its sizes whatever the names: they cannot change it.
+        let plain = try #require(onlyTable(Self.wide))
+        #expect(L.SizeKey.names(for: plain, after) == nil)
+    }
 }
 
 /// The Reasoning card's markdown style: the reply's look is untouched, html stays code.

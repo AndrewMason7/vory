@@ -8,9 +8,14 @@ import VoryCore
 /// along the bottom edge and a remove button on the top corner.
 struct StagedCard: View {
     var attachment: AttachmentPreview
+    /// It won't go with the message (a group chat starts with text only): the picture dims, the
+    /// × stays as it is so the file can still be taken out.
+    var notSent = false
     var onOpen: () -> Void
     var onRemove: () -> Void
     @State private var thumbnail: UIImage?
+    /// The pointer is over the card (the Mac): the × shows then, as in Mail and Messages.
+    @State private var hovering = false
     @Environment(\.displayScale) private var displayScale
 
     static let side: CGFloat = 92
@@ -70,7 +75,9 @@ struct StagedCard: View {
                 }
             }
             .buttonStyle(.plain)
+            .opacity(notSent ? 0.4 : 1)
             .accessibilityLabel("\(label): \(attachment.name)")
+            .accessibilityValue(notSent ? "Not sent in a group chat" : "")
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
@@ -81,9 +88,16 @@ struct StagedCard: View {
             }
             .buttonStyle(.plain)
             .offset(x: 6, y: -6)
+            #if os(macOS)
+            .opacity(hovering ? 1 : 0)
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            #endif
             .accessibilityLabel("Remove \(attachment.name)")
         }
         .padding(.top, 6).padding(.trailing, 6).padding(.bottom, 8)
+        #if os(macOS)
+        .onHover { hovering = $0 }
+        #endif
         .task(id: attachment.id) { await loadThumbnail() }
     }
 

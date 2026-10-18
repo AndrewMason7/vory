@@ -17,6 +17,19 @@ struct ConversationView: View {
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
+    @State private var dockBottom: CGFloat = 0
+    #if os(iOS)
+    /// The tab bar's height under the chat, when it is there and runs along the bottom.
+    private var barReserve: CGFloat { model.tabBarReserved && !model.tabBarVertical ? VoryTabBar.reservedHeight(in: windowGeometry) : 0 }
+    /// The fold of a partly open Duo across the window (Step D): a dock the keyboard has pushed
+    /// onto it moves up above it, with Apple's margin, so the field is never under the fold.
+    @Environment(\.reservedRegions) private var regions
+    private var foldLift: CGFloat {
+        guard let fold = regions.horizontalFold, dockBottom > dockTop, dockTop > 0,
+              fold.maxY + ReservedRegions.margin > dockTop, fold.minY < dockBottom else { return 0 }
+        return dockBottom - fold.minY + ReservedRegions.margin
+    }
+    #endif
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
     #if os(macOS)
     @State private var headerHeight: CGFloat = 0
@@ -24,54 +37,65 @@ struct ConversationView: View {
     @State private var headerHeight: CGFloat = 96
     #endif
     @State private var dockTop: CGFloat = 0
-    private var safeTop: CGFloat {
-        #if os(iOS)
-        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.first ?? 0
-        #else
-        0
-        #endif
-    }
+    /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
+    /// there, whatever safe area or camera strip the header stands in, and it moves with them.
+    @State private var headerBottom: CGFloat = 0
+    /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
+    @Environment(\.windowGeometry) private var windowGeometry
+    /// The Mac keeps the Chats page mounted behind the others (`macPageShown`, MainSplitView).
+    @Environment(\.macPageShown) private var pageShown
+    @Environment(\.wideLayout) private var wide
     /// The keyboard's height above the home-indicator area. Tracked by hand for the dock as the
     /// transcript does for itself: SwiftUI's own avoidance hands the inset to any scroll view in
     /// the dock (the command list) instead of lifting the dock, which left the composer under
     /// the keyboard.
-    @State private var keyboardInset: CGFloat = 0
     @State private var sentInitial = false
     @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
     private var confirmTitle: String { confirming?.choice == "deny" ? "Deny this action?" : "Approve this action?" }
+    /// Read where the bot's name shows, so a name saved on its card (#315) redraws the pill.
+    @AppStorage(BotNames.storageKey) private var namesRaw = ""
+    private func botLabel(_ chat: ChatSession) -> String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
     @Namespace private var glassNamespace
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        let _ = Perf.tick("conversation-body")
         Group {
             if let chat {
                 framed(chat)
                     .handsOff(chat)
-                    .navigationTitle(chat.title)
+                    .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
                     .toolbar(.hidden, for: .navigationBar)
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
-                    .onAppear { model.visibleChatID = chat.storedID; model.visibleChat = chat; LocalNotifier.clearDelivered(for: chat.storedID) }
+                    .onAppear {
+                        model.visibleChatID = chat.storedID; model.visibleChat = chat; LocalNotifier.clearDelivered(for: chat.storedID)
+                        Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
+                    }
                     // What arrived for this chat while it was away is read now: its notifications
                     // leave Notification Center (a tester: "notifications won't stop even after
-                    // attending to chat").
-                    .onChange(of: chat.items.count) { _, _ in if model.visibleChatID == chat.storedID { LocalNotifier.clearDelivered(for: chat.storedID) } }
+                    // attending to chat"). In a view of its own: read here, the items made the whole
+                    // page run again on every streamed token.
+                    .background { ClearsDelivered(chat: chat) }
                     .onReceive(NotificationCenter.default.publisher(for: .hermesNewChatRequested)) { n in
                         guard model.visibleChatID == chat.storedID else { return }
                         model.composeProfile = (n.userInfo?["profile"] as? String) ?? chat.profileName
                         model.newChatRequest = UUID()
                     }
                     .onDisappear {
+                        Perf.stamp("pop: conversation disappeared")
                         if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
                         if model.visibleChat === chat { model.visibleChat = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
                         model.runtime?.returnToDefaultProfile()
                     }
                     .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
+                    .onChange(of: showProfile) { _, _ in Smooth.animate("botCard") }
+                    .onChange(of: chat.isRunning, initial: true) { _, running in if running { Smooth.begin("turn") } else { Smooth.end("turn") } }
                     .sheet(isPresented: $renaming) { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
                     // A tapped "@bot" opens that bot's card; every other link goes its usual way.
                     .environment(\.openURL, OpenURLAction { url in
@@ -82,6 +106,21 @@ struct ConversationView: View {
                         if let b = mentionedBot { ProfileInfoSheet(chat: nil, profileName: b).sheetFrame().withAppModel() }
                     }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
+                    // The morph prototype's Back, drawn outside the stack (MorphTopBar).
+                    // The morph prototype's bar, drawn outside the stack, asks for the chat's actions
+                    // here; only the chat the bar shows answers.
+                    .onChange(of: model.chatRequest) { _, r in
+                        guard let r, MorphState.shared.chat === chat else { return }
+                        model.chatRequest = nil
+                        switch r.kind {
+                        case .back: dismiss()
+                        case .profile: showProfile = true
+                        case .rename: renaming = true
+                        case .context: showContext = true
+                        case .newChat: Task { await newChat() }
+                        case .close: model.runtime?.closeChat(chat); dismiss()
+                        }
+                    }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,
                     // restored when the chat opens, cleared by a send (the composer empties the text).
@@ -106,30 +145,32 @@ struct ConversationView: View {
     private func framed(_ chat: ChatSession) -> some View {
         #if os(macOS)
         thread(chat)
-            // With no toolbar strip the thread runs up under the bot's pill; it fades out
-            // there instead of meeting the pill and the window's edge at full strength.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black.opacity(0.35), .black], startPoint: .top, endPoint: .bottom).frame(height: 68)
-                    Color.black
-                }
-                .ignoresSafeArea()
-            }
+            // With no toolbar strip the thread runs up under the bot's pill and the window's edge
+            // at full strength, as on the phone (Matt, 2026-10-10: "remove the fades on the Mac
+            // too"); the 68 pt top fade mask that used to soften it is gone.
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                dock(chat).frame(maxWidth: ChatStyle.macColumn).frame(maxWidth: .infinity)
+                dock(chat).frame(maxWidth: ChatStyle.readingColumn).frame(maxWidth: .infinity)
             }
-            .navigationSubtitle(macSubtitle(chat))
+            .navigationSubtitle(pageShown ? macSubtitle(chat) : "")
             // No toolbar strip over the thread: the bot and the menu float on the window, as in
             // Messages. A short thread sits at the bottom with nothing above it, and the
             // toolbar's own background spread down over that gap as a lighter band.
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .toolbar {
+                // Only while the Chats page is on show (the Mac keeps it mounted behind the
+                // other pages, see MainSplitView): its items must not stand in their toolbar.
+                if pageShown {
                 // The bot, in the middle over its thread; a click opens its profile.
                 ToolbarItem(placement: .principal) {
-                    Button { showProfile = true } label: {
+                    // The face's small turn plays on the click, as on the iPhone's pill.
+                    Button { BotAmbient.shared.tap(profile: chat.profileName, session: chat.storedID); showProfile = true } label: {
                         HStack(spacing: 7) {
-                            BotAvatar(profile: chat.profileName, size: 22)
-                            Text(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName)
+                            // The pose the header shows on the phone, in the pill (the Mac's toolbar hosts it).
+                            BotAvatar(profile: chat.profileName, size: 22, active: chat.isRunning, mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
+                                // Part of the button's label: while the bot worked, the live face's own tap
+                                // took the click and the profile did not open; the button plays the turn now.
+                                .allowsHitTesting(false)
+                            Text(botLabel(chat))
                                 .font(.headline).lineLimit(1)
                         }
                         .padding(.horizontal, 4)
@@ -156,17 +197,36 @@ struct ConversationView: View {
                     .help("Chat options")
                     .accessibilityIdentifier("chat.more")
                 }
+                }
             }
         #else
         // The thread runs under the status bar (it ignores the top safe area) while the
         // header sits inside it, so the thread's top margin is the header plus that inset;
         // without it the first message starts under the pill.
-        thread(chat)
-            // Like Messages: header and dock float over the thread and the text scrolls under their glass.
-            .overlay(alignment: .bottom) { dock(chat) }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification), perform: keyboardChanged)
-            .overlay(alignment: .top) { header(chat) }
+        // Like Messages: header and dock float over the thread and the text scrolls under their glass.
+        // No band under the header or under the dock (Matt, on the phone, 2026-10-10: "I
+        // dont like the fade at the top or the bottom, you should see the messages from all
+        // the way behind the message bar and behind the name"): the thread runs under both
+        // and shows through their glass; only its rest margins keep the ends clear.
+        ZStack(alignment: .bottom) {
+            // The thread keeps the window's full height whatever the keyboard does; its bottom
+            // margin is measured from the dock (`dockTop`), with the keyboard's final height
+            // as the fallback (`keyboardOverlap`, the window's number, unanimated).
+            thread(chat)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+            // The dock is a sibling, not an overlay of the thread: it sits in the keyboard's own
+            // safe area and rides the keyboard's animation (Matt, 2026-10-11: the bar "lags
+            // behind the keyboard opening and closing", "the keyboard collapses completely
+            // before the chat moves"): a hand-made spring took half a second against the
+            // keyboard's quarter. On a wide layout it keeps to the reading column, as on the Mac.
+            // Above the tab bar when the bar stands under the chat (a wide layout with the bar
+            // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
+            // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
+            dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
+        }
+            // On a one-column layout the morph bar (MorphTopBar) draws the chat's controls; on a
+            // wide window this header does, over the detail column.
+            .overlay(alignment: .top) { if !MorphTopBar.active(model) { header(chat) } }
             // Voice mode runs out of sight under its pill, and in front on its own screen.
             .overlay(alignment: .top) {
                 if HandsFreeSession.shared.isActive(for: chat), HandsFreeSession.shared.minimized {
@@ -189,7 +249,18 @@ struct ConversationView: View {
             // Stored chats return at once with the cached transcript and sync behind the header.
             // The chat keeps the bot it belongs to for as long as it is open, whatever is selected later.
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
-            else { chat = try await runtime.newChat(cwd: route.cwd) }
+            else {
+                let fresh = try await runtime.newChat(cwd: route.cwd)
+                // The compose sheet's model and reasoning level (#27), set before the chat shows
+                // and before its first message goes, so that message runs on them.
+                if let m = route.initialModel {
+                    do { try await fresh.setModel(provider: m.provider, model: m.model) } catch { fresh.banner = error.localizedDescription }
+                }
+                if let r = route.initialReasoning {
+                    do { try await fresh.setReasoning(r) } catch { fresh.banner = error.localizedDescription }
+                }
+                chat = fresh
+            }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
             #if DEBUG
             // For a UI test: `-vory-test-stage <name>.pdf` stages a small PDF of that name in
@@ -234,12 +305,13 @@ struct ConversationView: View {
     private func thread(_ chat: ChatSession) -> some View {
         #if os(macOS)
         // The dock is a bottom inset on the Mac: the thread needs no margins of its own.
-        let (dockTopArg, fallback, top): (CGFloat, CGFloat, CGFloat) = (0, 0, 0)
+        let (dockTopArg, fallback, top, fade): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
         #else
-        let (dockTopArg, fallback, top) = (dockTop, dockHeight + keyboardInset, headerHeight + safeTop)
+        // Until the header has been measured, its default height plus the status bar's usual share.
+        let (dockTopArg, fallback, top, fade) = (dockTop, dockHeight + windowGeometry.keyboardOverlap, headerHeight + windowGeometry.safeArea.top, ChatStyle.bandFade)
         #endif
         return TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
-                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top)
+                       dockTop: dockTopArg, fallbackInset: fallback, topInset: top, headerBottom: headerBottom, bandFade: fade)
             #if os(iOS)
             // The thread's margins (header above, dock and keyboard below) add up to a minimum
             // height. On a small phone with the keyboard up, or any phone with a tall card in
@@ -252,24 +324,45 @@ struct ConversationView: View {
                 if let e = chat.resumeError, chat.items.isEmpty {
                     ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(e))
                         // Centred in what is left above the composer and the keyboard.
-                        .padding(.bottom, dockHeight + keyboardInset)
+                        .padding(.bottom, dockHeight + windowGeometry.keyboardOverlap)
                 }
             }
     }
+
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
             // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
-            .padding(.bottom, keyboardInset)
+            // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
             // The dock's top edge on screen, keyboard included: the thread measures its
-            // own bottom edge the same way and keeps its last line above this.
+            // own bottom edge the same way and keeps its last line above this. It follows
+            // every frame of an interactive keyboard dismiss too: the thread's rows no longer
+            // rebuild for it (TranscriptRow takes its open states as values), so the thread
+            // rides with the keyboard instead of holding and jumping (Matt, 2026-10-11).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
+            // The dock's frame for the UI tests (its own container: an identifier on a plain
+            // view goes to every child, and the composer lost its name).
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat.dock")
     }
     private func header(_ chat: ChatSession) -> some View {
-        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
-                   onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+        // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
+        FoldReader { fold in
+            // Back stays on a wide window too (Matt, 2026-10-10): it clears the column.
+            ChatHeader(chat: chat, fold: fold, showBack: true,
+                       onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
+                       onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
+                // The header's own size and bottom edge (the reader around it is thread-sized):
+                // its height, and its bottom in window space for the thread's top margin.
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { headerBottom = $0 }
+                // The header's frame for the UI tests (a container of its own, as the dock).
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("chat.header")
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
             // One group for VoiceOver, placed after the thread and the dock in the accessibility
             // order. The accessibility hit test (XCUITest's isHittable, touch to explore) tries
             // the screen's elements from the last one back, as if the last were on top, and goes
@@ -282,24 +375,6 @@ struct ConversationView: View {
             .accessibilityElement(children: .contain)
             .accessibilitySortPriority(-1)
     }
-    #if os(iOS)
-    private func keyboardChanged(_ n: Notification) {
-        guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-        let screen = UIScreen.main.bounds
-        // A frame that is not a keyboard's (a floating or hardware keyboard's accessory, a frame
-        // from another scene, a whole-screen rect) must not push the dock to the top of the
-        // screen, as it did for a tester mid-turn. A keyboard sits on the bottom edge and is
-        // less than two thirds of the screen tall.
-        let onScreen = end.intersection(screen)
-        guard end.height < screen.height * 0.66, onScreen.isNull || onScreen.maxY >= screen.maxY - 1 || end.minY >= screen.maxY else { return }
-        let covered = max(0, screen.maxY - end.minY)
-        let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
-        withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
-            keyboardInset = min(max(0, covered - safeBottom), screen.height * 0.6)
-        }
-    }
-    #endif
-
     // The confirmation alert's pieces live apart from the body: inside it they tipped the type
     // checker over its limit.
     private var confirmShown: Binding<Bool> {
@@ -343,7 +418,7 @@ struct ConversationView: View {
         var parts = [bot]
         if !model.isEmpty { parts.append(model) }
         // What it is working on, when the on-device model has written it; else the step it is on.
-        if chat.isRunning { parts.append(ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "Thinking…") } else if chat.isResuming { parts.append("Syncing…") }
+        if chat.isRunning { parts.append(ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "Thinking…") } else if chat.showsSyncing { parts.append("Syncing…") }
         return parts.joined(separator: " · ")
     }
     #endif
@@ -351,6 +426,23 @@ struct ConversationView: View {
     private func handle(route r: PendingRoute?, chat: ChatSession) {
         guard let r, r.storedSessionID == chat.storedID else { return }
         model.pendingRoute = nil
+    }
+}
+
+/// Clears the chat's delivered notifications as its items arrive while it is in front. Its own
+/// view so only it depends on the items: a reply writes them on every streamed token, and read in
+/// ConversationView's body they ran the whole page again each time (14 times a second on a long
+/// reply, with its sheets, alerts and the dock re-evaluated).
+private struct ClearsDelivered: View {
+    @Environment(AppModel.self) private var model
+    let chat: ChatSession
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+            .onChange(of: chat.items.count) { old, new in
+                guard model.visibleChatID == chat.storedID else { return }
+                LocalNotifier.clearDelivered(for: chat.storedID)
+                Perf.stamp("notifications: cleared for \(chat.storedID) (items \(old) → \(new) while shown)")
+            }
     }
 }
 
@@ -390,22 +482,12 @@ struct BottomDock: View {
                         .glassEffectID("dock", in: namespace)
                         .accessibilityLabel("Read-only: this is another bot's chat")
                 } else if let card = chat.firstCard {
-                    if card.method == "approval" {
-                        PendingCardView(chat: chat, card: card)
-                            .glassEffectID("dock", in: namespace)
-                            .contextMenu {
-                                Button { Task { await chat.respond(card: card, result: ["choice": "once"]) } } label: { Label("Allow once", systemImage: "checkmark") }
-                                Button { Task { await chat.respond(card: card, result: ["choice": "session"]) } } label: { Label("Allow for this session", systemImage: "checkmark.circle") }
-                                Button { Task { await chat.respond(card: card, result: ["choice": "always"]) } } label: { Label("Always allow", systemImage: "checkmark.seal") }
-                                Divider()
-                                Button(role: .destructive) { Task { await chat.respond(card: card, result: ["choice": "deny"]) } } label: { Label("Deny", systemImage: "xmark") }
-                            }
-                    } else {
-                        // No context menu on a password or question card: a long press on the
-                        // secure field inside an empty menu was one more thing to go wrong.
-                        PendingCardView(chat: chat, card: card)
-                            .glassEffectID("dock", in: namespace)
-                    }
+                    // No long-press menu on any card: an approval is answered on its own buttons,
+                    // which offer exactly the gateway's choices, "Always" asking first. The menu an
+                    // approval card had (all four choices, Always without a question) never opened
+                    // inside this glass container anyway (26).
+                    PendingCardView(chat: chat, card: card)
+                        .glassEffectID("dock", in: namespace)
                 } else {
                     ComposerView(chat: chat, text: $text, quote: $quote, namespace: namespace)
                 }
@@ -449,6 +531,10 @@ struct QueueStrip: View {
 /// the bot's avatar above the name (status while the agent works), and a glass … circle.
 struct ChatHeader: View {
     @Bindable var chat: ChatSession
+    /// The fold's frame in this header's coordinates when a partly open Duo has one here; the
+    /// pill moves to the side of it with more room (nothing interactive sits on the fold).
+    var fold: CGRect? = nil
+    var showBack = true
     var onBack: () -> Void
     var onProfile: () -> Void
     var onRename: () -> Void
@@ -463,7 +549,14 @@ struct ChatHeader: View {
     /// element would otherwise be the oldest message laid out.
     @AccessibilityFocusState private var backFocused: Bool
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
-    private var botLabel: String { chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
+    /// The pill's frame and the header's width, for keeping the pill off the fold.
+    @State private var pillFrame: CGRect = .zero
+    @State private var headerWidth: CGFloat = 0
+    /// Read here so a name saved on the bot's card (#315) redraws the header.
+    @AppStorage(BotNames.storageKey) private var namesRaw = ""
+    private var botLabel: String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
+    /// Read here so a shape changed on the bot's card re-seats the face on its pill.
+    @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
     private var headline: String { headerShowsTitle ? chat.title : botLabel }
     private var idleLine: String { headerShowsTitle ? chat.subtitle : (chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title) }
 
@@ -471,26 +564,34 @@ struct ChatHeader: View {
         // No glass container here: a container draws its glass on a layer above the rest, and
         // the pill covered the bot sitting on it.
         HStack(alignment: .top, spacing: 12) {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+            if showBack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
+                .accessibilityFocused($backFocused)
+            } else {
+                Color.clear.frame(width: 44, height: 44)
             }
-            .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
-            .accessibilityFocused($backFocused)
             Spacer(minLength: 0)
             Button {
-                // The bot on the pill turns for the tap as it does elsewhere, and the plate opens.
-                BotAmbient.shared.tap(profile: chat.profileName)
+                // The bot on the pill reacts to the tap as it does elsewhere, and the plate opens.
+                BotAmbient.shared.tap(profile: chat.profileName, session: chat.storedID)
+                #if os(iOS)
+                // Bot info covers the face at once: its own face plays the reaction as it lands.
+                BotAmbient.shared.markArrival(profile: chat.profileName)
+                #endif
                 onProfile()
             } label: {
                 // Seated on the pill by its base; while it asks (the "!"), it lifts clear so the
                 // dot does not cover the name.
-                VStack(spacing: chat.botState == .awaitingApproval ? 2 : -(9 + 52 * BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName).spec(hex: "").shape))) {
+                VStack(spacing: chat.botState == .awaitingApproval ? 2 : -(9 + 52 * BotFace.seatDrop(BotAvatarStore.choice(for: chat.profileName, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape))) {
                     // The bot sits on the pill, its base a few points over the top edge (measured from
                     // the shape, not the frame), like a contact photo in Messages; it springs in from
                     // small on the first appearance.
                     BotAvatar(profile: chat.profileName, size: 52, active: chat.isRunning,
-                              mood: BotFaceView.Mood(state: chat.botState))
+                              mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
                         .opacity(popped ? 1 : 0)
                         .zIndex(1)
                         // The face's own tap gesture would swallow the tap before the button saw
@@ -507,7 +608,7 @@ struct ChatHeader: View {
                         // sentence, and the pill would stretch to the edges for it.
                         // While it works: the goal the on-device model wrote, else the step it is on.
                         let goal = chat.isRunning ? ChatGoals.shared.goal(for: chat.storedID) : nil
-                        let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : idleLine)
+                        let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.showsSyncing ? "Syncing…" : idleLine)
                         Text(status.count > 42 ? String(status.prefix(41)).trimmingCharacters(in: .whitespaces) + "…" : status)
                             .font(.caption2).lineLimit(1)
                             .foregroundStyle(.secondary)
@@ -526,6 +627,9 @@ struct ChatHeader: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            // Off the fold of a partly open Duo: to whichever side has more room.
+            .offset(x: FoldAvoidance.offset(for: pillFrame, fold: fold, in: headerWidth))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("chatHeader")) } action: { pillFrame = $0 }
             // The pill is offered that room before the spacers beside it share what is left, so
             // it is cut short only when its text does not fit.
             .layoutPriority(1)
@@ -551,6 +655,8 @@ struct ChatHeader: View {
             .accessibilityIdentifier("chat.more")
         }
         .padding(.horizontal, 16)
+        .coordinateSpace(.named("chatHeader"))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { headerWidth = $0 }
         .padding(.top, 4)
         // The bar is one surface, like the Messages header: a tap anywhere on it stays on it and
         // never reaches the thread scrolling underneath (a tool card would otherwise expand).
@@ -575,14 +681,15 @@ struct ChatMenuItems: View {
     var onClose: () -> Void
 
     var body: some View {
+        let _ = Perf.tick("chat-menu-items")
         Menu {
             ModelMenuContent(chat: chat)
-        } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
+        } label: { MenuLabel("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         ReasoningEffortMenu(chat: chat)
-        Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
-        Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
-        Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
-        Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
+        Button(action: onContext) { MenuLabel("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
+        Button(action: onProfile) { MenuLabel("Bot info", systemImage: "person.text.rectangle") }
+        Button(action: onRename) { MenuLabel("Rename chat", systemImage: "pencil") }
+        Button { HandsFreeSession.shared.start(chat: chat) } label: { MenuLabel("Voice mode", systemImage: "waveform.badge.mic") }
         #if os(iOS)
         // The newest finished reply read aloud, as the Mac's Chat menu has it; again stops it.
         if let last = VoiceCoordinator.lastReply(in: chat.items) {
@@ -594,10 +701,10 @@ struct ChatMenuItems: View {
         #endif
         ChatProjectMenu(chat: chat)
         Divider()
-        Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }
-        Button { Task { await chat.loadUsage() } } label: { Label("Refresh usage", systemImage: "arrow.clockwise") }
+        Button(action: onNewChat) { MenuLabel("New Chat", systemImage: "square.and.pencil") }
+        Button { Task { await chat.loadUsage() } } label: { MenuLabel("Refresh usage", systemImage: "arrow.clockwise") }
         Divider()
-        Button(role: .destructive, action: onClose) { Label("Close session", systemImage: "xmark.circle") }
+        Button(role: .destructive, action: onClose) { MenuLabel("Close session", systemImage: "xmark.circle") }
     }
 }
 
@@ -628,17 +735,94 @@ struct InteractivePopEnabler: UIViewControllerRepresentable {
     }
 }
 
+/// Marks a pushed page whose own Cancel is the only way back (`.cancelIsTheWayBack()`): neither
+/// the edge swipe nor the full-screen pan pops it. A hidden child of the page's controller, read
+/// by FullScreenPop. A judgement call made while Matt was out: `-vory-form-swipe-on` lets the
+/// swipe pop these pages again.
+struct NoSwipeBackMarker: UIViewControllerRepresentable {
+    static let off = ProcessInfo.processInfo.arguments.contains("-vory-form-swipe-on")
+    final class Controller: UIViewController {
+        override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.isHidden = true; view = v }
+    }
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ c: Controller, context: Context) {}
+    /// This page, or a controller inside it, carries the marker.
+    static func marks(_ vc: UIViewController) -> Bool {
+        var queue = [vc], seen = 0
+        while let c = queue.popLast(), seen < 64 {
+            seen += 1
+            if c is Controller { return true }
+            queue += c.children
+        }
+        return false
+    }
+}
+
+extension View {
+    /// A pushed page whose own Cancel is the way back: no system back arrow beside it, and no
+    /// back swipe, which would drop what it holds unasked.
+    func cancelIsTheWayBack() -> some View {
+        navigationBarBackButtonHidden(true).background(NoSwipeBackMarker().frame(width: 0, height: 0).accessibilityHidden(true))
+    }
+}
+
 /// The one full-screen back pan of a navigation stack and the delegate for both it and the
 /// system's edge gesture; kept alive on the navigation controller itself.
 final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
     private static var key = 0
     private weak var nav: UINavigationController?
     private weak var pan: UIPanGestureRecognizer?
+    /// The back swipe's progress for whoever draws along with it (RootView's tab bar): the
+    /// fraction, and whether this is the end (then the fraction is 0 for a cancelled swipe or
+    /// 1 for a completed one, to be animated over `duration`).
+    nonisolated(unsafe) static var onProgress: ((_ fraction: CGFloat, _ ended: Bool, _ duration: Double) -> Void)?
+    private var tracking = false
+    /// The stack's depth when the swipe began: a pop that has already finished by the time
+    /// the finger lifts (a quick flick) shows as one controller fewer.
+    private var depthAtBegin = 0
+
+    @objc private func track(_ g: UIPanGestureRecognizer) {
+        guard let nav, let view = g.view else { return }
+        switch g.state {
+        case .began, .changed:
+            guard nav.transitionCoordinator?.isInteractive == true || g.state == .began else { return }
+            if !tracking { Perf.stamp("pop: swipe began"); depthAtBegin = nav.viewControllers.count }
+            tracking = true
+            let fraction = max(0, min(1, g.translation(in: view).x / max(1, view.bounds.width)))
+            Self.onProgress?(fraction, false, 0)
+        case .ended, .cancelled, .failed:
+            guard tracking else { return }
+            tracking = false
+            Perf.stamp("pop: swipe released")
+            if let c = nav.transitionCoordinator {
+                let duration = c.transitionDuration
+                let remaining = { (ctx: UIViewControllerTransitionCoordinatorContext) in max(0.15, duration * (1 - Double(ctx.percentComplete))) }
+                if c.isInteractive {
+                    c.notifyWhenInteractionChanges { ctx in
+                        Perf.stamp("pop: interaction ended cancelled=\(ctx.isCancelled) at \(ctx.percentComplete)")
+                        Self.onProgress?(ctx.isCancelled ? 0 : 1, true, remaining(ctx))
+                    }
+                } else {
+                    // The system's own handler ran first and has already decided the end.
+                    Perf.stamp("pop: swipe end decided cancelled=\(c.isCancelled) at \(c.percentComplete)")
+                    Self.onProgress?(c.isCancelled ? 0 : 1, true, remaining(c))
+                }
+                c.animate(alongsideTransition: nil) { ctx in Perf.stamp("pop: transition completed cancelled=\(ctx.isCancelled)") }
+            } else {
+                // No transition left: a flick that has already popped, or a pan that never did.
+                let popped = nav.viewControllers.count < depthAtBegin
+                Perf.stamp("pop: swipe ended with no transition, popped=\(popped)")
+                Self.onProgress?(popped ? 1 : 0, true, 0.2)
+            }
+        default: break
+        }
+    }
 
     static func install(on nav: UINavigationController) {
         guard let edge = nav.interactivePopGestureRecognizer else { return }
         edge.isEnabled = true
         if let existing = objc_getAssociatedObject(nav, &key) as? FullScreenPop {
+            edge.removeTarget(existing, action: #selector(track(_:))); edge.addTarget(existing, action: #selector(track(_:)))
             edge.delegate = existing
             if existing.pan == nil || existing.pan?.view == nil { existing.addPan(edge: edge) }
             return
@@ -647,6 +831,7 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
         d.nav = nav
         objc_setAssociatedObject(nav, &key, d, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         edge.delegate = d
+        edge.addTarget(d, action: #selector(track(_:)))
         d.addPan(edge: edge)
     }
 
@@ -657,6 +842,7 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
         let pan = UIPanGestureRecognizer()
         pan.name = "vory.fullScreenPop"
         pan.setValue(targets, forKey: "targets")
+        pan.addTarget(self, action: #selector(track(_:)))
         pan.delegate = self
         pan.maximumNumberOfTouches = 1
         nav.view.addGestureRecognizer(pan)
@@ -665,6 +851,9 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard let nav, nav.viewControllers.count > 1 else { return false }
+        // A page whose own Cancel is the way back (a gateway form) is not swiped away, by the
+        // edge or anywhere: the swipe dropped its edits unasked.
+        if !NoSwipeBackMarker.off, let top = nav.topViewController, NoSwipeBackMarker.marks(top) { return false }
         guard let pan = g as? UIPanGestureRecognizer, g === self.pan else { return true }
         // A row of a list keeps its own swipe (the Board's Done and Unblock are a leading swipe,
         // which this pan ate on a Board pushed from Settings); the edge gesture still goes back there.
@@ -689,6 +878,19 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
 #endif
 
 /// Unsent composer text, per session, so leaving a chat and coming back does not lose it.
+/// What a chat's views had when they went away and get back when they return: the composer's
+/// keyboard focus and the thread's distance from its end. A layout switch (the open Duo turned
+/// upright or back: one column to two) rebuilds the chat's views; the open chat is in
+/// `AppModel.chatPath`, the draft in `ComposerDrafts`, and these two are the rest of what the
+/// person had under their hands. In memory only, for the app's run.
+@MainActor enum ChatViewMemory {
+    static func key(for chat: ChatSession) -> String { chat.storedID ?? chat.runtimeID }
+    private(set) static var focused: Set<String> = []
+    private(set) static var distanceFromEnd: [String: CGFloat] = [:]
+    static func setFocused(_ on: Bool, for chat: ChatSession) { if on { focused.insert(key(for: chat)) } else { focused.remove(key(for: chat)) } }
+    static func setDistanceFromEnd(_ d: CGFloat?, for chat: ChatSession) { distanceFromEnd[key(for: chat)] = d }
+}
+
 @MainActor
 enum ComposerDrafts {
     private static func key(for chat: ChatSession) -> String { "composerDraft." + (chat.storedID ?? chat.runtimeID) }
@@ -699,7 +901,11 @@ enum ComposerDrafts {
     }
 
     static func save(_ text: String, for chat: ChatSession) {
-        if text.isEmpty { UserDefaults.standard.removeObject(forKey: key(for: chat)) }
-        else { UserDefaults.standard.set(text, forKey: key(for: chat)) }
+        // Only a write that changes something: every defaults write re-runs the views that read
+        // defaults (the chat list's filters), and an empty draft was written on every Back.
+        let k = key(for: chat)
+        let stored = UserDefaults.standard.string(forKey: k)
+        if text.isEmpty { if stored != nil { UserDefaults.standard.removeObject(forKey: k) } }
+        else if stored != text { UserDefaults.standard.set(text, forKey: k) }
     }
 }

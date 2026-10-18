@@ -487,6 +487,28 @@ struct RememberedSignInTests {
         #expect(!old.vault.contains(c.id))
     }
 
+    /// #283: a gateway with a backup address signs in again at the address in use, either of
+    /// the two the person typed for it; any other address still never gets the password.
+    @Test func aRememberedSignInGoesToEitherAddressOfTheGateway() async throws {
+        var c = try gateway()
+        c.alternate = try GatewayURL.normalize("https://hermes.tail1234.ts.net")
+        let co = coordinator()
+        try co.vault.remember(secret, for: c.id)
+        let sentTo = Recorder<GatewayURL>()
+        co.signIn = { conn, _, _ in sentTo.items.append(conn.gateway); return GatewaySecrets(accessToken: "a") }
+
+        #expect(await co.signInAgain(c.using(try #require(c.alternate)), access: CloudflareAccess()) != nil)
+        #expect(sentTo.items == [try #require(c.alternate)], "signed in where the gateway is reached")
+        #expect(co.vault.contains(c.id), "kept: the backup is this gateway's own")
+
+        var stranger = c
+        stranger.alternate = try GatewayURL.normalize("https://elsewhere.example.net")
+        stranger = stranger.using(try #require(stranger.alternate))
+        stranger.alternate = nil
+        co.signIn = { _, _, _ in Issue.record("the password was sent to an address not given for this gateway"); return GatewaySecrets() }
+        #expect(await co.signInAgain(stranger, access: CloudflareAccess()) == nil)
+    }
+
     @Test func aPasswordTheGatewayTurnsDownIsForgotten() async throws {
         let c = try gateway(), co = coordinator()
         try co.vault.remember(secret, for: c.id)

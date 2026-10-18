@@ -62,8 +62,22 @@ final class ChatScrollUITests: XCTestCase {
         guard let snap = try? app.snapshot() else { return nil }
         let window = app.windows.firstMatch.frame
         var candidates: [(label: String, y: CGFloat)] = []
+        // Every text in the thread, counted: the row held must be found again by its words, so a
+        // line the report repeats ("Action: rotate the log and watch it", in most shards) cannot
+        // be it. Picked, it was found again a hundred rows up, and read as the thread having moved
+        // 11,165 pt.
+        var seen: [String: Int] = [:]
+        func count(_ s: XCUIElementSnapshot) {
+            if s.elementType == .staticText { seen[s.label.lowercased(), default: 0] += 1 }
+            for c in s.children { count(c) }
+        }
+        count(snap)
+        func unique(_ label: String) -> Bool {
+            let l = label.lowercased()
+            return seen.filter { $0.key.contains(l) }.values.reduce(0, +) == 1
+        }
         func walk(_ s: XCUIElementSnapshot) {
-            if s.elementType == .staticText {
+            if s.elementType == .staticText, unique(s.label) {
                 let f = s.frame
                 // A row's own words, not a status that comes and goes ("Running terminal…").
                 if s.label.count >= 12, !s.label.contains("…"), f.minY > window.minY + 120, f.maxY < window.maxY - 160 {
@@ -74,6 +88,30 @@ final class ChatScrollUITests: XCTestCase {
         }
         walk(snap)
         return candidates.first { $0.label.hasPrefix("Step ") || $0.label.hasPrefix("grep ") } ?? candidates.first
+    }
+
+    /// The bottom edge of the lowest row of the thread (a card, the typing bubble, the status
+    /// line): every row is an element named "thread.…".
+    private func lowestRowBottom() -> CGFloat? {
+        guard let snap = try? app.snapshot() else { return nil }
+        var bottom: CGFloat?
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.identifier.hasPrefix("thread."), s.frame.height > 0 { bottom = max(bottom ?? -.infinity, s.frame.maxY); return }
+            for c in s.children { walk(c) }
+        }
+        walk(snap)
+        return bottom
+    }
+
+    /// Back at the end, the last row ends clear of the bar (an 8 pt margin): nothing is hidden
+    /// at rest, only while scrolling does text pass behind the field's glass.
+    private func assertEndClearsTheDock(_ label: String) throws {
+        let dock = app.otherElements["chat.dock"].firstMatch
+        XCTAssertTrue(dock.exists, "\(label): no dock")
+        let bottom = try XCTUnwrap(lowestRowBottom(), "\(label): no rows")
+        let gap = dock.frame.minY - bottom
+        if gap < 6 { shot("scroll-end-under-dock-\(label)") }
+        XCTAssertGreaterThanOrEqual(gap, 6, "\(label): the last row ends \(Int(gap)) pt above the dock: under the bar")
     }
 
     private func sendMarathon(_ steps: Int) {
@@ -112,7 +150,12 @@ final class ChatScrollUITests: XCTestCase {
         let end = text("Everything else looked healthy")
         XCTAssertFalse(end.firstMatch.exists, "the report had already finished: too short to scroll during")
 
-        // 1. Up the thread while it streams: the words on screen stay put until the end.
+        // 1. Up the thread while it streams: the words on screen stay put until the end. The
+        // keyboard is still up from typing the prompt, and a drag on the thread works on it first
+        // (it dismisses interactively): without a swipe of its own the scroll-up could leave the
+        // thread at its end, where it rightly followed the reply.
+        if app.keyboards.firstMatch.exists { app.swipeDown(velocity: .slow); RunLoop.current.run(until: Date().addingTimeInterval(0.6)) }
+        print("CHAT-SCROLL keyboard after dismissing: \(app.keyboards.firstMatch.exists)")
         app.swipeDown(velocity: .slow)
         app.swipeDown(velocity: .slow)
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
@@ -131,6 +174,8 @@ final class ChatScrollUITests: XCTestCase {
         arrow.tap()
         XCTAssertTrue(end.firstMatch.waitForExistence(timeout: 10))
         RunLoop.current.run(until: Date().addingTimeInterval(1))
+        shot("scroll-back-at-end")
+        try assertEndClearsTheDock("after-arrow")
 
         // 2. After the reply: up the thread again, and nothing brings it back.
         app.swipeDown(velocity: .slow)
@@ -152,5 +197,51 @@ final class ChatScrollUITests: XCTestCase {
         let farHeld = text(far.label).firstMatch
         XCTAssertTrue(farHeld.exists, "the row held far up (\(far.label.prefix(30))) is no longer on screen: the thread moved")
         XCTAssertEqual(farHeld.frame.minY, far.y, accuracy: 24, "the thread moved \(Int(farHeld.frame.minY - far.y)) pt on its own while reading earlier messages")
+    }
+
+    /// A reader who leaves a chat partway up finds it there again when they open it next (#329:
+    /// the place is kept per chat, `ChatViewMemory`), not pulled to the end. The open's own landing
+    /// must not take it away (1.5 (24): the open lands a past-the-end at once while locked).
+    func testAReaderReopensAChatAtTheirPlace() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        continueAfterFailure = false
+        launch(url: url, token: token)
+        // The list's row, not the chat's title pill, which carries the same words.
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup' AND identifier != 'chat.titlePill'"))
+        let row = try XCTUnwrap(hittable(rows, timeout: 40), "no Disk cleanup row")
+        row.tap()
+
+        // A long reply, then up the thread a little and out of the chat.
+        sendMarathon(20)
+        XCTAssertTrue(text("Everything else looked healthy").firstMatch.waitForExistence(timeout: 90), "the turn did not finish")
+        if app.keyboards.firstMatch.exists { app.swipeDown(velocity: .slow); RunLoop.current.run(until: Date().addingTimeInterval(0.6)) }
+        app.swipeDown(velocity: .slow)
+        app.swipeDown(velocity: .slow)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let place = try XCTUnwrap(mark(), "no row on screen up the thread")
+        shot("place-before-leaving")
+        let back = app.descendants(matching: .any).matching(identifier: "chat.back").firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "no Back")
+        back.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+
+        // Open again: the same row, where it was, and the arrow, since the thread is away from its end.
+        let again = try XCTUnwrap(hittable(rows, timeout: 10), "the list did not come back")
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        again.tap()
+        XCTAssertTrue(app.otherElements["chat.dock"].firstMatch.waitForExistence(timeout: 20), "the chat did not open again")
+        RunLoop.current.run(until: Date().addingTimeInterval(2.5))
+        shot("place-after-reopening")
+        let held = text(place.label).firstMatch
+        XCTAssertTrue(held.exists, "the row the reader left (\(place.label.prefix(30))) is not on screen: the place was lost")
+        print("CHAT-SCROLL place before \(Int(place.y)) after \(Int(held.frame.minY))")
+        // #373, kept here as a check: on 1.5 (23) and (24) the reopened chat lands about
+        // 750 pt from the reader's place. The place is remembered (#329); the open's landing moves
+        // it. When it is fixed this expectation fails ("expected failure did not occur"): remove it.
+        continueAfterFailure = true
+        XCTExpectFailure("#373: the reopened chat lands about 750 pt from where the reader left it (1.5 (23), (24))") {
+            XCTAssertEqual(held.frame.minY, place.y, accuracy: 40, "the reopened chat is \(Int(held.frame.minY - place.y)) pt from where the reader left it")
+            XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Jump to latest'")).firstMatch.exists, "no jump arrow: the reopened chat is at its end")
+        }
     }
 }

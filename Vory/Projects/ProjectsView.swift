@@ -42,11 +42,18 @@ struct ProjectsView: View {
             }
         }
         .untitledPage()
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search projects")
-        .toolbar {
+        .pageSearchable(text: $searchText, prompt: "Search projects")
+        .pageToolbar {
             ToolbarItem(placement: .primaryAction) {
+                #if os(iOS)
+                if MorphTopBar.active(model) { EmptyView() } else {
                 Button { showCreate = true } label: { Label("New project", systemImage: "plus") }
                     .disabled(model.runtime?.projects.available != true)
+                }
+                #else
+                Button { showCreate = true } label: { Label("New project", systemImage: "plus") }
+                    .disabled(model.runtime?.projects.available != true)
+                #endif
             }
         }
         .sheet(isPresented: $showCreate) { if let rt = model.runtime { NewProjectSheet(runtime: rt).sheetFrame().withAppModel() } }
@@ -67,6 +74,10 @@ struct ProjectsView: View {
         } message: { Text("The folders and the chats stay on the gateway. Only the grouping goes.") }
         .task { await model.runtime?.projects.refresh() }
         .reloadable { await model.runtime?.projects.refresh() }
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .projectsNew else { return }
+            model.pageRequest = nil; showCreate = true
+        }
     }
 
     private func row(_ p: Project, store: ProjectsStore) -> some View {

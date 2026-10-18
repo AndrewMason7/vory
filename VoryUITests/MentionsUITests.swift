@@ -82,13 +82,15 @@ final class MentionsUITests: XCTestCase {
         let reply = text("Handing the deploy").firstMatch
         XCTAssertTrue(reply.exists)
         let links = app.links.allElementsBoundByIndex.filter { $0.exists }
-        let names = links.map(\.label)
-        XCTAssertTrue(names.contains("@work"), "no link for @work: \(names)")
-        XCTAssertTrue(names.contains("@default"), "no link for @default: \(names)")
-        XCTAssertFalse(names.contains("@Ops"), "an unknown name became a link")
-        XCTAssertFalse(names.contains("@you"), "the person's mention became a link")
+        // A chip shows the bot's name without the "@" (#321); the link's label is the name.
+        let names = links.map { $0.label.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\u{202F}", with: "") }
+        let has = { (n: String) in names.contains(n) || names.contains("@" + n) }
+        XCTAssertTrue(has("work"), "no link for @work: \(names)")
+        XCTAssertTrue(has("default"), "no link for @default: \(names)")
+        XCTAssertFalse(has("Ops"), "an unknown name became a link")
+        XCTAssertFalse(has("you"), "the person's mention became a link")
         // The tap opens the bot's card.
-        if let work = links.first(where: { $0.label == "@work" }), work.isHittable {
+        if let work = links.first(where: { ["work", "@work"].contains($0.label.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\u{202F}", with: "")) }), work.isHittable {
             work.tap()
             XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "profile.header").firstMatch.waitForExistence(timeout: 10), "the card did not open from @work")
             shot("mentions-card-from-tap")

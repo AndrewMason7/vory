@@ -141,14 +141,14 @@ struct ProjectMoveMenu: View {
         if bots.count == 1, let bot = bots.first {
             ForEach(store.open(for: bot.isEmpty ? nil : bot)) { p in
                 Button { run(p) } label: {
-                    if current == [p.id] { Label(p.name, systemImage: "checkmark") } else { Text(p.name) }
+                    if current == [p.id] { MenuLabel(p.name, systemImage: "checkmark") } else { Text(p.name) }
                 }
                 .disabled(current == [p.id])
             }
             Divider()
         }
         Button { run(nil) } label: {
-            if current == [""] { Label("No project", systemImage: "checkmark") } else { Label("No project", systemImage: "tray") }
+            if current == [""] { MenuLabel("No project", systemImage: "checkmark") } else { MenuLabel("No project", systemImage: "tray") }
         }
         .disabled(current == [""])
     }
@@ -245,7 +245,7 @@ struct ChatProjectMenu: View {
             Menu {
                 ProjectMoveMenu(sessions: [row], runtime: chat.runtime) { chat.banner = $0 }
             } label: {
-                Label("Project: \(store.project(forSession: chat.storedID)?.name ?? "none")", systemImage: "folder")
+                MenuLabel("Project: \(store.project(forSession: chat.storedID)?.name ?? "none")", systemImage: "folder")
             }
         }
     }

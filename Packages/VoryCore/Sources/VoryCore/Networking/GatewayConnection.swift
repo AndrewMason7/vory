@@ -52,8 +52,12 @@ public struct GatewayConnection: Codable, Identifiable, Hashable, Sendable {
     /// How the phone reaches the gateway ("local", "tailscale", "cloudflare", "other"); only
     /// for the form's help and the list's label, the URL and headers do the work.
     public var connectionKind: String?
+    /// A second address for the same gateway (#283), for reaching it both at home and away: a
+    /// home-network address beside a Tailscale or tunnel one. Optional, so gateways saved
+    /// before it (and by a device that has not got it yet) still decode.
+    public var alternate: GatewayURL?
 
-    public init(id: UUID = UUID(), name: String, gateway: GatewayURL, authMode: AuthMode, authProvider: String? = nil, createdAt: Date = Date(), lastProfile: String? = nil, hasAccessHeaders: Bool = false, lastVersion: String? = nil, connectionKind: String? = nil) {
+    public init(id: UUID = UUID(), name: String, gateway: GatewayURL, authMode: AuthMode, authProvider: String? = nil, createdAt: Date = Date(), lastProfile: String? = nil, hasAccessHeaders: Bool = false, lastVersion: String? = nil, connectionKind: String? = nil, alternate: GatewayURL? = nil) {
         self.id = id
         self.name = name
         self.gateway = gateway
@@ -64,6 +68,21 @@ public struct GatewayConnection: Codable, Identifiable, Hashable, Sendable {
         self.hasAccessHeaders = hasAccessHeaders
         self.lastVersion = lastVersion
         self.connectionKind = connectionKind
+        self.alternate = alternate
+    }
+
+    /// The gateway's addresses: the primary, then the backup when there is one.
+    public var addresses: [GatewayURL] { [gateway] + (alternate.map { [$0] } ?? []) }
+
+    /// The same gateway as reached at one of its addresses: that address as `gateway`, the other
+    /// as the backup. For what talks to the gateway at the address in use (signing in again);
+    /// the saved gateway keeps its primary, which is its identity everywhere else.
+    public func using(_ address: GatewayURL) -> GatewayConnection {
+        guard address != gateway, address == alternate else { return self }
+        var c = self
+        c.alternate = gateway
+        c.gateway = address
+        return c
     }
 }
 

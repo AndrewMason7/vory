@@ -4,6 +4,16 @@ import VoryCore
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// Two columns and the wide chat layout: see `wideLayout` below.
+    private var wide: Bool { Self.isWide(regular: sizeClass == .regular, size: windowGeometry.bounds.size) }
+    nonisolated static func isWide(regular: Bool, size: CGSize) -> Bool {
+        guard size.width > 0, size.height > 0 else { return regular }   // not measured yet
+        return regular && (size.width > size.height || size.width >= 700)
+    }
+    /// The window's geometry for this scene, read from the window on every layout (see
+    /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
+    @State private var windowGeometry = WindowGeometry()
     /// DEBUG: `-vory-show-tour` shows the first-run tour over a configured app.
     static let forceTour: Bool = {
         #if DEBUG
@@ -51,6 +61,41 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.lock.isLocked)
+        .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        .background { TouchSignpostProbe().frame(width: 0, height: 0) }
+        // The fold and the camera, for every floating piece below (Step D).
+        .modifier(ReservedRegionsEnvironment())
+        #if DEBUG
+        // `-vory-geometry-probe`: the window's numbers in the corner, for reading a pose off a
+        // screenshot (the Duo simulator has no other way to report its insets).
+        .overlay(alignment: .topLeading) {
+            if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
+                VerticalBarEdge { edge in
+                    let g = windowGeometry
+                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@  hidden %@ kb %@ open %@ hiders %d mw %@ v %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no", model.tabBarHidden ? "yes" : "no", model.keyboardUp ? "yes" : "no", model.chatsPathOpen ? "yes" : "no", model.tabBarHiders[model.selectedTab] ?? 0, model.wideLayout ? "yes" : "no", model.tabBarVertical ? "yes" : "no"))
+                        .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
+                        // Below the morph bar's chat row (its capsules sit 30 pt lower since
+                        // 2026-10-12): at 40 the probe sat over Back and a UI test's tap missed.
+                        .padding(.top, 150).allowsHitTesting(false)
+                        .overlay(alignment: .bottomLeading) {
+                            Text("root \(model.tabAtRoot[model.selectedTab].map { $0 ? "yes" : "no" } ?? "nil")  probe \(RootArrivalProbe.last)")
+                                .font(.caption2.monospaced()).padding(4).background(.orange.opacity(0.9)).foregroundStyle(.black)
+                                .offset(y: 22).allowsHitTesting(false)
+                        }
+                }
+            }
+        }
+        #endif
+        .environment(\.windowGeometry, windowGeometry)
+        // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
+        // iPad, the open Duo in landscape); the phone layout otherwise, which includes the open
+        // Duo upright (669 pt: Matt chose one column there, 2026-10-10) and a narrow Stage
+        // Manager or Split View window. The window's shape decides, never the device or a pose.
+        .environment(\.wideLayout, wide)
+        .onChange(of: wide, initial: true) { _, w in model.wideLayout = w }
+        // Belt and braces: the same value again once the layout has settled after a change of
+        // shape (the Duo's turn from one column to two).
+        .task(id: wide) { model.wideLayout = wide }
         // The probe answered and the chosen page is on the bar now: open on it, unless the
         // person has already gone somewhere else.
         .onChange(of: model.hiddenTabs) { was, hidden in
@@ -59,8 +104,10 @@ struct RootView: View {
             if model.selectedTab == TabLayout.parse(rootLayoutRaw).visible(hiding: hidden).first || model.selectedTab == .chats { model.selectedTab = tab }
         }
         // The bar steps aside for the keyboard (a name field in Settings had it floating on top).
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in model.keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in model.keyboardUp = false }
+        // A keyboard is up when its frame overlaps the window now (`WindowGeometry`), not when a
+        // will-show was seen: a turn of the open Duo took the keyboard away without a will-hide
+        // and the bar stayed hidden behind it; the iPad's hardware-keyboard bar counts the same way.
+        .onChange(of: windowGeometry.keyboardOverlap > 0, initial: true) { _, up in model.keyboardUp = up }
         .onAppear {
             // Once per phone: the bar becomes Home, Chats, Bots, Settings. It can be changed after.
             if !UserDefaults.standard.bool(forKey: TabLayout.homeFirstAppliedKey) {
@@ -173,46 +220,129 @@ struct LockScreenView: View {
 
 struct MainTabView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     @AppStorage(TabLayout.storageKey) private var layoutRaw = ""
 
     var body: some View {
         let tabs = TabLayout.parse(layoutRaw).visible(hiding: model.hiddenTabs)
-        ZStack {
-            // Every page stays alive (its navigation stack, scroll position, drafts); only the
-            // selected one is visible and touchable, which is what the system TabView does too.
-            ForEach(tabs, id: \.self) { tab in
-                content(for: tab)
-                    .opacity(model.selectedTab == tab ? 1 : 0)
-                    .allowsHitTesting(model.selectedTab == tab)
-                    .accessibilityHidden(model.selectedTab != tab)
+        let barHeight = VoryTabBar.reservedHeight(in: windowGeometry)
+        let hiddenFraction: CGFloat = model.tabBarHidden ? max(0, 1 - model.popProgress) : 0
+        // Where the system would put a vertical bar (the closed Duo's strip, the open Duo in
+        // landscape), Vory's own bar goes there too, stacked on that edge (decision 1): the
+        // pages are inset by its width instead of its height. Nil: along the bottom, as ever.
+        VerticalBarEdge { edge in
+            let vertical = edge != nil
+            let pages = ZStack {
+                // Every page stays alive (its navigation stack, scroll position, drafts); only the
+                // selected one is visible and touchable, which is what the system TabView does too.
+                ForEach(tabs, id: \.self) { tab in
+                    content(for: tab)
+                        .opacity(model.selectedTab == tab ? 1 : 0)
+                        // The morph prototype's "cut" variant: the page swap is not animated. Only
+                        // the swap: unscoped, this took the animation out of every change inside
+                        // every page, and a page's own moves (a pinned chat going up, #372) jumped.
+                        .transaction(value: model.selectedTab) { if MorphTopBar.cutsPages { $0.animation = nil } }
+                        .allowsHitTesting(model.selectedTab == tab)
+                        .accessibilityHidden(model.selectedTab != tab)
+                        // A hidden page's faces hold still: at opacity 0 they kept their
+                        // timelines running (the Bots grid's fourteen behind the Chats list).
+                        .environment(\.botsLive, model.selectedTab == tab)
+                }
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            // Reserves the bar's height so lists end above it; the bar itself is hidden (slid down)
-            // inside a chat and the setup wizard, and the pages then use the full height. The bar
-            // is never removed from the tree: an insert/remove transition got stuck on the first
-            // chat opened after launch (the bar stayed, tappable, over the composer). It slides
-            // and fades instead, and its reserved height collapses to nothing.
-            VoryTabBar(tabs: tabs, compose: { compose() }, composeFull: { composeFull() }, voice: { voiceChat($0) })
-                .offset(y: model.tabBarHidden ? 140 : 0)
-                .opacity(model.tabBarHidden ? 0 : 1)
-                // The slide and fade animate; the reserved height below does not. Animating the
-                // safe-area inset while a chat opened made its thread bounce up and down.
+            // The morph prototype's top controls, over every page and outside the stacks.
+            .overlay(alignment: .top) { if MorphTopBar.active(model) { MorphBarHost() } }
+            // Reserves the bar's height (or width) so lists end before it; the bar itself is
+            // hidden (slid off its edge) inside a chat and the setup wizard, and the pages then
+            // use the full height. The bar is never removed from the tree: an insert/remove
+            // transition got stuck on the first chat opened after launch (the bar stayed,
+            // tappable, over the composer). It slides and fades instead, and its reserved
+            // size collapses to nothing.
+            let bar = VoryTabBar(tabs: tabs, axis: vertical ? .vertical : .horizontal, compose: { compose() }, composeFull: { composeFull() }, voice: { voiceChat($0) })
+                // Hidden for an open chat, the bar comes back by the back swipe's progress (the
+                // finger scrubs it, a cancelled swipe sends it out again); the button Back and
+                // the push keep the snappy slide below.
+                .offset(x: vertical ? (edge == .leading ? -140 : 140) * hiddenFraction : 0,
+                        y: !vertical ? 140 * hiddenFraction : 0)
+                .opacity(1 - hiddenFraction)
+                // The slide and fade animate; the reserved size below does not. Animating the
+                // safe-area inset while a chat opened made its thread bounce up and down. The
+                // size comes back only after a popped chat has gone (`tabBarReserved`): with the
+                // path alone it snapped back half a second early and re-laid out the chat while
+                // it slid away.
                 .animation(.snappy(duration: 0.3), value: model.tabBarHidden)
-                .frame(height: model.tabBarHidden ? 0 : VoryTabBar.reservedHeight, alignment: .top)
+                // Anchored to the window's edge: with no room reserved the bar stands over
+                // the page (as the system's does over a chat sliding away), not below the screen.
+                .frame(width: vertical ? (model.tabBarReserved ? VoryTabBar.reservedWidth : 0) : nil,
+                       height: vertical ? nil : (model.tabBarReserved ? barHeight : 0),
+                       alignment: vertical ? .top : .bottom)
                 // Not tappable while it slides away: a tap then switched tabs under an open chat.
                 .allowsHitTesting(!model.tabBarHidden)
                 .accessibilityHidden(model.tabBarHidden)
+            Group {
+                if let edge {
+                    // Into the system's strip itself (the window's inset on that side, where the
+                    // status bar and the navigation bars' items already stand), at the strip's
+                    // foot under those items, so the pages keep the width the strip leaves them.
+                    // A strip too narrow for the capsule gets the bar beside it instead.
+                    let strip = edge == .leading ? windowGeometry.safeArea.leading : windowGeometry.safeArea.trailing
+                    if strip >= VoryTabBar.stripItemWidth {
+                        // One column with the system's items: their width, their centre line
+                        // (measured on the closed Duo: 50 pt wide, centred 48 pt from the edge).
+                        // On the closed display the stack sits at the strip's foot, under the
+                        // page's navigation items; on the open display (wide) it starts at the
+                        // top, under the status items, as Apple orders vertical bars (Matt).
+                        let outer = VoryTabBar.stripCentreFromEdge - VoryTabBar.stripItemWidth / 2
+                        pages.overlay(alignment: wideAlignment(edge)) {
+                            bar
+                                .frame(width: VoryTabBar.stripItemWidth)
+                                .padding(edge == .leading ? .leading : .trailing, outer)
+                                .padding(.top, model.wideLayout ? VoryTabBar.stripStatusAllowance : 0)
+                                // The overlay already ends above the home-indicator area; the stack
+                                // keeps one group gap over it, no more. Padding it by the inset again
+                                // pushed the stack up until its first tab touched the page's own
+                                // strip items (the list's filter met Home, Matt).
+                                .padding(.bottom, model.wideLayout ? 0 : VoryTabBar.stripGroupGap)
+                                .ignoresSafeArea(.container, edges: edge == .leading ? .leading : .trailing)
+                        }
+                    } else {
+                        pages.safeAreaInset(edge: edge, spacing: 0) { bar }
+                    }
+                } else {
+                    pages.safeAreaInset(edge: .bottom, spacing: 0) { bar }
+                }
+            }
+            .onChange(of: vertical, initial: true) { _, v in model.tabBarVertical = v }
         }
         // Lists on every page (roots and the pages pushed over them) do not pick up the bar's
         // inset on this iOS (their last rows ended under the bar), so their scroll content gets
         // the bar's height plus a breath of room. Inside a chat the bar is hidden and this is 0;
         // the thread measures its own margin against the composer.
-        .contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 16, for: .scrollContent)
+        .contentMargins(.bottom, model.tabBarReserved && !model.tabBarVertical ? barHeight + 16 : 0, for: .scrollContent)
         // No blank band under the bar at the top of any page: the first card sits right there.
         .contentMargins(.top, 0, for: .scrollContent)
         // "Read replies aloud" listens for finished replies in the chat in front.
         .task { VoiceCoordinator.shared.observeReplies() }
+        // The back swipe's progress reaches the bar through FullScreenPop; the finish animates
+        // over what is left of the transition, the scrub itself does not animate.
+        .onAppear {
+            FullScreenPop.onProgress = { fraction, ended, duration in
+                if ended {
+                    Perf.stamp("pop: progress ended fraction=\(fraction) over \(duration)")
+                    withAnimation(.easeOut(duration: duration)) { model.popProgress = fraction }
+                    // The morph prototype's controls finish with the bar, over the same remainder.
+                    if MorphTopBar.on { MorphState.shared.release(fraction, over: duration) }
+                    // After the transition the path has changed and the bar is shown by its own
+                    // state again; the progress goes back to zero for the next chat, unanimated.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { model.popProgress = 0 } }
+                } else {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { model.popProgress = fraction }
+                    // The morph prototype's controls follow the finger (Matt, 2026-10-12).
+                    if MorphTopBar.on { MorphState.shared.scrub(fraction) }
+                }
+            }
+        }
+        .onChange(of: model.tabBarHidden) { _, h in Perf.stamp("pop: tabBarHidden=\(h)") }
         .onChange(of: tabs) { _, now in
             // The selected tab was removed from the layout: fall back to Chats instead of a blank pane.
             if !now.contains(model.selectedTab) { model.selectedTab = .chats }
@@ -242,9 +372,21 @@ struct MainTabView: View {
         model.selectedTab = .chats
     }
 
+    /// Where the vertical bar stands in the strip: the foot on a closed display, the top on an open one.
+    private func wideAlignment(_ edge: HorizontalEdge) -> Alignment {
+        switch (edge, model.wideLayout) {
+        case (.leading, true): .topLeading
+        case (.leading, false): .bottomLeading
+        case (.trailing, true): .topTrailing
+        case (.trailing, false): .bottomTrailing
+        }
+    }
+
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {
         switch tab {
-        case .chats: ChatListView()
+        // The list beside the open chat on a wide window; the list with the chat pushed over it
+        // on a narrow one. One view for both, so a fold or a resize keeps the open chat.
+        case .chats: ChatsSplitPage()
         case .bots: BotsView()
         case .files: FilesView()
         case .settings: SettingsView()
@@ -257,5 +399,13 @@ struct MainTabView: View {
         case .projects: NavigationStack { ProjectsView().tabRoot(.projects) }
         case .status: NavigationStack { StatusView().tabRoot(.status) }
         }
+    }
+}
+
+
+/// Publishes the window's reserved regions (the fold, the camera) into the environment.
+private struct ReservedRegionsEnvironment: ViewModifier {
+    func body(content: Content) -> some View {
+        ReservedRegionsReader { content }
     }
 }

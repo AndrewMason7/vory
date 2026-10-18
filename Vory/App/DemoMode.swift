@@ -19,8 +19,17 @@ import VoryCore
 enum DemoMode {
     nonisolated static let isOn = Bundle.main.bundleIdentifier?.hasSuffix(".demo") == true
 
+    /// The launch arguments, and for a copy opened from Finder (where arguments cannot be
+    /// given: they read as documents to open) the same words from its own settings:
+    /// `defaults write com.vorantx.vory.demo vory.demo.launchArgs "-vory-demo-gateway <url> <token> <name>"`.
+    static var arguments: [String] {
+        let given = ProcessInfo.processInfo.arguments
+        guard let saved = UserDefaults.standard.string(forKey: "vory.demo.launchArgs"), !given.contains("-vory-demo-gateway") else { return given }
+        return given + saved.split(separator: " ").map(String.init)
+    }
+
     private static func values(after flag: String) -> (url: String, token: String, name: String)? {
-        let args = ProcessInfo.processInfo.arguments
+        let args = arguments
         guard let i = args.firstIndex(of: flag), i + 3 < args.count else { return nil }
         return (args[i + 1], args[i + 2], args[i + 3])
     }
@@ -37,6 +46,13 @@ enum DemoMode {
         guard isOn, let g = values(after: "-vory-demo-gateway"), let url = try? GatewayURL.normalize(g.url) else { return }
         var conn = GatewayConnection(name: g.name, gateway: url, authMode: .sessionToken)
         conn.connectionKind = "local"
+        let args = arguments
+        // `-vory-demo-backup <url>`: the gateway with a backup address (#283), for a cold launch
+        // with the first address down (the demo's gateways are re-added at every launch).
+        if let i = args.firstIndex(of: "-vory-demo-backup"), args.indices.contains(i + 1) { conn.alternate = try? GatewayURL.normalize(args[i + 1]) }
+        // `-vory-demo-bot <name>`: the bot an installed app comes back to (its saved last bot), so
+        // the bot list arriving at launch does not change the selection.
+        if let i = args.firstIndex(of: "-vory-demo-bot"), args.indices.contains(i + 1) { conn.lastProfile = args[i + 1] }
         try? store.upsert(conn, secrets: GatewaySecrets(sessionToken: g.token))
         store.activeConnectionID = conn.id
     }

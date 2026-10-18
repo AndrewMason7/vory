@@ -13,13 +13,22 @@ struct BotsView: View {
     @State private var searchText = ""
     /// A bot being edited in the same sheet that creates one.
     @State private var editing: ProfileInfo?
+    /// A bot whose folder is being renamed, and one about to be deleted, from its menu (#139).
+    @State private var renaming: ProfileInfo?
+    @State private var deleting: ProfileInfo?
+    /// Rename bot… is offered only where the gateway has the route (#315).
+    @State private var renameSupported = false
     @State private var path = NavigationPath()
 
-    #if os(macOS)
-    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 18)]
-    #else
-    private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
-    #endif
+    @Environment(\.wideLayout) private var wide
+    /// The page's width as laid out, for the grid's column count.
+    @State private var pageWidth: CGFloat = 0
+    /// Two columns on the phone; on a wide layout as many 150 pt columns as fit, kept even so a
+    /// fold down the middle (the Duo's book posture) falls between cards.
+    private var columns: [GridItem] {
+        wide ? EvenColumns.items(EvenColumns.count(width: min(pageWidth, 720), minimum: 150, spacing: 18), spacing: 18)
+             : EvenColumns.items(2, spacing: 14)
+    }
 
     /// Press and hold a bot: its settings page (colour, look, description, model, instructions).
     struct BotSettingsRoute: Hashable { var profile: String }
@@ -28,36 +37,45 @@ struct BotsView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 pageContent
-                    #if os(macOS)
                     // Cards the size of the phone's, in a column, not pills the width of the window.
-                    .frame(maxWidth: 720)
-                    .frame(maxWidth: .infinity)
-                    #endif
+                    .readingColumn(720)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
+            .onScrollPhaseChange { _, phase in BotAmbient.shared.scrolling = phase != .idle }
             .navigationTitle("Bots")
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search bots")
+            .pageSearchable(text: $searchText, prompt: "Search bots")
             .tabRoot(.bots)
             .background(InteractivePopEnabler())
             .overlay {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-vory-shape-grid") { ShapeSeatGrid() }
                 if ProcessInfo.processInfo.arguments.contains("-vory-motion-demo") { MotionDemoView() }
+                // The brief's measuring scene (section 6): six bots on screen, one of them working.
+                if ProcessInfo.processInfo.arguments.contains("-vory-motion-bench") { MotionDemoView(bench: true) }
                 #endif
             }
-            .toolbar {
+            .pageToolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
+                    if !MorphTopBar.active(model) { Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot") }
                 }
             }
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame().withAppModel() } }
             .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p).sheetFrame().withAppModel() } }
-            .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0) }
+            .sheet(item: $renaming) { p in BotRenameSheet(profileName: p.name) { _ in renaming = nil }.sheetFrame().withAppModel() }
+            .confirmationDialog(BotDelete.question(deleting?.label ?? "this bot"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                titleVisibility: .visible, presenting: deleting) { p in
+                Button("Delete bot", role: .destructive) { Task { await delete(p) } }
+            } message: { _ in Text(BotDelete.consequence) }
+            .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0).pushedPage() }
             .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).untitledPage() }
-            .navigationDestination(for: Room.self) { RoomView(room: $0) }
-            .navigationDestination(for: ChatRoute.self) { ConversationView(route: $0) }
+            .navigationDestination(for: Room.self) { RoomView(room: $0).pushedPage() }
+            .navigationDestination(for: ChatRoute.self) { ConversationView(route: $0).pushedPage() }
             .reloadable { await load() }
             .task(id: model.runtime?.connection.id) { await load() }
+            .onChange(of: model.pageRequest) { _, r in
+                guard let r, r.kind == .botsNewBot else { return }
+                model.pageRequest = nil; showNewBot = true
+            }
         }
     }
 
@@ -66,22 +84,33 @@ struct BotsView: View {
         if let rt = model.runtime {
             LazyVGrid(columns: columns, spacing: 22) {
                 ForEach(Array(rt.profiles.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) || $0.label.localizedCaseInsensitiveContains(searchText) }.enumerated()), id: \.element.id) { i, p in
-                    NavigationLink(value: p) {
+                    // The card's tap opens the bot (the same push as a link; on the Mac, its
+                    // settings) and its face reacts on the phone, a blink and a small bounce. A
+                    // tap gesture beside a link's own lost the link's tap on the card's glass pill.
+                    Button {
+                        #if os(macOS)
+                        // The Mac: a click opens the bot's settings (its look, instructions and
+                        // model); its chats and the rest are a right-click away (Matt, 2026-10-13).
+                        path.append(BotSettingsRoute(profile: p.name))
+                        #else
+                        BotAmbient.shared.tap(profile: p.name)
+                        // The push covers the card at once: the bot page's face plays it as it lands.
+                        BotAmbient.shared.markArrival(profile: p.name)
+                        path.append(p)
+                        #endif
+                    } label: {
                         BotCard(profile: p, isActive: rt.selectedProfile == p.name,
                                 working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
                                 slot: i, slots: rt.profiles.count)
                     }
                     .buttonStyle(.plain)
-                    // Press and hold: what you would otherwise dig for.
-                    .contextMenu {
-                        Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
-                        Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
-                        Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
-                        Button { editing = p } label: { Label("Edit bot", systemImage: "pencil") }
-                        if rt.selectedProfile != p.name {
-                            Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
-                        }
-                    }
+                    // VoiceOver: the menu's items as the card's actions, from the same list.
+                    .accessibilityActions { botActions(p, rt) }
+                    .accessibilityIdentifier("bots.card.\(p.name)")
+                    // Press and hold (a right-click on the Mac): the bot's menu. The … that also
+                    // opened it is gone (Matt on 1.5 (21): "just press and hold").
+                    .modifier(BotCardLift(profile: p.name))
+                    .contextMenu { botActions(p, rt) }
                 }
             }
             .padding(.horizontal, 16).padding(.top, 18)
@@ -111,9 +140,36 @@ struct BotsView: View {
         }
     }
 
+    /// Everything the Bots page does to one bot, in one menu (#139): what to do with it, then
+    /// changing it, then deleting it, last and in red. The default bot's folder is fixed, so it
+    /// has neither Rename nor Delete (Edit Bot says why).
+    @ViewBuilder private func botActions(_ p: ProfileInfo, _ rt: GatewayRuntime) -> some View {
+        Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
+        Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
+        if rt.selectedProfile != p.name {
+            Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
+        }
+        Divider()
+        Button { editing = p } label: { Label("Edit bot…", systemImage: "pencil") }
+        if renameSupported, p.isDefault != true {
+            Button { renaming = p } label: { Label("Rename bot…", systemImage: "folder.badge.gearshape") }
+        }
+        Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
+        if p.isDefault != true {
+            Divider()
+            Button(role: .destructive) { deleting = p } label: { Label("Delete bot…", systemImage: "trash") }
+        }
+    }
+
+    private func delete(_ p: ProfileInfo) async {
+        guard let rt = model.runtime else { return }
+        do { try await BotDelete.delete(p.name, runtime: rt); error = nil } catch { self.error = error.localizedDescription }
+    }
+
     private func load() async {
         guard let rt = model.runtime else { return }
         if rt.profiles.isEmpty { await rt.loadProfiles() }
+        renameSupported = await BotRename.supported(on: rt.api)
         capabilities = try? (await rt.rpc("groups.capabilities")).decode()
         guard capabilities != nil else { rooms = []; return }
         do {
@@ -139,16 +195,20 @@ struct BotCard: View {
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
     /// Every shape ends at a different height (a pill well above the frame, a blob near its
     /// bottom); the overlap is measured from the shape's real base so each bot sits the same.
+    /// From the stored looks this view reads, so a changed shape re-seats it: read from the store
+    /// directly, the card kept the old shape's seat (a cloud changed to a circle sat 10 pt low,
+    /// over its own name; Matt on 1.5 (17): "it now broke the look").
     private var overlap: CGFloat {
-        let shape = BotAvatarStore.choice(for: profile.name).spec(hex: "").shape
-        return 10 + 78 * BotFace.seatDrop(shape)
+        Self.overlap(shape: BotAvatarStore.choice(for: profile.name, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape)
     }
+    static func overlap(shape: String) -> CGFloat { 10 + 78 * BotFace.seatDrop(shape) }
 
     var body: some View {
         VStack(spacing: -overlap) {
             // The bot sits on the pill, its base a few points over the top edge.
-            // Plays while the page scrolls (random per bot), settles when it stops.
-            BotAvatar(profile: profile.name, size: 78, active: working || (ambient.scrolling && ambient.enabled),
+            // Only a working bot moves (the battery rule); while the page scrolls the eyes follow
+            // the scroll (BotAmbient's gaze), nothing else (decision C).
+            BotAvatar(profile: profile.name, size: 78, active: working,
                       mood: BotFaceView.Mood(profile: profile.name, followsTilt: true, groupIndex: slot, groupCount: slots))
                 .zIndex(1)
             VStack(spacing: 2) {
@@ -166,6 +226,37 @@ struct BotCard: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(profile.label), \(profile.model ?? "no model")\(isActive ? ", active" : "")\(working ? ", working" : "")")
+    }
+}
+
+/// A bot card's outline: the bot's own silhouette over its name pill. Its press and hold lifts
+/// just the bot and its name; the card's rectangle lifted on a light platter read as a window
+/// behind it (Matt on 1.5 (21)).
+struct BotCardOutline: Shape {
+    /// The body at rest; nil for a photo, a circle.
+    var head: BotBodyShape?
+    var overlap: CGFloat
+    func path(in rect: CGRect) -> Path {
+        let face = CGRect(x: rect.midX - 39, y: rect.minY, width: 78, height: 78)
+        let pill = CGRect(x: rect.minX, y: face.maxY - overlap, width: rect.width, height: rect.maxY - (face.maxY - overlap))
+        return (head?.path(in: face) ?? Path(ellipseIn: face)).union(Path(roundedRect: pill, cornerRadius: pill.height / 2))
+    }
+}
+
+/// The card's press-and-hold preview in its own outline (the phone; the Mac's right-click has no
+/// preview).
+private struct BotCardLift: ViewModifier {
+    let profile: String
+    @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        let choice = BotAvatarStore.choice(for: profile, overrides: BotLookMaps.map(avatarsRaw))
+        let spec = choice.spec(hex: "")
+        content.contentShape(.contextMenuPreview, BotCardOutline(head: choice == .photo ? nil : BotBodyShape(spec: spec, time: 0, active: false),
+                                                                  overlap: BotCard.overlap(shape: spec.shape)))
+        #else
+        content
+        #endif
     }
 }
 
@@ -198,6 +289,17 @@ private struct ShapeSeatGrid: View {
 /// DEBUG `-vory-motion-demo` over the Bots tab.
 struct MotionDemoView: View {
     private struct Cell: Identifiable { let id: String; let spec: BotLookSpec; let state: BotFace.State; let active: Bool }
+    /// Six bots at rest and one working: the scene the CPU and frame time are measured on.
+    var bench = false
+    private static let benchCells: [Cell] = [
+        Cell(id: "working · blob", spec: BotLookSpec(shape: "blob", eyes: "curious", hex: "#E07A5F"), state: .working, active: true),
+        Cell(id: "idle · triangle", spec: BotLookSpec(shape: "triangle", eyes: "bold", hex: "#F5A524"), state: .idle, active: false),
+        Cell(id: "idle · pill", spec: BotLookSpec(shape: "pill", eyes: "wide", hex: "#F4F4F5", finish: "glass"), state: .idle, active: false),
+        Cell(id: "idle · cloud", spec: BotLookSpec(shape: "cloud", eyes: "classic", hex: "#4C8DFF"), state: .idle, active: false),
+        Cell(id: "idle · circle", spec: BotLookSpec(shape: "circle", eyes: "classic", hex: "#111111", finish: "glass"), state: .idle, active: false),
+        Cell(id: "idle · drop", spec: BotLookSpec(shape: "drop", eyes: "tiny", hex: "#2BB5A0"), state: .idle, active: false),
+        Cell(id: "idle · hexagon", spec: BotLookSpec(shape: "hexagon", eyes: "round", hex: "#8E6CFF"), state: .idle, active: false),
+    ]
     private let cells: [Cell] = [
         Cell(id: "working · blob", spec: BotLookSpec(shape: "blob", eyes: "curious", hex: "#E07A5F"), state: .working, active: true),
         Cell(id: "working · triangle", spec: BotLookSpec(shape: "triangle", eyes: "bold", hex: "#F5A524"), state: .working, active: true),
@@ -222,7 +324,7 @@ struct MotionDemoView: View {
         ScrollView {
             VStack(spacing: 8) {
                 LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(cells) { c in
+                    ForEach(bench ? Self.benchCells : cells) { c in
                         let state: BotFace.State = holding || c.state == .working || c.state == .guide ? c.state : .idle
                         VStack(spacing: 6) {
                             BotFaceView(spec: c.spec, size: 72, active: c.active && (holding || c.state == .working), mood: BotFaceView.Mood(profile: "demo-\(c.id)", state: state))
@@ -233,7 +335,7 @@ struct MotionDemoView: View {
                 .padding(16)
                 HStack(spacing: 12) {
                     Button(holding ? "Release states" : "Hold states") { holding.toggle() }.buttonStyle(.glass)
-                    Button("Finish spin (all)") { for c in cells { BotAmbient.shared.turnFinished(profile: "demo-\(c.id)") } }.buttonStyle(.glass)
+                    Button("Finish spin (all)") { for c in (bench ? Self.benchCells : cells) { BotAmbient.shared.turnFinished(profile: "demo-\(c.id)") } }.buttonStyle(.glass)
                 }
                 .padding(.bottom, 120)
             }
@@ -382,7 +484,7 @@ struct BotDetailView: View {
     var body: some View {
         SettingsList {
             Section {
-                NavigationLink { ProfileCardView(profileName: profile.name) } label: {
+                NavigationLink { ProfileCardView(profileName: profile.name).pushedPage() } label: {
                     HStack(spacing: 12) {
                         BotAvatar(profile: profile.name, size: 36)
                         Text("Profile")
@@ -404,6 +506,8 @@ struct BotDetailView: View {
         }
         .navigationTitle(profile.label)
         .navigationBarTitleDisplayMode(.inline)
+        // Landed from a card's tap: the bot's face here plays the reaction the push covered.
+        .background(ArrivalProbe(profile: profile.name))
         .onAppear { model.composeProfile = profile.name }
         .onDisappear { if model.composeProfile == profile.name { model.composeProfile = nil } }
         // The compose circle in the tab bar, while this bot's page is in front: a chat with it.
@@ -411,7 +515,7 @@ struct BotDetailView: View {
             guard r != nil, model.selectedTab == .bots, model.composeProfile == profile.name else { return }
             composing = true
         }
-        .navigationDestination(isPresented: $composing) { ConversationView(route: ChatRoute(storedID: nil, title: nil, profile: profile.name)) }
+        .navigationDestination(isPresented: $composing) { ConversationView(route: ChatRoute(storedID: nil, title: nil, profile: profile.name)).pushedPage() }
         .reloadable { await load() }
         .task { await load() }
         .alert("Delete chat?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
@@ -438,6 +542,7 @@ struct BotDetailView: View {
 }
 
 struct RoomView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
     var room: Room
     /// The first message, when the chat was started from the compose sheet.
@@ -485,7 +590,7 @@ struct RoomView: View {
             // The bar is hidden, which switches off the edge swipe back; put it back.
             .background(InteractivePopEnabler())
             #else
-            .toolbar {
+            .pageToolbar {
                 ToolbarItem(placement: .principal) {
                     GroupToolbarTitle(room: room, working: working) { showMembers = true }
                 }
@@ -515,7 +620,9 @@ struct RoomView: View {
                             let member = ev.payload["member_id"]?.stringValue ?? ev.actor.id
                             let profile = room.members.first { $0.memberId == member || $0.handle == member }?.profile ?? member
                             HStack(alignment: .bottom, spacing: 10) {
-                                BotAvatar(profile: profile, size: 28)
+                                // A still, like the one-to-one thread's rows: an earlier message's
+                                // face neither blinks nor spins (the battery rule).
+                                Image(uiImage: BotAvatarImage.cached(profile: profile, size: 28, scheme: colorScheme)).accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(room.members.first { $0.memberId == member || $0.handle == member }?.displayName ?? member).font(.caption2).foregroundStyle(.secondary)
                                     MarkdownView(text: body)
@@ -543,11 +650,8 @@ struct RoomView: View {
                     Color.clear.frame(height: 0).id("bottom")
                 }
                 .padding()
-                #if os(macOS)
-                // The same reading column as a single chat.
-                .frame(maxWidth: ChatStyle.macColumn)
-                .frame(maxWidth: .infinity)
-                #endif
+                // The same reading column as a single chat on a wide layout.
+                .readingColumn(ChatStyle.readingColumn)
             }
             .overlay {
                 // Nothing said yet: the bots in the room, the way a new chat shows its bot.
@@ -578,9 +682,8 @@ struct RoomView: View {
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .glassEffect(.regular, in: .rect(cornerRadius: 24))
                 .padding(12)
+                .readingColumn(ChatStyle.readingColumn)
                 #if os(macOS)
-                .frame(maxWidth: ChatStyle.macColumn)
-                .frame(maxWidth: .infinity)
                 .textFieldStyle(.plain)
                 // Return sends, as in a single chat.
                 .onSubmit { Task { await send() } }
@@ -634,12 +737,15 @@ struct RoomView: View {
 
 
 private extension View {
-    /// A room bubble's share of the Mac's reading column, on its side; the phone's own width is the limit.
-    @ViewBuilder func roomBubble(_ side: Alignment) -> some View {
-        #if os(macOS)
-        frame(maxWidth: ChatStyle.macColumn * 0.72, alignment: side).frame(maxWidth: .infinity, alignment: side)
-        #else
-        self
-        #endif
+    /// A room bubble's share of the reading column on a wide layout, on its side; the phone's
+    /// own width is the limit.
+    func roomBubble(_ side: Alignment) -> some View { modifier(RoomBubbleWidth(side: side)) }
+}
+
+private struct RoomBubbleWidth: ViewModifier {
+    @Environment(\.wideLayout) private var wide
+    let side: Alignment
+    func body(content: Content) -> some View {
+        content.frame(maxWidth: wide ? ChatStyle.readingColumn * 0.72 : .infinity, alignment: side).frame(maxWidth: .infinity, alignment: side)
     }
 }

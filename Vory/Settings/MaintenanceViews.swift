@@ -125,7 +125,7 @@ struct SystemView: View {
                 Section {
                     LabeledContent("Hermes", value: s["version"]?.stringValue ?? "?")
                     ForEach(StatusLight.lights(from: s, restartRequired: model.runtime?.restartRequired != nil)) { light in
-                        NavigationLink { StatusDetailView(light: light) } label: {
+                        NavigationLink { StatusDetailView(light: light).pushedPage() } label: {
                             HStack(spacing: 12) {
                                 Circle().fill(light.color).frame(width: 12, height: 12)
                                 Text(light.title)

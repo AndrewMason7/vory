@@ -1,7 +1,7 @@
 import SwiftUI
 import VoryCore
 
-struct ChatRoute: Hashable {
+struct ChatRoute: Hashable, Codable {
     var storedID: String?
     var title: String?
     /// Sessions are profile-scoped on the gateway; when set, the chat screen selects this bot first.
@@ -20,59 +20,96 @@ struct ChatRoute: Hashable {
     /// Voice mode as soon as the chat exists (the Chats page's mic, the sheet's Voice mode),
     /// after the first message if there is one.
     var startVoice: Bool = false
+    /// The model and reasoning level picked in the compose sheet: set on the new chat before its
+    /// first message (#27). Not restored, as the picked files are not.
+    var initialModel: ChatSession.ModelPick? = nil
+    var initialReasoning: String? = nil
+
+    /// Saved and restored without the picked files: `AttachmentPreview` carries local file
+    /// URLs and is not Codable, and a route is only ever restored for a chat that exists.
+    private enum CodingKeys: String, CodingKey { case storedID, title, profile, initialText, readOnly, cwd, token, startVoice }
 }
 
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
+    /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
+    @Environment(\.macPageShown) private var pageShown
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
     /// and a click replaces the one showing. On the phone the list owns its own stack and pushes.
     var detailPath: Binding<NavigationPath>? = nil
+    /// A stack around the list that someone else owns (ChatsSplitPage's one-column root): the
+    /// list pushes onto it instead of its own; the destinations are the owner's.
+    /// Inside the stack the Chats page owns (`AppModel.chatPath`): the list pushes onto it and
+    /// mounts no stack of its own. A flag, not a binding: a binding handed down on every path
+    /// change made SwiftUI see a new view each time and re-run the whole list on every Back.
+    var inModelStack = false
+    /// The list's settings (filters, sort, the look keys): one observable object instead of
+    /// fifteen @AppStorage properties, so this view's stored properties compare equal when its
+    /// parent hands it a fresh copy on every path change, and SwiftUI skips the body instead of
+    /// rebuilding a hundred rows on every Back (2026-10-11).
+    private var prefs: ChatListPrefs { ChatListPrefs.shared }
     @State private var sessions: [StoredSession] = []
     /// Bumped by a tap on the selected Chats tab: the list scrolls to its first row.
     @State private var scrollToTop = 0
+    /// Rows waiting for their swipe action or menu to close before they move (#372): their pin
+    /// and archive as they were, kept by a reload that lands in the wait, so the change cannot
+    /// arrive unanimated ahead of its own move.
+    @State private var heldRows: [String: (pinned: Bool?, archived: Bool?)] = [:]
+    /// Until when a row's move is playing: a reload placed in the middle of it left a blank row
+    /// where the moving one was going, so it waits.
+    @State private var movingUntil = Date.distantPast
+    /// How long a row's swipe action, or its menu's preview, takes to close: the row moves after.
+    /// Moved while its swipe was still closing, it went with its actions out and its place blank
+    /// but for faint Pin and Archive circles, then popped in (#372, Matt on 24). 400 ms was set
+    /// while the move itself also left a blank slot; with a pinned row leaving and arriving
+    /// (`listRowID`) the circles are gone about 0.1 s after the tap and the row is back by about
+    /// 0.3 s, so the move starts as the swipe settles (1.5 (26); two clean runs at 250).
+    static let closeBeforeMove: Duration = .milliseconds(250)
+    /// The move itself (a snappy spring), for `movingUntil`.
+    static let moveLength: TimeInterval = 0.4
     /// Chats the user deleted here, so a pinned row is not kept alive from memory afterwards.
     @State private var droppedIDs: Set<String> = []
     @State private var searchText = ""
     #if os(macOS)
     @FocusState private var searchFocused: Bool
     #endif
+    /// The chat VoiceOver is on after a pin or an unpin: the row it was on leaves (`listRowID`),
+    /// and focus follows the chat to where it arrives.
+    @AccessibilityFocusState private var spokenRow: String?
     @State private var searchResults: [StoredSession] = []
     @State private var loading = false
     @State private var errorText: String?
     @State private var ownPath = NavigationPath()
-    private var path: Binding<NavigationPath> { detailPath ?? $ownPath }
+    private var path: Binding<NavigationPath> {
+        if let detailPath { return detailPath }
+        if inModelStack { let m = model; return Binding(get: { m.chatPath }, set: { m.chatPath = $0 }) }
+        return $ownPath
+    }
     /// The row a force click is peeking (Mac).
     @State private var peeking: StoredSession?
     /// The chat showing in the detail column (Mac), for the row's highlight.
-    @State private var selectedID: String?
+    /// The highlighted row: `AppModel.chatSelectionID`, so it survives the list being rebuilt.
+    private var selectedID: String? {
+        get { model.chatSelectionID }
+        nonmutating set { model.chatSelectionID = newValue }
+    }
     @State private var pendingDelete: StoredSession?
     @State private var lastRouted: PendingRoute?
     /// Every profile's chats in one list, newest first, with the bot's avatar on each row.
-    @AppStorage("chats.allBots") private var allBots = false
     @State private var showNewChat = false
     /// The New Message sheet started a chat (as against being cancelled).
     @State private var sheetStarted = false
     @State private var showNewBot = false
-    @AppStorage(ChatSummarizer.titlesKey) private var aiTitles = ChatSummarizer.titlesOn
-    @AppStorage(ChatSummarizer.previewsKey) private var aiPreviews = ChatSummarizer.previewsOn
-    private var aiSummaries: Bool { aiTitles || aiPreviews }
+    private var aiSummaries: Bool { prefs.aiTitles || prefs.aiPreviews }
     private var summarizer: ChatSummarizer { ChatSummarizer.shared }
     @State private var rooms: [Room] = []
     /// Each room's recent log, for the row's preview and its summary.
     @State private var roomLogs: [String: [RoomEvent]] = [:]
     // Filters (the funnel button): what to show and in which order.
-    @AppStorage("chats.filter.pinned") private var pinnedOnly = false
-    @AppStorage("chats.filter.needsYou") private var needsYouOnly = false
-    @AppStorage("chats.filter.live") private var liveOnly = false
-    @AppStorage("chats.filter.archived") private var showArchived = true
-    @AppStorage("chats.sort") private var sortKey = "recent"
-    @AppStorage("chats.filter.groups") private var groupsOnly = false
     /// "" for every chat, a project id, or "__none__" for chats in no project.
-    @AppStorage("chats.filter.project") private var projectFilter = ""
     @State private var showProjects = false
     /// Chats under their projects, each one foldable, instead of one flat list.
-    @AppStorage("chats.byProject") private var byProject = false
-    @AppStorage("chats.byProject.collapsed") private var collapsedRaw = ""
     /// Projects showing every chat instead of the first few.
     @State private var shownInFull: Set<String> = []
     /// Picking several chats to move, archive or delete together.
@@ -81,15 +118,11 @@ struct ChatListView: View {
     @State private var movingSelection = false
     @State private var pendingDeleteMany = false
     /// Rooms have no archive on the gateway; archived ones are remembered here.
-    @AppStorage("chats.archivedRooms") private var archivedRoomsRaw = ""
     @State private var pendingRoomDelete: Room?
-    private var archivedRooms: Set<String> { Set(archivedRoomsRaw.split(separator: ",").map(String.init)) }
-    private var filtering: Bool { pinnedOnly || needsYouOnly || liveOnly || groupsOnly || !showArchived || !projectFilter.isEmpty }
+    private var archivedRooms: Set<String> { Set(prefs.archivedRoomsRaw.split(separator: ",").map(String.init)) }
+    private var filtering: Bool { prefs.pinnedOnly || prefs.needsYouOnly || prefs.liveOnly || prefs.groupsOnly || !prefs.showArchived || !prefs.projectFilter.isEmpty }
     /// The profile menu's icons are rendered images; UIKit keeps the built menu, so it is given a
     /// new identity whenever a bot's colour or look changes.
-    @AppStorage(BotColors.storageKey) private var botColorsRaw = ""
-    @AppStorage(BotAvatarStore.storageKey) private var botAvatarsRaw = ""
-    @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
     @Environment(\.colorScheme) private var colorScheme
     /// Mirrors the tab bar's minimize-on-scroll so the compose circle drops beside the collapsed bar.
 
@@ -99,14 +132,14 @@ struct ChatListView: View {
     /// The list as shown, for stepping through it from the keyboard.
     private func entries(_ runtime: GatewayRuntime) -> [ListEntry] {
         let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
-        let visibleRooms = groupsOnly
-            ? rooms.filter { (showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
+        let visibleRooms = prefs.groupsOnly
+            ? rooms.filter { (prefs.showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
             : []
         if grouped(runtime) {
             // Top to bottom as drawn: each open project's visible chats, then the group chats.
             return groups(rows, runtime: runtime).flatMap { g in collapsed.contains(g.id) ? [] : shown(g).map(ListEntry.session) } + visibleRooms.map(ListEntry.room)
         }
-        return Self.merge(rows, visibleRooms, sort: sortKey)
+        return Self.merge(rows, visibleRooms, sort: prefs.sortKey)
     }
 
     /// Opens the chat `direction` rows away from the open one (the first when none is open).
@@ -116,7 +149,7 @@ struct ChatListView: View {
         let current = list.firstIndex { e in
             switch e {
             case .session(let s): return s.id == selectedID
-            case .room(let r): return "room:" + r.roomId == selectedID
+            case .room(let r): return ChatNavigation.selectionID(ofRoom: r.roomId) == selectedID
             }
         }
         let next = current.map { min(max($0 + direction, 0), list.count - 1) } ?? 0
@@ -127,32 +160,33 @@ struct ChatListView: View {
     }
     #endif
 
-    /// Opens a chat or a group chat: pushed on the phone; on the Mac it replaces whatever the
-    /// detail column shows, the way selecting a conversation does in Messages. `back` is the tab
-    /// to return to when this chat closes (the compose circle tapped elsewhere); any other way
-    /// in forgets a pending one.
+    /// Opens a chat or a group chat: pushed when the list owns its stack (the phone); beside a
+    /// detail column (the Mac; the iPad and the open Duo in 1.5) it replaces whatever the column
+    /// shows, the way selecting a conversation does in Messages (`ChatNavigation`). `back` is the
+    /// tab to return to when this chat closes (the compose circle tapped elsewhere); any other
+    /// way in forgets a pending one.
     private func open(_ route: some Hashable, returningTo back: AppModel.AppTab? = nil) {
         model.composeReturnTab = back
-        #if os(macOS)
-        if var chat = route as? ChatRoute, chat.storedID == nil {
-            chat.token = UUID()
-            path.wrappedValue = NavigationPath([chat])
+        if detailPath != nil {
+            ChatNavigation.select(route, in: &path.wrappedValue)
+            selectedID = ChatNavigation.selectionID(of: route)
         } else {
-            path.wrappedValue = NavigationPath([route])
+            ChatNavigation.push(route, onto: &path.wrappedValue)
         }
-        selectedID = (route as? ChatRoute)?.storedID ?? (route as? RoomRoute).map { "room:" + $0.room.roomId }
-        #else
-        path.wrappedValue.append(route)
-        #endif
     }
 
     var body: some View {
-        #if os(macOS)
-        // A column of the split view; the detail column's stack (`detailPath`) shows the chats.
-        content
-        #else
-        NavigationStack(path: path) { content }
-        #endif
+        if detailPath != nil || inModelStack {
+            // A column of the split view (the detail column's stack shows the chats), or inside
+            // a stack the page owns (`stackPath`).
+            content
+        } else {
+            NavigationStack(path: path) {
+                content
+                    .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).countsChatOnScreen() }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true) }
+            }
+        }
     }
 
     private var content: some View {
@@ -163,37 +197,95 @@ struct ChatListView: View {
                     ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash", description: Text(model.activationError ?? "Choose a gateway in Settings."))
                 }
             }
-            .navigationTitle(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats")
+            .navigationTitle(windowTitle)
             .navigationBarTitleDisplayMode(.inline)
+            #if os(iOS)
+            // The search field is tucked under the title and revealed by a pull, as on the Bots
+            // and Settings pages (Matt, 2026-10-12). On iOS 26 this drawer coexists with
+            // pull-to-refresh (Bots does both), so the pinned custom field it replaced, from
+            // before this iOS, is gone; the field no longer rides in and out with the bar on the
+            // way back from a chat.
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+            #endif
+            // One column on a window wider than a phone (the open Duo upright, 669 pt): the
+            // bar centred its title, which landed beside the trailing buttons; the title goes
+            // into the leading group after the bot circle, as on a phone.
+            #if os(iOS)
+            // In two columns as well: the list column is narrow, and the system's centred
+            // inline title had 30 pt between the bot circle and the trailing group ("Ch…" on
+            // the open Duo, 2026-10-12). The morph bar draws the title itself on one column.
+            .pageHeading(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats", on: !MorphTopBar.active(model))
+            #endif
+            #if os(iOS)
+            // The morph prototype draws the list's controls over the page (MorphTopBar): the bar
+            // stays, empty (its title removed, its items below skipped), so the rows keep the
+            // bar's room and the search drawer. Hiding the bar here made the pushed chat's own
+            // hidden bar come back (the system title and back button drew over the prototype).
+            .toolbar(removing: MorphTopBar.active(model) ? .title : nil)
+            // Out of the accessibility tree while another tab is up (#326; TabRoot does the
+            // same for the other roots, inside their stacks where the flag is honoured).
+            .accessibilityHidden(model.selectedTab != .chats)
+            // An empty bar collapses (the Duo's search drawer rode up under the capsules): an
+            // invisible item keeps it at its height under the prototype.
+            .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
+            #endif
             .background(InteractivePopEnabler())
-            // Driven by the stack's own path rather than by the pushed screen: the bar starts
-            // coming back the instant a pop begins instead of after the transition settles.
-            .onChange(of: path.wrappedValue.isEmpty, initial: true) { was, empty in
-                model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
+            // The stack's path is watched by whoever owns it (ChatsSplitPage for the model's
+            // stack, this view for its own) and reported through `chatsPathOpen`: reading the
+            // path here made every path change re-run the whole list.
+            .onChange(of: model.chatsPathOpen, initial: true) { was, open in
+                // Collapsed to one column, the list is back in front with nothing open beside it.
+                if !open { selectedID = nil }
                 // A chat composed from another tab closes back onto that tab, not onto this list.
-                if !was, empty { returnFromCompose() }
+                if was, !open { returnFromCompose() }
             }
+            .modifier(OwnPathWatch(path: inModelStack || detailPath != nil ? nil : $ownPath))
             .onChange(of: model.popToRoot[.chats]) { _, _ in path.wrappedValue = NavigationPath() }
             // A tap on the Chats tab while it is selected also brings the list back to the top.
             .onChange(of: model.tabReselected[.chats]) { _, _ in scrollToTop += 1 }
             .toolbar {
                 if selecting {
+                    // Select mode outlives a page switch now that the Mac keeps this page mounted;
+                    // its Done and actions stand in the bar only while the page is on show.
+                    if pageShown {
                     ToolbarItem(placement: .topBarLeading) { Button("Done") { endSelecting() }.accessibilityIdentifier("chats.select.done") }
                     ToolbarItemGroup(placement: .topBarTrailing) { selectionActions }
+                    }
                 } else {
-                ToolbarItem(placement: .topBarLeading) { profileMenu }
                 #if os(macOS)
+                // Only while the Chats page is the one on show: the Mac keeps this page mounted
+                // behind the other pages, and its items must not stand in their toolbar.
+                if pageShown {
+                ToolbarItem(placement: .topBarLeading) { profileMenu }
                 // Two buttons, the same size, that fit over the list at its narrowest: a button
                 // each for refresh, new bot, sort and filters ran past the column's edge and sat
                 // over the chat beside it, and moved about as the window was resized.
                 ToolbarItem(placement: .primaryAction) { viewMenu }
                 ToolbarItem(placement: .primaryAction) { voiceMenu }
                 ToolbarItem(placement: .primaryAction) { composeMenu }
+                }
                 #else
+                ToolbarItem(placement: .topBarLeading) { if !MorphTopBar.active(model) { profileMenu } }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    if !MorphTopBar.active(model) {
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
-                    sortMenu
-                    filterMenu
+                    // One View menu (sort + filters) wherever the list is a split view's column
+                    // or shares a strip with the system's items: three buttons beside the title
+                    // truncated "Chats" in a 380 pt column, and worse in the open Duo's portrait.
+                    if model.tabBarVertical || model.wideLayout {
+                        // The system lays these items down the same strip Vory's tab bar stands in
+                        // (the closed Duo), or beside a narrow column on the open one: sort and
+                        // filters share one View menu there, so the strip and the title keep room.
+                        Menu { sortMenu; filterMenu } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                            .simultaneousGesture(TapGesture().onEnded { Smooth.animate("viewMenu") })
+                            .accessibilityLabel("View")
+                            .accessibilityIdentifier("chats.view")
+                    } else {
+                        sortMenu
+                        filterMenu
+                    }
+                    }
                 }
                 #endif
                 }
@@ -202,6 +294,17 @@ struct ChatListView: View {
             // "I shouldn't have to name it or choose appearance"); a long press is the
             // Messages-style sheet (To: bots, project, first message, files).
             .onChange(of: model.newChatRequest) { _, r in if r != nil { openFreshChat() } }
+            // The list's own actions asked for from outside (the morph prototype's bar, the
+            // shared menu items).
+            .onChange(of: model.chatListRequest) { _, r in
+                guard let r else { return }
+                model.chatListRequest = nil
+                switch r.kind {
+                case .newBot: showNewBot = true
+                case .manageProjects: showProjects = true
+                case .selectChats: withAnimation(selectMotion) { selecting = true }
+                }
+            }
             .onChange(of: model.newChatSheetRequest) { _, r in
                 guard r != nil, model.selectedTab == .chats, runtime != nil else { returnFromCompose(); return }
                 sheetStarted = false
@@ -219,11 +322,13 @@ struct ChatListView: View {
             // Cancelled from another tab's compose circle: straight back to that tab.
             .sheet(isPresented: $showNewChat, onDismiss: { if !sheetStarted { returnFromCompose() } }) {
                 if let runtime {
-                    NewChatSheet(runtime: runtime, initialProjectID: projectFilter.isEmpty || projectFilter == "__none__" ? runtime.projects.activeID : projectFilter) { start in
+                    NewChatSheet(runtime: runtime, initialProjectID: prefs.projectFilter.isEmpty || prefs.projectFilter == "__none__" ? runtime.projects.activeID : prefs.projectFilter) { start in
                         sheetStarted = true
                         let back = model.composeReturnTab
                         switch start {
-                        case .chat(let profile, let text, let attachments, let cwd, let voice): open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd, startVoice: voice), returningTo: back)
+                        case .chat(let profile, let text, let attachments, let cwd, let voice, let model, let reasoning):
+                            open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd, startVoice: voice,
+                                           initialModel: model, initialReasoning: reasoning), returningTo: back)
                         case .group(let room, let text): rooms.insert(room, at: 0); open(RoomRoute(room: room, initialText: text), returningTo: back)
                         }
                     }
@@ -231,16 +336,25 @@ struct ChatListView: View {
                     .withAppModel()
                 }
             }
-            #if os(iOS)
-            // The Mac's destinations are on the detail column's stack.
-            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
-            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
-            #endif
             .onChange(of: searchText) { _, q in Task { await search(q) } }
-            .refreshable { await load() }
+            #if os(macOS)
+            .refreshable { await refresh() }
+            // Chat › Refresh Chats (⌘R).
+            .onReceive(NotificationCenter.default.publisher(for: .refreshChats)) { _ in Task { await refresh() } }
+            #else
+            // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
+            // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
+            .pullRefresh(ownWheel: true) { await refresh() }
+            // The list's pull state, for the morph bar's title capsule to host the wheel (the
+            // other roots publish theirs from TabRoot; the Chats page has no TabRoot).
+            .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[.chats] = r.state } }
+            #endif
             .task(id: runtime?.connection.id) { await load() }
             .task(id: runtime?.selectedProfile) { await load() }
-            .task(id: allBots) { await load() }
+            .task(id: prefs.allBots) { await load() }
+            // The bots arriving (an empty list too) or changing, a rename included: All bots lists
+            // each one's chats.
+            .onChange(of: loadedBotNames) { _, _ in Task { await load() } }
             // The socket coming up is when the gateway becomes reachable; do not wait for a pull.
             .onChange(of: runtime?.socketState) { _, s in if case .open? = s { Task { await load() } } }
             .onReceive(NotificationCenter.default.publisher(for: .hermesSessionsChanged)) { _ in Task { await load() } }
@@ -250,7 +364,8 @@ struct ChatListView: View {
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
                 guard model.visibleChatID != r.storedSessionID else { return }
-                open(ChatRoute(storedID: r.storedSessionID, title: r.kind == "readonly" ? "Bot Chat" : nil, profile: r.profile, readOnly: r.kind == "readonly"))
+                open(ChatRoute(storedID: r.storedSessionID, title: r.title ?? (r.kind == "readonly" ? "Bot Chat" : nil), profile: r.profile, readOnly: r.kind == "readonly"),
+                     returningTo: r.returnTab)
             }
             .alert("Delete group chat?", isPresented: Binding(get: { pendingRoomDelete != nil }, set: { if !$0 { pendingRoomDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let r = pendingRoomDelete { Task { await deleteRoom(r) } } }
@@ -272,7 +387,7 @@ struct ChatListView: View {
         guard model.selectedTab == .chats, let runtime else { returnFromCompose(); return }
         let profile = model.composeProfile ?? runtime.selectedProfile
         var cwd: String? = nil
-        if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
+        if !prefs.projectFilter.isEmpty, prefs.projectFilter != "__none__" { cwd = runtime.projects.project(id: prefs.projectFilter)?.startPath }
         open(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd), returningTo: model.composeReturnTab)
     }
 
@@ -281,7 +396,7 @@ struct ChatListView: View {
     private func openVoiceChat(_ request: AppModel.VoiceChatRequest) {
         guard model.selectedTab == .chats, let runtime else { returnFromCompose(); return }
         var cwd: String? = nil
-        if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
+        if !prefs.projectFilter.isEmpty, prefs.projectFilter != "__none__" { cwd = runtime.projects.project(id: prefs.projectFilter)?.startPath }
         open(Self.voiceRoute(request, selectedProfile: runtime.selectedProfile, cwd: cwd), returningTo: model.composeReturnTab)
     }
 
@@ -298,63 +413,39 @@ struct ChatListView: View {
         withAnimation(.snappy(duration: 0.28)) { model.selectedTab = back }
     }
 
+    /// The list's title; while the Mac keeps this page mounted behind another page, that page's
+    /// (the deepest title wins the window's, and this one read "Chats" over Settings).
+    private var windowTitle: String {
+        if !pageShown { return model.selectedTab.title }
+        if selecting { return selection.isEmpty ? "Select Chats" : "\(selection.count) Selected" }
+        return "Chats"
+    }
+
     private var profileMenu: some View {
         Menu {
-            if let runtime {
-                Picker("Profile", selection: Binding(get: { runtime.selectedProfile ?? "" }, set: { runtime.selectedProfile = $0 })) {
-                    ForEach(runtime.profiles) { p in
-                        Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
-                    }
-                }
-                Toggle(isOn: $allBots) { Label("All bots", systemImage: "person.2") }
-                #if os(macOS)
-                Button { showNewBot = true } label: { Label("New Bot…", systemImage: "plus") }
-                #endif
-                Divider()
-                Section(runtime.connection.name) {
-                    Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
-                    if case .open = runtime.socketState {} else {
-                        Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
-                    }
-                }
-                // Two gateways (a main machine and a homelab, say): switch here instead of
-                // Settings › Gateways. Sessions belong to each gateway, so the list reloads.
-                if model.store.connections.count > 1 {
-                    Section("Switch gateway") {
-                        ForEach(model.store.connections.filter { $0.id != runtime.connection.id }) { c in
-                            Button { Task { await model.activate(c) } } label: { Label(c.name, systemImage: "server.rack") }
-                        }
-                    }
-                }
-            }
+            ChatListProfileItems()
         } label: {
             // A fixed-size avatar: a text label changed width with each profile name and the bar
             // visibly jumped as it re-laid out.
             // A rendered, untinted image: live glass went murky on the toolbar's glass and a
             // painted view picked up the toolbar's tint in light mode.
-            Image(uiImage: BotAvatarImage.make(profile: runtime?.selectedProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
-                .accessibilityLabel("Profile: \(runtime?.selectedProfile ?? "none")")
+            // Memoised: drawn afresh on every pass it flashed while the bar re-laid out (a pull).
+            Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: colorScheme)).renderingMode(.original)
+                .accessibilityLabel("Profile: \(model.listChipProfile ?? "none")")
         }
-        .id("\(botColorsRaw)|\(botAvatarsRaw)|\(glassAll)|\(colorScheme == .light)")
+        .id("\(prefs.botColorsRaw)|\(prefs.botAvatarsRaw)|\(prefs.glassAll)|\(colorScheme == .light)")
     }
 
     /// Sort on its own button: inside the filter menu it sat under every project, a long
     /// scroll away once there were many.
-    private var sortItems: some View {
-        Picker("Sort by", selection: $sortKey) {
-            Label("Recent", systemImage: "clock").tag("recent")
-            Label("Title", systemImage: "textformat").tag("title")
-            Label("Bot", systemImage: "person").tag("bot")
-            Label("Model", systemImage: "cpu").tag("model")
-        }
-    }
+    private var sortItems: some View { ChatListSortItems() }
 
     #if os(macOS)
     /// Refresh, sort, filters and Select in one menu.
     private var viewMenu: some View {
         Menu {
-            Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-            Menu { sortItems.pickerStyle(.inline).labelsHidden() } label: { Label("Sort By", systemImage: "arrow.up.arrow.down") }
+            Button { Task { await refresh() } } label: { MenuLabel("Refresh", systemImage: "arrow.clockwise") }
+            Menu { sortItems.pickerStyle(.inline).labelsHidden() } label: { MenuLabel("Sort By", systemImage: "arrow.up.arrow.down") }
             filterItems
         } label: {
             Label(filtering ? "View options (filters on)" : "View options", systemImage: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
@@ -368,8 +459,8 @@ struct ChatListView: View {
     /// sheet with bots, a project and a first message.
     private var composeMenu: some View {
         Menu {
-            Button { model.newChatRequest = UUID() } label: { Label("New Chat", systemImage: "square.and.pencil") }
-            Button { model.newChatSheetRequest = UUID() } label: { Label("New Chat With…", systemImage: "person.2") }
+            Button { model.newChatRequest = UUID() } label: { MenuLabel("New Chat", systemImage: "square.and.pencil") }
+            Button { model.newChatSheetRequest = UUID() } label: { MenuLabel("New Chat With…", systemImage: "person.2") }
         } label: {
             Label("New Chat", systemImage: "square.and.pencil")
         } primaryAction: {
@@ -388,7 +479,7 @@ struct ChatListView: View {
     private var voiceMenu: some View {
         Menu {
             ForEach(model.runtime?.profiles ?? []) { p in
-                Button { model.voiceChatRequest = .init(profile: p.name) } label: { Label(p.label, systemImage: "person.fill") }
+                Button { model.voiceChatRequest = .init(profile: p.name) } label: { MenuLabel(p.label, systemImage: "person.fill") }
             }
         } label: {
             Label("Voice Chat", systemImage: "mic.fill")
@@ -408,8 +499,8 @@ struct ChatListView: View {
         Menu {
             sortItems
         } label: {
-            Image(systemName: sortKey == "recent" ? "arrow.up.arrow.down" : "arrow.up.arrow.down.circle.fill")
-                .accessibilityLabel("Sort: \(sortKey)")
+            Image(systemName: prefs.sortKey == "recent" ? "arrow.up.arrow.down" : "arrow.up.arrow.down.circle.fill")
+                .accessibilityLabel("Sort: \(prefs.sortKey)")
         }
         .accessibilityIdentifier("chats.sort")
     }
@@ -421,44 +512,22 @@ struct ChatListView: View {
             Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                 .accessibilityLabel(filtering ? "Filters (on)" : "Filters")
         }
+        .simultaneousGesture(TapGesture().onEnded { Smooth.animate("viewMenu") })
         .accessibilityIdentifier("chats.filters")
     }
 
-    @ViewBuilder private var filterItems: some View {
-            Section("Show") {
-                Toggle(isOn: $pinnedOnly) { Label("Pinned only", systemImage: "pin") }
-                Toggle(isOn: $needsYouOnly) { Label("Needs you", systemImage: "exclamationmark.bubble") }
-                Toggle(isOn: $liveOnly) { Label("Working now", systemImage: "bolt") }
-                Toggle(isOn: $showArchived) { Label("Archived", systemImage: "archivebox") }
-                Toggle(isOn: $groupsOnly) { Label("Group chats", systemImage: "person.3") }
-            }
-            if let runtime, runtime.projects.available == true {
-                Section("Project") {
-                    Picker("Project", selection: $projectFilter) {
-                        Label("All projects", systemImage: "folder").tag("")
-                        ForEach(runtime.projects.open) { p in Label(p.name, systemImage: "folder.fill").tag(p.id) }
-                        Label("No project", systemImage: "folder.badge.questionmark").tag("__none__")
-                    }
-                    Toggle(isOn: $byProject) { Label("Group by project", systemImage: "rectangle.grid.1x2") }
-                    Button { showProjects = true } label: { Label("Manage projects…", systemImage: "folder.badge.gearshape") }
-                }
-            }
-            Button { withAnimation(.snappy) { selecting = true } } label: { Label("Select Chats", systemImage: "checkmark.circle") }
-            if filtering {
-                Button { pinnedOnly = false; needsYouOnly = false; liveOnly = false; groupsOnly = false; showArchived = true; projectFilter = "" } label: { Label("Clear filters", systemImage: "xmark.circle") }
-            }
-    }
+    private var filterItems: some View { ChatListFilterItems() }
 
     /// The filters and the sort applied to the loaded (or searched) sessions.
     private func filtered(_ list: [StoredSession], runtime: GatewayRuntime) -> [StoredSession] {
         var out = list
-        if pinnedOnly { out = out.filter { $0.pinned == true } }
-        if needsYouOnly { out = out.filter { runtime.needsAttention.contains($0.id) } }
-        if liveOnly { out = out.filter { runtime.chatForStored($0.id)?.isRunning ?? false } }
-        if !showArchived { out = out.filter { $0.archived != true } }
-        if !projectFilter.isEmpty {
+        if prefs.pinnedOnly { out = out.filter { $0.pinned == true } }
+        if prefs.needsYouOnly { out = out.filter { runtime.needsAttention.contains($0.id) } }
+        if prefs.liveOnly { out = out.filter { runtime.chatForStored($0.id)?.isRunning ?? false } }
+        if !prefs.showArchived { out = out.filter { $0.archived != true } }
+        if !prefs.projectFilter.isEmpty {
             let m = runtime.projects.membership
-            out = out.filter { projectFilter == "__none__" ? m[$0.id] == nil : m[$0.id] == projectFilter }
+            out = out.filter { prefs.projectFilter == "__none__" ? m[$0.id] == nil : m[$0.id] == prefs.projectFilter }
         }
         // Every order keeps pinned chats first; within each half the chosen key decides, and
         // equal keys fall back to most recent (the sort is not stable on its own).
@@ -471,7 +540,7 @@ struct ChatListView: View {
         out.sort { a, b in
             let pa = a.pinned ?? false, pb = b.pinned ?? false
             if pa != pb { return pa }
-            switch sortKey {
+            switch prefs.sortKey {
             case "title": return text(a.displayTitle, b.displayTitle, a, b)
             case "bot": return text(a.profile ?? "", b.profile ?? "", a, b)
             case "model": return text(shortModel(a), shortModel(b), a, b)
@@ -490,62 +559,68 @@ struct ChatListView: View {
         }
     }
 
-    /// The search field, our own rather than `.searchable`: the system's drawer sat where the
-    /// pull-to-refresh spinner draws, so the spinner appeared inside the field. Pinned under the
-    /// title by a safe-area inset; the list and its spinner scroll beneath it.
+    #if os(macOS)
+    /// The Mac's search field, pinned over the list (the window toolbar put it at the far end,
+    /// over the open chat). The phone uses the native `.searchable` drawer instead.
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search chats", text: $searchText)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.search)
-                #if os(macOS)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
                 .onExitCommand { searchText = ""; searchFocused = false }
-                #endif
             if !searchText.isEmpty {
-                Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+                Button { searchText = "" } label: {
+                    // A 28 pt target around the 13 pt glyph; the negative padding keeps its place
+                    // and the field's width as they were.
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28).contentShape(.rect)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Clear search")
+                .padding(.horizontal, -7.5).padding(.vertical, -6)
             }
         }
-        #if os(macOS)
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(Color.primary.opacity(0.06), in: .capsule)
+        // The whole capsule is the field: a click beside the 16 pt line of text (the glass, the
+        // padding) went nowhere. The text field and the clear button keep their own clicks.
+        .contentShape(.capsule)
+        .onTapGesture { searchFocused = true }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
-        #else
-        .padding(.horizontal, 14).padding(.vertical, 9)
-        .glassEffect(.regular, in: .capsule)
-        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 6)
-        #endif
     }
+    #endif
 
     @ViewBuilder private func list(_ runtime: GatewayRuntime) -> some View {
         let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
+        #if DEBUG
+        let _ = Perf.tick("chatlist-body")
+        #endif
         ScrollViewReader { proxy in
         List {
             // Not signed in on this device: the banner above says so and has the button; the
             // gateway's own "session expired" line under it would only repeat it in red.
             if let errorText, model.needsSignIn == nil { Text(errorText).foregroundStyle(.red).font(.footnote) }
             // Which project the list is narrowed to, since the rows' own chips are hidden then.
-            if !projectFilter.isEmpty {
+            if !prefs.projectFilter.isEmpty {
                 HStack(spacing: 8) {
-                    if let p = runtime.projects.project(id: projectFilter) { ProjectIcon(project: p, size: 22); Text(p.name).font(.subheadline.weight(.medium)) }
+                    if let p = runtime.projects.project(id: prefs.projectFilter) { ProjectIcon(project: p, size: 22); Text(p.name).font(.subheadline.weight(.medium)) }
                     else { Image(systemName: "folder.badge.questionmark").foregroundStyle(.secondary); Text("Chats in no project").font(.subheadline.weight(.medium)) }
                     Spacer()
-                    Button("Show all") { withAnimation { projectFilter = "" } }.font(.subheadline).buttonStyle(.borderless)
+                    Button("Show all") { withAnimation { prefs.projectFilter = "" } }.font(.subheadline).buttonStyle(.borderless)
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 2, leading: 20, bottom: 6, trailing: 16))
             }
             // With the "Group chats" filter on, rooms sit among the chats by recency, as chats.
-            let visibleRooms = groupsOnly
-                ? rooms.filter { (showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
+            let visibleRooms = prefs.groupsOnly
+                ? rooms.filter { (prefs.showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
                 : []
             if grouped(runtime) {
                 groupedRows(rows, rooms: visibleRooms, runtime: runtime)
             } else {
-                let entries = Self.merge(rows, visibleRooms, sort: sortKey)
+                let entries = Self.merge(rows, visibleRooms, sort: prefs.sortKey)
                 if entries.isEmpty && !loading {
                     if let waiting = model.needsSignIn {
                         ContentUnavailableView("Sign in to see your chats", systemImage: "person.badge.key",
@@ -572,21 +647,24 @@ struct ChatListView: View {
         .onChange(of: model.focusSearchRequest) { _, r in if r != nil { searchFocused = true } }
         // ⌥⌘↓ / ⌥⌘↑ from the Chat menu: the row after or before the open one.
         .onChange(of: model.chatStepRequest?.id) { _, _ in if let r = model.chatStepRequest { step(r.direction, runtime: runtime) } }
-        #else
-        // The system drawer: out of sight until the list is pulled down, like Mail.
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
-        .textInputAutocapitalization(.never).autocorrectionDisabled()
         #endif
         // Wider rows: the card hugs the screen edges and the rows their card.
         .contentMargins(.horizontal, ChatRowStyle.cardInset, for: .scrollContent)
+        #if os(iOS)
+        // The tab bar's room at the list's end, its own and constant (it replaces the root's): the
+        // root's drops to 0 while a chat is up, and a list scrolled to its end had its offset
+        // clamped to the shorter content then, so after Back it sat that much lower, 59 pt, its
+        // last row under the bar (Matt on 1.5 (11): the list "drops" after a swipe back).
+        .contentMargins(.bottom, model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
+        #endif
         #if os(macOS)
         // The list runs a little way under the column's edge, which cut the scroll bar in half
         // down its length; the bar is brought back inside the column.
         .contentMargins(.trailing, 8, for: .scrollIndicators)
         #endif
-        // The bots in the rows look where the list is going.
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
+        // Idle faces hold their blinks while the list moves (one write per phase change).
+        .onScrollPhaseChange { _, phase in BotAmbient.shared.scrolling = phase != .idle }
         // At the foot of the list, like Mail's status line: at the top it lay over the first
         // chat's title. The list is anchored at its top, so the rows do not move when it
         // comes and goes.
@@ -597,27 +675,25 @@ struct ChatListView: View {
         // safe area (RootView gives them a content margin instead), so a bottom inset still
         // lands behind the bar. The pill floats just above the bar, and at the bottom edge
         // when the bar is away (search with the keyboard up).
-        .overlay(alignment: .bottom) {
-            SummaryProgressStrip().padding(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 6)
-        }
+        .overlay(alignment: .bottom) { SummaryStripAboveBar() }
         #endif
-        #if os(macOS)
         // A bar, not a plain inset: the rows fade out under it the way they do under the
-        // toolbar, instead of showing through behind the search field.
+        // toolbar, instead of showing through behind the search field. On the phone too (Matt):
+        // the system's search drawer sat exactly where the pull-to-refresh spinner draws, so
+        // the spinner turned inside the field; our field is pinned above the list and the
+        // spinner turns below it.
         .safeAreaBar(edge: .top, spacing: 0) { topBars(runtime) }
-        #else
-        .safeAreaInset(edge: .top, spacing: 0) { topBars(runtime) }
-        #endif
         .animation(.snappy, value: runtime.restartRequired == nil)
         .animation(.snappy, value: model.needsSignIn == nil)
         .onChange(of: scrollToTop) { _, _ in
-            let first = Self.merge(rows, groupsOnly ? rooms : [], sort: sortKey).first?.id ?? rows.first?.id
+            let first = Self.merge(rows, prefs.groupsOnly ? rooms : [], sort: prefs.sortKey).first?.id ?? rows.first?.id
             if let first { withAnimation(.snappy) { proxy.scrollTo(first, anchor: .top) } }
         }
         }
     }
 
-    /// What sits over the list: the search field on the Mac, then whatever needs saying.
+    /// What sits over the list: the search field on the Mac (the phone uses the native search
+    /// drawer), then whatever needs saying.
     private func topBars(_ runtime: GatewayRuntime) -> some View {
         VStack(spacing: 0) {
             #if os(macOS)
@@ -638,18 +714,18 @@ struct ChatListView: View {
 
     // MARK: Grouped by project
 
-    private var collapsed: Set<String> { ChatProjectGroups.collapsed(collapsedRaw) }
+    private var collapsed: Set<String> { ChatProjectGroups.collapsed(prefs.collapsedRaw) }
 
     /// Projects on top, each opening to its chats: when the switch is on, the gateway has
     /// projects, and the list is not already narrowed to one or showing search results.
     private func grouped(_ runtime: GatewayRuntime) -> Bool {
-        byProject && runtime.projects.available == true && projectFilter.isEmpty && searchText.isEmpty
+        prefs.byProject && runtime.projects.available == true && prefs.projectFilter.isEmpty && searchText.isEmpty
     }
 
     private func groups(_ rows: [StoredSession], runtime: GatewayRuntime) -> [ChatProjectGroup] {
         let store = runtime.projects
         return ChatProjectGroups.make(rows, own: store.projects, membership: store.membership, selected: runtime.selectedProfile,
-                                      others: allBots ? store.others : [:], keepEmpty: !filtering)
+                                      others: prefs.allBots ? store.others : [:], keepEmpty: !filtering)
     }
 
     /// The first few chats of a project, or all of them once "Show all" was chosen.
@@ -663,7 +739,7 @@ struct ChatListView: View {
             Section {
                 if !folded {
                     let visible = shown(g)
-                    ForEach(visible) { s in sessionRow(s, runtime: runtime, showProject: false) }
+                    ForEach(visible, id: \.listRowID) { s in sessionRow(s, runtime: runtime, showProject: false) }
                     if visible.count < g.sessions.count {
                         Button { withAnimation(.snappy) { _ = shownInFull.insert(g.id) } } label: {
                             Text("Show all \(g.sessions.count)").font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
@@ -678,8 +754,8 @@ struct ChatListView: View {
                 ProjectSectionHeader(group: g, collapsed: folded,
                                      working: g.sessions.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
                                      waiting: g.sessions.filter { runtime.needsAttention.contains($0.id) }.count,
-                                     showBot: allBots,
-                                     onToggle: { withAnimation(.snappy) { collapsedRaw = ChatProjectGroups.toggled(collapsedRaw, g.id) } },
+                                     showBot: prefs.allBots,
+                                     onToggle: { withAnimation(.snappy) { prefs.collapsedRaw = ChatProjectGroups.toggled(prefs.collapsedRaw, g.id) } },
                                      onNewChat: selecting ? nil : { startChat(in: g, runtime: runtime) })
             }
         }
@@ -699,7 +775,15 @@ struct ChatListView: View {
     /// The chosen chats, in the list's order.
     private var picked: [StoredSession] { (searchText.isEmpty ? sessions : searchResults).filter { selection.contains($0.id) } }
 
-    private func endSelecting() { withAnimation(.snappy) { selecting = false; selection = [] } }
+    private func endSelecting() { withAnimation(selectMotion) { selecting = false; selection = [] } }
+
+    /// Select mode on and off. Not animated where the pages had the cut (#372): a row is a
+    /// different view while selecting (`rowLink`), so animated it cross-fades, its words doubled
+    /// for a moment, rather than sliding over for the circle. As 24 until the row is reworked to
+    /// slide. A wide window's list (iPad) keeps its step: it sits in a split view's column, in
+    /// UIKit's hosting like a pushed chat, which the cut did not reach (likely the same for the
+    /// column; not recorded). The Mac never had the cut.
+    private var selectMotion: Animation? { MorphTopBar.cutsPages && !model.wideLayout ? nil : .snappy }
 
     @ViewBuilder private var selectionActions: some View {
         if let runtime, runtime.projects.available == true, runtime.projects.canMove {
@@ -735,33 +819,68 @@ struct ChatListView: View {
         await load()
     }
 
+    /// A pull, or Refresh on the Mac. When the gateway has not answered for its bots yet (the
+    /// first answer failed and the socket stayed up, so no reconnect asks again), ask for them
+    /// first: with All bots the list cannot load without them. Only here, not in `load()`,
+    /// which every trigger calls.
+    private func refresh() async {
+        if let runtime, !runtime.profilesLoaded { await runtime.loadProfiles() }
+        await load()
+    }
+
+    /// The gateway's bot names once it has answered for them, nil before: the list's reload
+    /// trigger when they arrive or change.
+    private var loadedBotNames: [String]? {
+        guard let runtime, runtime.profilesLoaded else { return nil }
+        return runtime.profiles.map(\.name)
+    }
+
+    /// Whether the gateway can be asked for the list: with All bots, only once the gateway has
+    /// answered for its bots (an empty answer counts: such a gateway lists no chats).
+    static func canList(allBots: Bool, botsLoaded: Bool) -> Bool { !allBots || botsLoaded }
+
     private func load(attempt: Int = 0) async {
         guard let runtime else { return }
-        let cacheProfile = allBots ? "*" : runtime.selectedProfile
+        let cacheProfile = prefs.allBots ? "*" : runtime.selectedProfile
         if sessions.isEmpty {
             sessions = SessionCache.load(connection: runtime.connection.id, profile: cacheProfile)
             // A cold launch before the bot is known: any list for this gateway beats a blank page.
             if sessions.isEmpty { sessions = SessionCache.loadAny(connection: runtime.connection.id) }
         }
+        // All bots before the bots are known (a cold launch: every trigger, the socket's opening
+        // included, can come before /api/profiles answers): nothing to ask for yet, and the empty
+        // answer wiped the list until another page loaded it again (Matt on 1.5 (20)). The list
+        // loads once the bots arrive (the `profiles` trigger above).
+        guard Self.canList(allBots: prefs.allBots, botsLoaded: runtime.profilesLoaded) else { return }
         loading = sessions.isEmpty; defer { loading = false }
         Task {
             await runtime.projects.refresh()
             // Projects are per bot: with every bot's chats listed, each bot's are read too.
-            if allBots { await runtime.projects.refreshOthers(runtime.profiles.map(\.name)) }
+            if prefs.allBots { await runtime.projects.refreshOthers(runtime.profiles.map(\.name)) }
         }
         do {
             var all: [StoredSession] = []
-            if allBots {
+            if prefs.allBots {
                 let profiles = runtime.profiles.map(\.name)
-                try await withThrowingTaskGroup(of: [StoredSession].self) { group in
+                // Each bot's rows in the bots' own order, whichever answered first: a chat the
+                // gateway lists under several bots kept whichever listing arrived first, so its
+                // bot and avatar flipped between loads (Matt, 2026-10-12: "the bots and chats
+                // glitch out").
+                var byProfile: [String: [StoredSession]] = [:]
+                try await withThrowingTaskGroup(of: (String, [StoredSession]).self) { group in
                     for p in profiles {
                         group.addTask {
                             let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "50")], profile: p)
-                            return r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s }
+                            return (p, r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
                         }
                     }
-                    for try await part in group { all += part }
+                    for try await (p, part) in group { byProfile[p] = part }
                 }
+                for p in profiles { all += byProfile[p] ?? [] }
+                // One row per chat: a gateway whose bots share a store (and the mock) lists the
+                // same chat under every bot, and All bots showed each one twice.
+                var seen = Set<String>()
+                all = all.filter { seen.insert($0.id).inserted }
             } else {
                 // Each row carries the bot it was listed for: opening it later must not depend
                 // on which bot is selected by then.
@@ -781,7 +900,7 @@ struct ChatListView: View {
             let now = Date().timeIntervalSince1970
             for chat in runtime.chats where !listed.contains(chat.storedID) && !chat.storedID.isEmpty
                 && (chat.isRunning || !chat.items.isEmpty)
-                && (allBots || chat.profileName == (runtime.selectedProfile ?? chat.profileName)) {
+                && (prefs.allBots || chat.profileName == (runtime.selectedProfile ?? chat.profileName)) {
                 let last = chat.items.last?.timestamp.timeIntervalSince1970 ?? now
                 all.append(StoredSession(id: chat.storedID, title: chat.title == "New chat" ? nil : chat.title,
                                          preview: chat.items.first.flatMap { if case .user(let t, _) = $0.kind { return t }; return nil },
@@ -789,7 +908,31 @@ struct ChatListView: View {
                                          startedAt: chat.items.first?.timestamp.timeIntervalSince1970 ?? now, lastActive: max(last, now - 1),
                                          messageCount: chat.items.count, isActive: chat.isRunning, archived: false, pinned: false, profile: chat.profileName))
             }
-            sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            // A chat keeps its place until it has new messages: the gateway counts an attach as
+            // activity, so the chat just read floated to the top on the way back and every row
+            // shifted (Matt, 2026-10-12: "the chats list jumps ... we want it to remain the same
+            // when going into a chat and out of"). Its old time stays until something was said.
+            let before = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            all = all.map { s in
+                guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
+                var kept = s; kept.lastActive = was; return kept
+            }
+            // A row's move under way plays out first; a row still waiting for its swipe or menu to
+            // close keeps its pin and archive as they were until it moves (#372).
+            let moving = movingUntil.timeIntervalSinceNow
+            if moving > 0 { try? await Task.sleep(for: .seconds(moving)) }
+            let held = heldRows
+            if !held.isEmpty {
+                all = all.map { s in
+                    guard let h = held[s.id] else { return s }
+                    var t = s; t.pinned = h.pinned; t.archived = h.archived; return t
+                }
+            }
+            // Placed without animation: rows whose words changed cross-faded over themselves.
+            var tx = Transaction(); tx.disablesAnimations = true
+            withTransaction(tx) {
+                sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            }
             // What Siri can name without the app on screen: the bots and the recent chats' titles (#310).
             SiriCatalog.rememberBots(runtime.profiles)
             SiriCatalog.rememberChats(sessions)
@@ -827,7 +970,7 @@ struct ChatListView: View {
     /// A row of the list: a chat, or a group chat when the filter lets them in.
     enum ListEntry: Identifiable {
         case session(StoredSession), room(Room)
-        var id: String { switch self { case .session(let s): return s.id; case .room(let r): return "room:" + r.roomId } }
+        var id: String { switch self { case .session(let s): return s.listRowID; case .room(let r): return "room:" + r.roomId } }
         var pinned: Bool { if case .session(let s) = self { return s.pinned ?? false }; return false }
         var date: Double { switch self { case .session(let s): return s.lastActive ?? 0; case .room(let r): return r.updatedAt } }
     }
@@ -859,8 +1002,9 @@ struct ChatListView: View {
     }
 
     /// A row that opens `route`: a link on the phone, a button into the detail column on the Mac.
-    /// `pick`: the chat's id, for a row that can be chosen while selecting.
-    @ViewBuilder private func rowLink<Label: View>(_ route: some Hashable, selected: Bool = false, pick: String? = nil, @ViewBuilder label: () -> Label) -> some View {
+    /// `pick`: the chat's id, for a row that can be chosen while selecting. `face`: the bot and
+    /// chat of the face the row shows, which reacts to the tap where the row stays on screen.
+    @ViewBuilder private func rowLink<Label: View>(_ route: some Hashable, selected: Bool = false, pick: String? = nil, face: RowFace? = nil, @ViewBuilder label: () -> Label) -> some View {
         if selecting {
             let on = pick.map(selection.contains) ?? false
             Button {
@@ -878,24 +1022,35 @@ struct ChatListView: View {
             .disabled(pick == nil)
             .accessibilityAddTraits(on ? .isSelected : [])
         } else {
-            openLink(route, selected: selected, label: label)
+            openLink(route, selected: selected, face: face, label: label)
         }
     }
 
-    @ViewBuilder private func openLink<Label: View>(_ route: some Hashable, selected: Bool, @ViewBuilder label: () -> Label) -> some View {
-        #if os(macOS)
-        Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
-            // The open chat's row, tinted like the selected conversation in Messages. Drawn
-            // here: the Mac's list did not show a listRowBackground on these rows.
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.16))
-                        .padding(.horizontal, -8).padding(.vertical, -7)
+    /// The face a row shows: its bot and its chat.
+    struct RowFace { let profile: String; let session: String }
+
+    @ViewBuilder private func openLink<Label: View>(_ route: some Hashable, selected: Bool, face: RowFace? = nil, @ViewBuilder label: () -> Label) -> some View {
+        if detailPath != nil {
+            // Beside a detail column (the Mac, the iPad, the open Duo, and the same split view
+            // collapsed on a phone): the row selects into the detail path (`open`), never a
+            // NavigationLink, which would push onto the list's own stack instead.
+            // The row stays beside the chat it opens, so its face reacts to the tap. On the phone
+            // the chat covers the list at once: the link alone, with no gesture over its row.
+            Button {
+                if let face { BotAmbient.shared.tap(profile: face.profile, session: face.session) }
+                open(route)
+            } label: { label().contentShape(.rect) }.buttonStyle(.plain)
+                // The open chat's row, tinted like the selected conversation in Messages. Drawn
+                // here: the Mac's list did not show a listRowBackground on these rows.
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.16))
+                            .padding(.horizontal, -8).padding(.vertical, -7)
+                    }
                 }
-            }
-        #else
-        NavigationLink(value: route) { label() }
-        #endif
+        } else {
+            NavigationLink(value: route) { label() }
+        }
     }
 
     /// The bot beside each chat: with All bots on the phone, always on the Mac (the list reads
@@ -904,43 +1059,45 @@ struct ChatListView: View {
         #if os(macOS)
         true
         #else
-        allBots
+        prefs.allBots
         #endif
     }
 
     @ViewBuilder private func sessionRow(_ s: StoredSession, runtime: GatewayRuntime, showProject: Bool = true) -> some View {
         let route = ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile)
-                rowLink(route, selected: selectedID == s.id, pick: s.id) {
+                rowLink(route, selected: selectedID == s.id, pick: s.id, face: rowsShowBot ? RowFace(profile: s.profile ?? runtime.selectedProfile ?? "", session: s.id) : nil) {
                     SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: rowsShowBot,
                                botProfile: s.profile ?? runtime.selectedProfile,
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,
-                               project: showProject && projectFilter.isEmpty ? runtime.projects.project(forSession: s.id) : nil,
+                               state: runtime.chatForStored(s.id)?.botState ?? .idle,
+                               project: showProject && prefs.projectFilter.isEmpty ? runtime.projects.project(forSession: s.id) : nil,
                                step: runtime.needsAttention.contains(s.id) ? nil : runtime.chatForStored(s.id)?.statusLine,
                                summary: summarizer.shown(summarizer.summary(for: s), title: s.displayTitle, preview: s.preview ?? "", renamed: ChatSession.renamedByPerson(s.id)))
-                        .task(id: "\(s.id)-\(s.lastActive ?? 0)-\(aiSummaries)") { if aiSummaries { summarizer.refresh(s, runtime: runtime, profile: allBots ? s.profile : nil) } }
+                        .task(id: "\(s.id)-\(s.lastActive ?? 0)-\(aiSummaries)") { if aiSummaries { summarizer.refresh(s, runtime: runtime, profile: prefs.allBots ? s.profile : nil) } }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
+                .accessibilityFocused($spokenRow, equals: s.id)
                 #if os(macOS)
                 // A firm press on the trackpad peeks the conversation, as the long press does on the phone.
                 .onForceClick { peeking = s }
                 .popover(isPresented: Binding(get: { peeking?.id == s.id }, set: { if !$0 { peeking = nil } })) {
-                    SessionPreview(session: s, runtime: runtime, profile: allBots ? s.profile : nil).withAppModel()
+                    SessionPreview(session: s, runtime: runtime, profile: prefs.allBots ? s.profile : nil).withAppModel()
                 }
                 #endif
                 .contextMenu {
                     Button { open(route) } label: { Label("Open", systemImage: "bubble.left") }
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))]) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
-                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))]) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
+                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
+                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     if runtime.projects.available == true, runtime.projects.canMove {
                         Menu {
                             ProjectMoveMenu(sessions: [s], runtime: runtime) { errorText = $0 }
                         } label: { Label("Move to Project", systemImage: "folder") }
                     }
-                    Button { withAnimation(.snappy) { selecting = true; selection = [s.id] } } label: { Label("Select", systemImage: "checkmark.circle") }
+                    Button { withAnimation(selectMotion) { selecting = true; selection = [s.id] } } label: { Label("Select", systemImage: "checkmark.circle") }
                     Divider()
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
                 } preview: {
-                    SessionPreview(session: s, runtime: runtime, profile: allBots ? s.profile : nil).withAppModel()
+                    SessionPreview(session: s, runtime: runtime, profile: prefs.allBots ? s.profile : nil).withAppModel()
                 }
                 // Delete alone on the trailing edge; Archive lives with Pin on the leading edge so
                 // the two are never a thumb-width apart.
@@ -948,8 +1105,8 @@ struct ChatListView: View {
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))]) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
-                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))]) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
+                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
+                    Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
                 }
     }
 
@@ -957,7 +1114,7 @@ struct ChatListView: View {
         let archived = archivedRooms.contains(room.roomId)
         let log = roomLogs[room.roomId] ?? []
         let summary = summarizer.shown(summarizer.summary(forRoom: room, events: log), title: room.name, preview: Self.lastLine(room, log) ?? "")
-                rowLink(RoomRoute(room: room, initialText: nil), selected: selectedID == "room:" + room.roomId) {
+                rowLink(RoomRoute(room: room, initialText: nil), selected: selectedID == ChatNavigation.selectionID(ofRoom: room.roomId)) {
                     HStack(spacing: 12) {
                         HStack(spacing: -12) {
                             ForEach(Array(room.members.prefix(3).enumerated()), id: \.offset) { _, m in
@@ -1017,7 +1174,7 @@ struct ChatListView: View {
     private func setArchived(_ room: Room, _ on: Bool) {
         var set = archivedRooms
         if on { set.insert(room.roomId) } else { set.remove(room.roomId) }
-        archivedRoomsRaw = set.sorted().joined(separator: ",")
+        prefs.archivedRoomsRaw = set.sorted().joined(separator: ",")
     }
 
     private func deleteRoom(_ room: Room) async {
@@ -1045,33 +1202,65 @@ struct ChatListView: View {
         await load()
     }
 
-    private func patch(_ s: StoredSession, _ fields: [String: JSONValue]) async {
+    /// `afterClose`: from a row's swipe action or its menu, which close as the button is tapped.
+    /// The gateway is told at once; the row moves (a pin, an unpin) or goes (an archive) once the
+    /// swipe or the menu's preview has closed, in one animated step (`closeBeforeMove`).
+    private func patch(_ s: StoredSession, _ fields: [String: JSONValue], afterClose: Bool = false) async {
         guard let runtime else { return }
         var body = fields
         if let p = s.profile ?? runtime.selectedProfile, !p.isEmpty { body["profile"] = .string(p) }
         // Archiving a pinned chat unpins it too: the gateway lists every pinned chat, archived
         // or not, so an archived pin would stay at the top as if nothing happened.
         if case .bool(true)? = body["archived"], s.pinned == true { body["pinned"] = .bool(false) }
-        // Shown at once; the gateway's answer decides whether it stays that way.
-        let before = sessions
-        if let i = sessions.firstIndex(where: { $0.id == s.id }) {
-            if case .bool(let v)? = body["pinned"] { sessions[i].pinned = v }
-            if case .bool(let v)? = body["archived"] { sessions[i].archived = v }
+        let was = (pinned: s.pinned, archived: s.archived)
+        var pinned: Bool?, archived: Bool?
+        if case .bool(let v)? = body["pinned"] { pinned = v }
+        if case .bool(let v)? = body["archived"] { archived = v }
+        if afterClose { heldRows[s.id] = was }
+        let payload = JSONValue.object(body)
+        async let sent: JSONValue? = runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: payload)
+        if afterClose { try? await Task.sleep(for: Self.closeBeforeMove) }
+        // Shown now, by the row's id (a reload in the wait may have reordered the list); the
+        // gateway's answer decides whether it stays that way.
+        heldRows[s.id] = nil
+        movingUntil = Date().addingTimeInterval(Self.moveLength)
+        withAnimation(.snappy) {
+            if let i = sessions.firstIndex(where: { $0.id == s.id }) {
+                if let pinned { sessions[i].pinned = pinned }
+                if let archived { sessions[i].archived = archived }
+            }
+        }
+        // A pin moves the chat to a new row: VoiceOver goes with it once it has arrived, instead of
+        // wherever the system puts focus when the row it was on leaves (nothing without VoiceOver).
+        if pinned != nil, archived == nil {
+            Task { try? await Task.sleep(for: .seconds(Self.moveLength)); spokenRow = s.id }
         }
         do {
-            let _: JSONValue? = try await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body))
+            _ = try await sent
         } catch HermesAPIError.http(let status, _) where status == 404 {
             // The gateway no longer has this id (compressed onto a new one, deleted elsewhere):
             // the row was stale, and the gateway's list is the truth.
-            sessions.removeAll { $0.id == s.id }
+            withAnimation(.snappy) { sessions.removeAll { $0.id == s.id } }
             droppedIDs.insert(s.id)
         } catch {
-            sessions = before
+            withAnimation(.snappy) {
+                if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i].pinned = was.pinned; sessions[i].archived = was.archived }
+            }
             errorText = "Could not update the chat: \(error.localizedDescription)"
             return
         }
         await load()
     }
+}
+
+extension StoredSession {
+    /// A chat's row identity in the list, which changes with its pin: List animates a move by
+    /// sliding the row underneath the opaque rows it passes, so a pinned row vanished from its
+    /// place, a blank slot opened at the top and the row popped into it, and an unpinned one flew
+    /// up over the search field before landing (Matt on 1.5 (25): "a really weird animation").
+    /// As one row leaving and another arriving, each place animates on its own: the row fades
+    /// out where it was while the rows close up, and fades in where it goes as they open.
+    var listRowID: String { (pinned == true ? "pinned:" : "") + id }
 }
 
 struct SessionRow: View {
@@ -1082,6 +1271,8 @@ struct SessionRow: View {
     /// Whose face to draw when the session itself does not say (the selected bot's list).
     var botProfile: String? = nil
     var thinking = false
+    /// What the chat's bot is doing, as the header shows it (1.5): the row's face shows the same.
+    var state: BotFace.State = .idle
     var project: Project? = nil
     /// The step the bot is on while it works ("Running terminal…"), shown when no goal line is written.
     var step: String? = nil
@@ -1089,9 +1280,10 @@ struct SessionRow: View {
     var summary: ChatSummarizer.Summary? = nil
 
     var body: some View {
+        let _ = Perf.tick("list-row")
         HStack(spacing: 12) {
             // In the list: the eyes and the held pose (a squint, the pebble), no routines.
-            if showBot { BotAvatar(profile: session.profile ?? botProfile ?? "?", size: 34, active: live, mood: BotFaceView.Mood(state: live ? (thinking ? .thinking : .streaming) : .idle)) }
+            if showBot { BotAvatar(profile: session.profile ?? botProfile ?? "?", size: 34, active: live, mood: BotFaceView.Mood(session: session.id, state: live ? state : .idle)) }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if session.pinned == true { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
@@ -1237,7 +1429,143 @@ enum ChatRowStyle {
 }
 
 /// A group chat as a navigation value, with the first message when it was just started.
-struct RoomRoute: Hashable {
+struct RoomRoute: Hashable, Codable {
     var room: Room
     var initialText: String?
+}
+
+
+/// The bar's title at the leading edge, after the leading items, instead of centred (iOS,
+/// where the layout is not wide). The navigation title stays for accessibility and the back
+/// label; only the bar's own drawing of it is removed.
+
+
+#if os(iOS)
+/// The summary strip, lifted above the tab bar: its own view, so the bar's hide and show (every
+/// chat open and every Back) does not re-run the list's body and rebuild a hundred rows inside
+/// the navigation transition (the 75 ms stalls on Back, 2026-10-11). iOS only: the bar is.
+private struct SummaryStripAboveBar: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
+    var body: some View {
+        SummaryProgressStrip().padding(.bottom, model.tabBarHidden || model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 6)
+    }
+}
+#endif
+
+
+/// The list's own stack (a tab without the split page): its path drives `chatsPathOpen` here.
+private struct OwnPathWatch: ViewModifier {
+    @Environment(AppModel.self) private var model
+    var path: Binding<NavigationPath>?
+    func body(content: Content) -> some View {
+        if let path {
+            content.onChange(of: path.wrappedValue.isEmpty, initial: true) { _, empty in
+                model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
+            }
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: The list's menu items, shared with the morph prototype's bar (MorphTopBar)
+
+/// The sort choices.
+struct ChatListSortItems: View {
+    @Environment(AppModel.self) private var model
+    private var prefs: ChatListPrefs { ChatListPrefs.shared }
+    private var runtime: GatewayRuntime? { model.runtime }
+    @ViewBuilder var body: some View {
+        Picker("Sort by", selection: Bindable(prefs).sortKey) {
+            MenuLabel("Recent", systemImage: "clock").tag("recent")
+            MenuLabel("Title", systemImage: "textformat").tag("title")
+            MenuLabel("Bot", systemImage: "person").tag("bot")
+            MenuLabel("Model", systemImage: "cpu").tag("model")
+        }
+        }
+}
+
+/// The filters, the project switch and Select.
+struct ChatListFilterItems: View {
+    @Environment(AppModel.self) private var model
+    private var prefs: ChatListPrefs { ChatListPrefs.shared }
+    private var runtime: GatewayRuntime? { model.runtime }
+    private var filtering: Bool { prefs.pinnedOnly || prefs.needsYouOnly || prefs.liveOnly || prefs.groupsOnly || !prefs.showArchived || !prefs.projectFilter.isEmpty }
+    @ViewBuilder var body: some View {
+            Section("Show") {
+                Toggle(isOn: Bindable(prefs).pinnedOnly) { MenuLabel("Pinned only", systemImage: "pin") }
+                Toggle(isOn: Bindable(prefs).needsYouOnly) { MenuLabel("Needs you", systemImage: "exclamationmark.bubble") }
+                Toggle(isOn: Bindable(prefs).liveOnly) { MenuLabel("Working now", systemImage: "bolt") }
+                Toggle(isOn: Bindable(prefs).showArchived) { MenuLabel("Archived", systemImage: "archivebox") }
+                Toggle(isOn: Bindable(prefs).groupsOnly) { MenuLabel("Group chats", systemImage: "person.3") }
+            }
+            if let runtime, runtime.projects.available == true {
+                Section("Project") {
+                    Picker("Project", selection: Bindable(prefs).projectFilter) {
+                        MenuLabel("All projects", systemImage: "folder").tag("")
+                        ForEach(runtime.projects.open) { p in Label(p.name, systemImage: "folder.fill").tag(p.id) }
+                        Label("No project", systemImage: "folder.badge.questionmark").tag("__none__")
+                    }
+                    Toggle(isOn: Bindable(prefs).byProject) { Label("Group by project", systemImage: "rectangle.grid.1x2") }
+                    Button { model.chatListRequest = .init(.manageProjects) } label: { Label("Manage projects…", systemImage: "folder.badge.gearshape") }
+                }
+            }
+            Button { model.chatListRequest = .init(.selectChats) } label: { Label("Select Chats", systemImage: "checkmark.circle") }
+            if filtering {
+                Button { prefs.pinnedOnly = false; prefs.needsYouOnly = false; prefs.liveOnly = false; prefs.groupsOnly = false; prefs.showArchived = true; prefs.projectFilter = "" } label: { Label("Clear filters", systemImage: "xmark.circle") }
+            }
+        }
+}
+
+/// The bot picker, All bots, the connection and the gateway switch.
+struct ChatListProfileItems: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
+    private var prefs: ChatListPrefs { ChatListPrefs.shared }
+    private var runtime: GatewayRuntime? { model.runtime }
+    @ViewBuilder var body: some View {
+            if let runtime {
+                Picker("Profile", selection: Binding(get: { runtime.selectedProfile ?? "" }, set: { runtime.selectedProfile = $0 })) {
+                    ForEach(runtime.profiles) { p in
+                        Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                    }
+                }
+                Toggle(isOn: Bindable(prefs).allBots) { Label("All bots", systemImage: "person.2") }
+                #if os(macOS)
+                Button { model.chatListRequest = .init(.newBot) } label: { Label("New Bot…", systemImage: "plus") }
+                #endif
+                Divider()
+                // With a backup address (#283), the address in use beside the gateway's name.
+                Section([runtime.connection.name, runtime.addressLabel].compactMap { $0 }.joined(separator: " · ")) {
+                    Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
+                    if case .open = runtime.socketState {} else {
+                        Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
+                    }
+                }
+                // Two gateways (a main machine and a homelab, say): switch here instead of
+                // Settings › Gateways. Sessions belong to each gateway, so the list reloads.
+                if model.store.connections.count > 1 {
+                    Section("Switch gateway") {
+                        ForEach(model.store.connections.filter { $0.id != runtime.connection.id }) { c in
+                            Button { Task { await model.activate(c) } } label: { Label(c.name, systemImage: "server.rack") }
+                        }
+                    }
+                }
+            }
+            }
+    private func connectionSymbol(_ s: SocketState) -> String {
+        switch s {
+        case .open: return "checkmark.circle.fill"
+        case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
+        case .authRejected, .failed: return "xmark.octagon.fill"
+        case .idle: return "circle"
+        }
+    }
+}
+
+extension Notification.Name {
+    /// The Mac's Chats › Refresh Chats (⌘R): the Chats list's own refresh, which also asks for
+    /// the bots when their first answer failed.
+    static let refreshChats = Notification.Name("vory.refreshChats")
 }

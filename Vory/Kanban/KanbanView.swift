@@ -11,6 +11,7 @@ struct KanbanView: View {
     var embedded = false
 
     @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.dynamicTypeSize) private var typeSize
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
     @State private var showNew = false
@@ -35,10 +36,19 @@ struct KanbanView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar { toolbar }
+        #if os(iOS)
+        // Pushed from Settings with more than one board, its chooser stands where the bar's Back
+        // would: the page keeps its own bar then, as the forms do.
+        .pushedPage(keepsOwnBar: embedded && (store?.boards.count ?? 0) > 1)
+        #endif
         .onAppear { appeared = true }
         .onDisappear { appeared = false }
         .task(id: active) { await follow() }
         .reloadable { await store?.refresh() }
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .boardNew else { return }
+            model.pageRequest = nil; showNew = true
+        }
         .sheet(item: $detailTask) { t in
             KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
         }
@@ -122,7 +132,7 @@ struct KanbanView: View {
                 Label("Live", systemImage: "dot.radiowaves.left.and.right").font(.caption2).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.vertical, 4).background(.thinMaterial, in: .capsule).padding(12)
                     // Above the floating tab bar, which otherwise covered it on the phone.
-                    .padding(.bottom, Self.liveCapsuleLift(hidden: model.tabBarHidden))
+                    .padding(.bottom, Self.liveCapsuleLift(hidden: model.tabBarHidden || model.tabBarVertical, in: windowGeometry))
                     .accessibilityLabel("Live updates on")
             }
         }
@@ -130,9 +140,9 @@ struct KanbanView: View {
 
     /// How far the Live capsule sits above the bottom: over the phone's floating tab bar when it
     /// is there; the Mac has no bar.
-    static func liveCapsuleLift(hidden: Bool) -> CGFloat {
+    static func liveCapsuleLift(hidden: Bool, in geometry: WindowGeometry) -> CGFloat {
         #if os(iOS)
-        return hidden ? 0 : VoryTabBar.reservedHeight
+        return hidden ? 0 : VoryTabBar.reservedHeight(in: geometry)
         #else
         return 0
         #endif
@@ -195,8 +205,10 @@ struct KanbanView: View {
                 Button { Task { await store?.nudge() } } label: { Label("Nudge Dispatcher", systemImage: "hare") }
                 Button { Task { await store?.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             } label: { Label("Board options", systemImage: "ellipsis.circle") }
+            if !MorphTopBar.active(model) {
             Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
                 .disabled(store?.isPresent != true)
+            }
         }
     }
 

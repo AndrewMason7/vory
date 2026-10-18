@@ -30,17 +30,23 @@ struct TypingDots: View {
     /// On the Mac the dots hold still where no one can see them, or under Reduce Motion (#248).
     @Environment(\.botsLive) private var botsLive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #else
+    /// On the phone they hold still with the app in the background: their clock redrew the
+    /// thread at the display's rate there for as long as a turn ran (#371).
+    @Environment(\.scenePhase) private var scenePhase
     #endif
     var body: some View {
         #if os(macOS)
         if botsLive && !reduceMotion { moving } else { dots(at: 0.3) }
         #else
-        moving
+        if scenePhase != .background { moving } else { dots(at: 0.3) }
         #endif
     }
 
     private var moving: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+        // At the display's rate (no minimum interval): the hop is motion, and Matt wants every
+        // movement at 60 to 120 fps.
+        TimelineView(.animation) { timeline in
             dots(at: timeline.date.timeIntervalSinceReferenceDate)
         }
     }

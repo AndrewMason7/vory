@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Testing
+import VoryCore
 @testable import Vory
 
 /// "@name" mentions (#302): which words count, where, and that code is left alone.
@@ -36,6 +37,20 @@ import Testing
         #expect(codeRuns.allSatisfy { $0.link == nil && $0.foregroundColor == nil })
     }
 
+    /// The inline text a transcript row draws: a paragraph with no "@" skips the mention walk and
+    /// is the cached markdown as it is; one with a known bot is still marked.
+    @MainActor @Test func inlineSkipsTheWalkOnlyWithoutAnAt() {
+        let saved = Mentions.names
+        defer { Mentions.names = saved }
+        Mentions.names = names
+        let plain = "**Step 3.** The export writes to the backups disk; see [the log](https://example.com/log)."
+        #expect(MarkdownView.inline(plain) == MarkdownView.inlineCached(plain))
+        let mention = "Handing the deploy to @ops now."
+        let marked = MarkdownView.inline(mention)
+        #expect(marked != MarkdownView.inlineCached(mention))
+        #expect(marked.runs.compactMap { $0.link }.compactMap(Mentions.bot(from:)) == ["ops"])
+    }
+
     @Test func thePersonGetsTheStrongerMark() {
         let marked = Mentions.attributed("That one is for @you.", names: names)
         let run = marked.runs.first { $0.backgroundColor != nil }
@@ -48,4 +63,23 @@ import Testing
         #expect(Mentions.bot(from: url) == "ops-bot")
         #expect(Mentions.bot(from: URL(string: "https://example.com/bot/ops")!) == nil)
     }
+
+    /// A bot answers to its folder name, the gateway's display name and the name Vory keeps
+    /// for it (#315), each once.
+    @Test func aBotAnswersToAllItsNames() {
+        let kept = ProfileInfo.ownNames
+        defer { ProfileInfo.ownNames = kept }
+        ProfileInfo.ownNames = { $0 == "work" ? ProfileOwnNames(displayName: "Scribe") : nil }
+        let bots = [ProfileInfo(name: "work", displayName: "Work bot"), ProfileInfo(name: "default")]
+        #expect(Mentions.botNames(for: bots) == ["work", "Work bot", "Scribe", "default"])
+        let names = Mentions.Names(bots: Mentions.botNames(for: bots), person: nil)
+        #expect(Mentions.find(in: "Ask @Scribe or @work; @default keeps the log", names: names).count == 3)
+    }
+    #if os(macOS)
+    /// The chip's face is drawn on the Mac too (#321), through the same memoised cache as iOS.
+    @MainActor @Test func aBotFaceIsDrawnOnTheMac() {
+        #expect(Mentions.face(for: "work") != nil)
+    }
+    #endif
+
 }

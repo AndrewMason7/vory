@@ -13,6 +13,9 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
     func didReceive(_ notification: UNNotification) {
         let content = notification.request.content
         let hermes = content.userInfo["hermes"] as? [String: Any] ?? [:]
+        // The reply card's face is a live one: the 1.5 motion, as in the app (only the app set
+        // this, so the extension still ran the 1.4 drawing with its turn).
+        BotFace.motionEngine = true
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         let looks = BotLooks.load()
         let profile = hermes["profile"] as? String ?? ""
@@ -46,14 +49,21 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
             h.didMove(toParent: self)
             host = h
         }
-        let width = view.bounds.width > 0 ? view.bounds.width : UIScreen.main.bounds.width - 16
+        let width = view.bounds.width > 0 ? view.bounds.width : sceneBounds.width - 16
         preferredContentSize = CGSize(width: width, height: fittedHeight(width: width))
+    }
+
+    /// The scene this extension's view is in, as it is now: what the card's size is a share of.
+    /// Before the view is in a window (the first layout) its own bounds stand in.
+    private var sceneBounds: CGRect {
+        if let scene = view.window?.windowScene { return scene.effectiveGeometry.coordinateSpace.bounds }
+        return view.bounds
     }
 
     /// The card's natural height, capped at what iOS shows above the reply field and keyboard.
     private func fittedHeight(width: CGFloat) -> CGFloat {
         let h = host?.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height ?? 120
-        let cap = max(200, UIScreen.main.bounds.height * 0.29)
+        let cap = max(200, sceneBounds.height * 0.29)
         return min(max(h, 96), cap)
     }
 

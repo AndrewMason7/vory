@@ -8,8 +8,27 @@ extension ChatSession {
     /// selected at the time: after a switch elsewhere, a pick sent another bot's provider to
     /// this chat.
     func modelOptions(refresh: Bool = false) async throws -> ModelOptionsResult {
+        let key = modelOptionsCacheKey
+        if !refresh, let cached = ModelOptionsCache.results[key] { return cached }
         let q = refresh ? [URLQueryItem(name: "refresh", value: "true")] : []
-        return try await runtime.api.get("/api/model/options", query: q, profile: Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile))
+        let result: ModelOptionsResult = try await runtime.api.get("/api/model/options", query: q, profile: Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile))
+        ModelOptionsCache.results[key] = result
+        return result
+    }
+
+    /// The list already fetched for this chat's bot, if any (the model menu opens with it).
+    var cachedModelOptions: ModelOptionsResult? { ModelOptionsCache.results[modelOptionsCacheKey] }
+
+    /// Fetches the list ahead of the first open of the model menu, quietly: the menu used to
+    /// load it on its first open and rebuild itself while it opened (Matt, 2026-10-11: "load
+    /// the stuff behind the model chip so it doesn't look weird on first open").
+    func warmModelOptions() async {
+        guard cachedModelOptions == nil else { return }
+        _ = try? await modelOptions()
+    }
+
+    private var modelOptionsCacheKey: String {
+        "\(ObjectIdentifier(runtime).hashValue)|\(Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile) ?? "")"
     }
 
     /// The bot whose model list a chat reads: its own, or the selected one for a chat that has
@@ -17,6 +36,12 @@ extension ChatSession {
     nonisolated static func modelOptionsProfile(chat: String?, selected: String?) -> String? {
         chat ?? selected
     }
+}
+
+/// The model lists fetched this run, one per gateway and bot, shared by the model menu, the
+/// model page and the "/model " chooser. "Refresh models" asks the gateway again.
+@MainActor enum ModelOptionsCache {
+    static var results: [String: ModelOptionsResult] = [:]
 }
 
 extension ModelOptionsResult {
@@ -59,6 +84,12 @@ struct ModelMenuContent: View {
     @State private var loading = false
     @State private var error: String?
 
+    init(chat: ChatSession) {
+        self.chat = chat
+        // Opens with the list already fetched for this bot (warmed when the chat opened).
+        _options = State(initialValue: chat.cachedModelOptions)
+    }
+
     var body: some View {
         Group {
             if let options {
@@ -67,7 +98,7 @@ struct ModelMenuContent: View {
                         if let w = p.warning, !w.isEmpty { Text(w) }
                         ForEach(p.featuredModels ?? p.models ?? [], id: \.self) { m in
                             Button { select(provider: p.slug, model: m) } label: {
-                                if chat.modelName == m { Label(m, systemImage: "checkmark") } else { Text(m) }
+                                if chat.modelName == m { MenuLabel(m, systemImage: "checkmark") } else { Text(m) }
                             }
                         }
                         if let more = p.models, let featured = p.featuredModels, more.count > featured.count {
@@ -88,13 +119,13 @@ struct ModelMenuContent: View {
                 Toggle("Fast mode", isOn: Binding(get: { chat.info?.fast ?? false }, set: { v in Task { try? await chat.setFast(v) } }))
             }
             Toggle("YOLO (skip approvals, this session)", isOn: Binding(get: { chat.info?.yolo ?? false }, set: { v in Task { try? await chat.setYolo(v) } }))
-            Button { Task { await load(refresh: true) } } label: { Label("Refresh models", systemImage: "arrow.clockwise") }
+            Button { Task { await load(refresh: true) } } label: { MenuLabel("Refresh models", systemImage: "arrow.clockwise") }
         }
-        .task { await load(refresh: false) }
+        .task { if options == nil { await load(refresh: false) } }
     }
 
     private var currentCapabilities: ModelCapabilities? {
-        options?.providers.first { $0.slug == chat.info?.provider }?.capabilities?[chat.modelName]
+        options?.providers.first { $0.slug == chat.providerSlug }?.capabilities?[chat.modelName]
     }
 
     private func load(refresh: Bool) async {
@@ -119,15 +150,27 @@ struct ModelMenuContent: View {
 /// now, and a short list to pick from. Hidden once the model is known to have no reasoning
 /// setting; until the model list has loaded it is offered as is.
 enum ReasoningEffort {
-    /// The levels every model is offered.
-    static let standard = ["low", "medium", "high"]
+    /// The levels every model is offered when the gateway says nothing at all: Hermes's own set
+    /// (`VALID_REASONING_EFFORTS`), never just three (#319).
+    static let standard = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
     /// The known levels, weakest first: the order the list keeps whichever of them appear.
-    static let byStrength = ["minimal", "low", "medium", "high", "xhigh", "max"]
+    /// Hermes's own set (`VALID_REASONING_EFFORTS`); a level only a gateway knows goes after.
+    static let byStrength = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+
+    /// How a level reads in the menu; the raw value is what the gateway is sent. "xhigh" is
+    /// the one that is not a word (#319); the rest are their own name, capitalised.
+    static func name(of level: String) -> String {
+        let l = level.trimmingCharacters(in: .whitespaces)
+        if l == "xhigh" { return "Extra high" }
+        return l.prefix(1).uppercased() + l.dropFirst()
+    }
 
     /// The levels to list: the standard three plus whatever the gateway's own config schema
     /// offers for `agent.reasoning_effort`, the known ones by strength (minimal, low, medium,
-    /// high, xhigh, max), any the gateway alone knows after them in its order, without repeats
-    /// or the empty "unset" choice.
+    /// high, xhigh, max, ultra), any the gateway alone knows after them in its order, without
+    /// repeats or the empty "unset" choice. The schema is the only source: Hermes keeps each
+    /// model's own `supported_efforts` out of its model options on purpose (the catalogs
+    /// under-report levels that work), so the list is the gateway's, not the model's (#319).
     static func levels(offered: [String]?) -> [String] {
         let given = (offered ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let wanted = Set(standard + given)
@@ -139,12 +182,19 @@ enum ReasoningEffort {
     /// The item's title: the level the chat runs at, or that none is set.
     static func title(current: String?) -> String {
         let c = (current ?? "").trimmingCharacters(in: .whitespaces)
-        return c.isEmpty ? "Reasoning: not set" : "Reasoning: \(c)"
+        return c.isEmpty ? "Reasoning: not set" : "Reasoning: \(name(of: c))"
     }
 
-    /// The schema's offered levels, from `/api/config/schema`.
+    /// The schema's offered levels, from `GET /api/config/schema`: `fields["agent.reasoning_effort"].options`
+    /// when the gateway lists them, else `fields["delegation.reasoning_effort"].options` (the one
+    /// reasoning select Hermes's schema carries; `agent.reasoning_effort` is built from the config
+    /// with a type but no options, which is what left the menu at three levels, #319), else nil
+    /// and the full known set is shown.
     static func offered(in schema: JSONValue) -> [String]? {
-        schema["fields"]?["agent.reasoning_effort"]?["options"]?.arrayValue?.compactMap(\.stringValue)
+        for key in ["agent.reasoning_effort", "delegation.reasoning_effort"] {
+            if let o = schema["fields"]?[key]?["options"]?.arrayValue?.compactMap(\.stringValue), !o.isEmpty { return o }
+        }
+        return nil
     }
 }
 
@@ -163,71 +213,31 @@ struct ReasoningEffortMenu: View {
                             do { try await chat.setReasoning(level) } catch { chat.banner = error.localizedDescription }
                         }
                     } label: {
-                        if chat.info?.reasoningEffort == level { Label(level, systemImage: "checkmark") } else { Text(level) }
+                        if chat.reasoningEffort == level { MenuLabel(ReasoningEffort.name(of: level), systemImage: "checkmark") } else { Text(ReasoningEffort.name(of: level)) }
                     }
                 }
             } label: {
-                Label(ReasoningEffort.title(current: chat.info?.reasoningEffort), systemImage: "brain")
+                MenuLabel(ReasoningEffort.title(current: chat.reasoningEffort), systemImage: "brain")
             }
             .accessibilityIdentifier("chat.reasoning")
             .task {
                 guard !loaded else { return }
                 loaded = true
                 if let o = try? await chat.modelOptions() {
-                    capabilities = o.providers.first { $0.slug == chat.info?.provider }?.capabilities?[chat.modelName]
+                    capabilities = o.providers.first { $0.slug == chat.providerSlug }?.capabilities?[chat.modelName]
                 }
                 let profile = ChatSession.modelOptionsProfile(chat: chat.profile, selected: chat.runtime.selectedProfile)
-                if let schema: JSONValue = try? await chat.runtime.api.get("/api/config/schema", profile: profile) {
+                do {
+                    let schema: JSONValue = try await chat.runtime.api.get("/api/config/schema", profile: profile)
                     offered = ReasoningEffort.offered(in: schema)
+                } catch {
+                    // The full known set still shows; the failure is only worth a line in the log.
+                    #if DEBUG
+                    print("reasoning levels: the config schema could not be read (\(error.localizedDescription)); showing the known set")
+                    #endif
                 }
             }
         }
-    }
-}
-
-/// Context gauge in the nav bar; tap for the breakdown sheet. Glyph only on a phone (the
-/// percentage is in the subtitle), glyph + `24.1k / 128k · 19%` where there is room.
-struct TokenChipView: View {
-    var usage: Usage?
-    var onTap: () -> Void
-    @Environment(\.horizontalSizeClass) private var sizeClass
-
-    var body: some View {
-        Button(action: onTap) {
-            if sizeClass == .compact {
-                Image(systemName: gaugeSymbol)
-            } else {
-                Label(label, systemImage: gaugeSymbol).monospacedDigit().lineLimit(1)
-            }
-        }
-        .accessibilityLabel("Context usage \(label)")
-    }
-
-    /// The needle tracks the fill level so the glyph alone says something.
-    private var gaugeSymbol: String {
-        let pct = usage.flatMap(Self.percent) ?? 0
-        switch pct {
-        case ..<20: return "gauge.with.dots.needle.0percent"
-        case ..<55: return "gauge.with.dots.needle.33percent"
-        case ..<85: return "gauge.with.dots.needle.67percent"
-        default: return "gauge.with.dots.needle.100percent"
-        }
-    }
-
-    static func percent(_ u: Usage) -> Int? { u.computedContextPercent }
-
-    private var label: String {
-        guard let u = usage else { return "—" }
-        let used = u.contextUsed ?? u.total ?? 0
-        if let max = u.contextMax, max > 0 {
-            let pct = u.contextPercent ?? Int(Double(used) / Double(max) * 100)
-            return "\(compact(used)) / \(compact(max)) · \(pct)%"
-        }
-        return compact(used)
-    }
-
-    private func compact(_ n: Int) -> String {
-        n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1e6) : n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
     }
 }
 

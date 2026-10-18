@@ -15,6 +15,7 @@ public final class NetworkWatch: @unchecked Sendable {
     private var usable = true
     private var changes = 0
     private var started = false
+    private var listeners: [UUID: AsyncStream<Void>.Continuation] = [:]
 
     public init() {}
 
@@ -28,7 +29,9 @@ public final class NetworkWatch: @unchecked Sendable {
             self.lock.lock()
             self.usable = path.status == .satisfied
             self.changes += 1
+            let listeners = Array(self.listeners.values)
             self.lock.unlock()
+            for l in listeners { l.yield() }
         }
         monitor.start(queue: queue)
     }
@@ -45,6 +48,20 @@ public final class NetworkWatch: @unchecked Sendable {
         startIfNeeded()
         lock.lock(); defer { lock.unlock() }
         return changes
+    }
+
+    /// Every path change from now on, as it happens (a gateway with two addresses checks its
+    /// socket on each, #283), without polling.
+    public func pathChanges() -> AsyncStream<Void> {
+        startIfNeeded()
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            lock.lock(); listeners[id] = continuation; lock.unlock()
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.lock.lock(); self.listeners[id] = nil; self.lock.unlock()
+            }
+        }
     }
 
     /// Returns when the path has changed since `mark`, or after `seconds`, whichever is first.

@@ -127,6 +127,15 @@ private struct MainSplitView: View {
     @AppStorage("launchTab") private var launchTab = "chats"
     @State private var openedOnLaunchTab = false
     @State private var appearedAt = Date.distantPast
+    /// The rail's other pages, kept mounted once visited (first visit order). See `body`.
+    @State private var kept: [AppModel.AppTab] = []
+    /// Judgement call while Matt is away (2026-10-13, vory-ops/JUDGEMENT-CALLS.md): a page left with a
+    /// page pushed on it keeps it, as the phone's tabs do. Setting this key (`defaults write <bundle id>
+    /// mac.pages.popOnLeave -bool YES`) goes back to 1.5 (18)'s way: a page left is re-created at its
+    /// root a moment after the switch, out of sight.
+    static let popOnLeaveKey = "mac.pages.popOnLeave"
+    /// Bumped to re-create a page left behind when `popOnLeaveKey` is set.
+    @State private var resets: [AppModel.AppTab: Int] = [:]
     /// How long after the window appears a page that the gateway has to vouch for (the Board)
     /// may still take the start: its plugin is probed once the gateway answers, a second or two in.
     private static let launchTabGrace: TimeInterval = 8
@@ -134,28 +143,46 @@ private struct MainSplitView: View {
     /// The pages in the rail, less the ones the gateway cannot show (the Board without its plugin).
     private var tabs: [AppModel.AppTab] { TabLayout.parse(tabLayoutRaw).visible(hiding: model.hiddenTabs) }
 
+    /// The window's own liveness (visible and in front), to combine with the page's.
+    @Environment(\.botsLive) private var windowLive
+
     var body: some View {
-        Group {
-            if model.selectedTab == .chats {
+        let chats = model.selectedTab == .chats
+        ZStack {
+            // The Chats page (rail, list, chat) stays mounted while another page shows, as the
+            // iPhone keeps every tab page alive (RootView): tearing it down cost ~250 ms of the
+            // switch away and building it again ~450 ms of the switch back (the aligned hitch
+            // tables of 2026-10-11/12, clean-click drive). Hidden, it follows `MacPage`.
+            NavigationSplitView(columnVisibility: $columns) {
+                // Its rail's ⌘ numbers only while it shows: the other page's rail has them then
+                // (declared twice, ⌘2 from Bots fired on both rails, and on Chats ⌘3 and ⌘4 then did
+                // nothing until the next click on the rail).
+                Sidebar(tabs: tabs, shortcuts: chats)
+            } content: {
+                ChatListView(detailPath: $chatPath)
+                    // A renamed bot's open chat is stale (#315): back to the placeholder;
+                    // the list has the chat again under the new name.
+                    .onReceive(NotificationCenter.default.publisher(for: .hermesBotRenamed)) { _ in chatPath = NavigationPath() }
+                    .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 560)
+            } detail: {
+                // The chat beside the list (`ChatNavigation`): shared with the iPad and the
+                // open Duo in 1.5; no back chevron, the list is the way between chats.
+                ChatDetailStack(path: $chatPath) { NoChatView() }
+            }
+            .modifier(MacPage(shown: chats, windowLive: windowLive))
+            // Every other page the same way (2026-10-12, follow-up 1): mounted on its first visit
+            // and kept, so a switch is an opacity change, not a split view, a rail and a page
+            // built afresh (69 % of the 300 ms leaving Chats). One split per page, keyed by its
+            // tab; a page whose tab leaves the rail is dropped.
+            ForEach(keptPages, id: \.self) { tab in
                 NavigationSplitView(columnVisibility: $columns) {
-                    Sidebar(tabs: tabs)
-                } content: {
-                    ChatListView(detailPath: $chatPath)
-                        .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 560)
+                    Sidebar(tabs: tabs, shortcuts: model.selectedTab == tab)
                 } detail: {
-                    NavigationStack(path: $chatPath) {
-                        NoChatView()
-                            // No back chevron: the list beside it is the way between chats.
-                            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).id(route).navigationBarBackButtonHidden(true) }
-                            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).id(r).navigationBarBackButtonHidden(true) }
-                    }
+                    page(tab)
                 }
-            } else {
-                NavigationSplitView(columnVisibility: $columns) {
-                    Sidebar(tabs: tabs)
-                } detail: {
-                    page(model.selectedTab)
-                }
+                // The whole split: what is pushed lives in the split's detail column, not in the page.
+                .id(resets[tab, default: 0])
+                .modifier(MacPage(shown: model.selectedTab == tab, windowLive: windowLive))
             }
         }
         // Room for the rail, the list and a reading column with a table in it: narrower than this
@@ -166,11 +193,39 @@ private struct MainSplitView: View {
         // vouch for is hidden until its probe answers, so the start waits a few seconds for it,
         // and only while nothing else has been chosen meanwhile.
         .onAppear { appearedAt = Date(); openOnLaunchTab(tabs) }
+        // Signpost intervals for the hitch traces (Smooth, 1.5): a page switch and a chat open
+        // on the Mac, so Instruments can score each one by name; free when nothing listens.
+        .onChange(of: model.selectedTab, initial: true) { was, now in
+            if now != .chats, !kept.contains(now) { kept.append(now) }
+            guard was != now else { return }
+            Smooth.animate("page")
+            if was != .chats, UserDefaults.standard.bool(forKey: Self.popOnLeaveKey) {
+                Task { @MainActor in resets[was, default: 0] += 1 }
+            }
+            // The keyboard focus leaves the page that hides: it stays mounted, and its composer,
+            // list or field kept the focus (keys and pastes aimed at a page not on show). The
+            // window holds it, as when the page was torn down.
+            if let w = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MacWindow.main) == true }), w.firstResponder !== w,
+               !w.makeFirstResponder(nil) {
+                Perf.stamp("page: the focus stayed with \(String(describing: w.firstResponder))")
+            }
+        }
+        .onChange(of: chatPath) { _, _ in Smooth.animate("chatOpen") }
         .onChange(of: tabs) { _, now in
+            kept.removeAll { !now.contains($0) }
             openOnLaunchTab(now)
             // The page showing left the rail (the plugin went, or the layout changed): back to Chats.
             if !now.contains(model.selectedTab) { model.selectedTab = .chats }
         }
+    }
+
+    /// The pages mounted beside Chats: those visited and still in the rail, and the one being
+    /// shown now (in the same pass, so a first visit never draws a frame with no page).
+    private var keptPages: [AppModel.AppTab] {
+        var pages = kept.filter { tabs.contains($0) }
+        let now = model.selectedTab
+        if now != .chats, !pages.contains(now) { pages.append(now) }
+        return pages
     }
 
     private func openOnLaunchTab(_ now: [AppModel.AppTab]) {
@@ -200,6 +255,23 @@ private struct MainSplitView: View {
     }
 }
 
+/// A page of the window's ZStack, on show or kept behind the one that is: hidden, it is not
+/// drawn, not hit-testable, not read by accessibility, and its faces hold still (`botsLive`),
+/// the four rules the iPhone's RootView applies to its tabs. The Mac's window toolbar items are
+/// declared by the pages, so a hidden page drops its own (they read `macPageShown`).
+private struct MacPage: ViewModifier {
+    var shown: Bool
+    var windowLive: Bool
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .accessibilityHidden(!shown)
+            .environment(\.botsLive, windowLive && shown)
+            .environment(\.macPageShown, shown)
+    }
+}
+
 /// Vory itself, alive: the flat finish animates and keeps its colour in a background window
 /// (the live glass one took on the window's inactive look).
 private let liveVory = BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BFF", finish: "flat")
@@ -209,6 +281,8 @@ private let liveVory = BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BF
 private struct Sidebar: View {
     @Environment(AppModel.self) private var model
     var tabs: [AppModel.AppTab]
+    /// Whether this rail declares the pages' ⌘ numbers (only the rail on show does).
+    var shortcuts = true
 
     static let width: CGFloat = 84
 
@@ -218,7 +292,7 @@ private struct Sidebar: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 2) {
                 ForEach(Array(tabs.enumerated()), id: \.element) { i, tab in
-                    RailItem(tab: tab, selected: model.selectedTab == tab, badge: badge(tab), shortcut: i < 9 ? Character("\(i + 1)") : nil) {
+                    RailItem(tab: tab, selected: model.selectedTab == tab, badge: badge(tab), shortcut: i < 9 ? Character("\(i + 1)") : nil, shortcutOn: shortcuts) {
                         // The page already showing, chosen again (a click or its ⌘ number): back to
                         // its top, as a second tap on the phone's tab bar does.
                         if model.selectedTab == tab { model.tabReselected[tab, default: 0] += 1 } else { model.selectedTab = tab }
@@ -252,6 +326,7 @@ private struct RailItem: View {
     var selected: Bool
     var badge: Int
     var shortcut: Character?
+    var shortcutOn = true
     var action: () -> Void
     @State private var hovering = false
 
@@ -283,11 +358,8 @@ private struct RailItem: View {
         .accessibilityHint(shortcut.map { "Shows \(tab.title). Command \($0)." } ?? "Shows \(tab.title).")
         .accessibilityIdentifier("rail.\(tab.rawValue)")
         .accessibilityAddTraits(selected ? .isSelected : [])
-        if let shortcut {
-            button.keyboardShortcut(KeyEquivalent(shortcut), modifiers: .command)
-        } else {
-            button
-        }
+        // Optional rather than an if/else, so the button keeps its identity when the rail hides.
+        button.keyboardShortcut(shortcutOn ? shortcut.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) } : nil)
     }
 }
 
@@ -394,6 +466,7 @@ private struct RailMore: View {
 
 /// The detail column before a chat is chosen.
 private struct NoChatView: View {
+    @Environment(\.macPageShown) private var shown
     var body: some View {
         VStack(spacing: 12) {
             // The guide plays only while something is working; idle, it holds still (#248).
@@ -406,8 +479,10 @@ private struct NoChatView: View {
         // list's buttons slid from over the list to the far end of the window, and came back
         // when a chat was opened.
         .toolbar {
-            ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
-                .sharedBackgroundVisibility(.hidden)
+            if shown {
+                ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
+                    .sharedBackgroundVisibility(.hidden)
+            }
         }
         // The placeholder must not bring a toolbar strip with it: in dark mode it showed as a
         // lighter band across the top of the empty column.
@@ -421,7 +496,8 @@ private struct GatewayFooter: View {
     @State private var editing = false
 
     private var name: String { model.runtime?.connection.name ?? model.store.active?.name ?? "No gateway" }
-    private var state: String { model.runtime.map { $0.socketState.label } ?? (model.activationError ?? "Connecting…") }
+    /// The socket, and with a backup address (#283) the address in use.
+    private var state: String { model.runtime.map { [$0.addressLabel, $0.socketState.label].compactMap { $0 }.joined(separator: " · ") } ?? (model.activationError ?? "Connecting…") }
     private var dot: Color {
         guard let s = model.runtime?.socketState else { return .secondary }
         switch s {
@@ -452,11 +528,18 @@ private struct GatewayFooter: View {
         .accessibilityHint("Edits the gateway.")
         .accessibilityIdentifier("rail.gateway")
         .disabled(model.store.active == nil)
-        .sheet(isPresented: $editing) {
-            NavigationStack { GatewayFormView(existing: model.store.active) }
-                .frame(minWidth: 520, minHeight: 640)
-                .withAppModel()
-        }
+        .sheet(isPresented: $editing) { GatewayFormSheet(existing: model.store.active).withAppModel() }
+    }
+}
+
+/// The gateway form as the Mac shows it everywhere: a sheet with its own Cancel and Save (the
+/// sidebar's gateway, Settings › Gateways, Status › Sign-in, Push setup's "Sign in again";
+/// judgement call #13), never pushed beside a toolbar Back.
+struct GatewayFormSheet: View {
+    var existing: GatewayConnection?
+    var body: some View {
+        NavigationStack { GatewayFormView(existing: existing) }
+            .frame(minWidth: 520, minHeight: 640)
     }
 }
 

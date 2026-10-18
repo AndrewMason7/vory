@@ -39,9 +39,11 @@ final class BotMotionSource {
         guard enabled, tiltEnabled, active, manager.isDeviceMotionAvailable, !UIAccessibility.isReduceMotionEnabled else {
             manager.stopDeviceMotionUpdates()
             BotAmbient.shared.tilt = .zero
+            BotAmbient.shared.tiltLive = false
             haveRest = false
             return
         }
+        BotAmbient.shared.tiltLive = true
         guard !manager.isDeviceMotionActive else { return }
         manager.deviceMotionUpdateInterval = 1 / 30
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
@@ -58,8 +60,20 @@ final class BotMotionSource {
                 return max(-1, min(1, m)) * (v < 0 ? -1 : 1)
             }
             let x = shaped(a.roll - restRoll), y = shaped(a.pitch - restPitch)
-            let t = BotAmbient.shared.tilt
-            BotAmbient.shared.tilt = CGPoint(x: t.x + (x - t.x) * 0.12, y: t.y + (y - t.y) * 0.12)
+            if let next = Self.step(from: BotAmbient.shared.tilt, toward: x, y) { BotAmbient.shared.tilt = next }
         }
+    }
+
+    /// One step of the lean from `t` toward the device's (`x`, `y`): the value to write, or nil
+    /// when nothing worth drawing changed. Back at the hold it lands on zero, so the faces that
+    /// follow it rest as pictures; a change too small to see is not written (every live face
+    /// reads the tilt, and the smoothing never quite arrived, which redrew them 30 times a second
+    /// at rest). It lands from within 0.04: below about 0.033 a step moves less than a write's
+    /// 0.004, so landing any closer in left it there, the faces live, after every lean.
+    nonisolated static func step(from t: CGPoint, toward x: Double, _ y: Double) -> CGPoint? {
+        var next = CGPoint(x: t.x + (x - t.x) * 0.12, y: t.y + (y - t.y) * 0.12)
+        if x == 0, y == 0, abs(next.x) < 0.04, abs(next.y) < 0.04 { next = .zero }
+        guard next != t, next == .zero || abs(next.x - t.x) >= 0.004 || abs(next.y - t.y) >= 0.004 else { return nil }
+        return next
     }
 }

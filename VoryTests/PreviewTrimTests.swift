@@ -45,6 +45,51 @@ import Testing
         #expect(trimmed.trimmedTail().data == trimmed.data)
     }
 
+    /// The static that follows the words with no pause before it (1.4 (10), #231: "a loud burst
+    /// right after the sample line"): the beat kept after the last word must not be static.
+    @Test func staticRightAfterTheLastWordIsCutToo() {
+        let words = 0.3 + 0.25 + 1.2
+        let clip = Self.chunk([Self.voiced(0.3), Self.silence(0.25), Self.voiced(1.2), Self.noise(0.5)])
+        let trimmed = clip.trimmedTail()
+        #expect(trimmed.seconds >= words - 0.02)
+        #expect(trimmed.seconds < words + 0.12)
+        // Nothing loud after the words: every 20 ms window past the last word stays well under
+        // the speech level, and the last 50 ms is the faded ending only.
+        let all = Self.samples(trimmed)
+        let after = all.suffix(from: min(all.count, Int(words * Self.rate)))
+        let w = Int(0.02 * Self.rate)
+        var i = after.startIndex
+        var loud = 0
+        while i + w <= after.endIndex {
+            let rms = sqrt(after[i..<(i + w)].reduce(0.0) { $0 + pow(Double($1) / 32768, 2) } / Double(w))
+            if rms > 0.06 { loud += 1 }
+            i += w
+        }
+        #expect(loud == 0)
+        #expect(all.suffix(Int(0.05 * Self.rate)).map { abs(Int($0)) }.max()! < 9000)
+        #expect(trimmed.trimmedTail().data == trimmed.data)
+    }
+
+    /// Full-scale static (clipped, deterministic).
+    static func loudNoise(_ seconds: Double) -> [Int16] {
+        noise(seconds).map { Int16(clamping: Int($0) * 3) }
+    }
+
+    /// The shape of a saved 1.4 (10) preview as it came back (#231): the words, a pause, a burst
+    /// of full-scale static, and the quiet faded remnant the first save had put on the end,
+    /// which read as a last word. Everything after the words goes.
+    @Test func staticAfterAPauseWithAFadedRemnantIsCut() {
+        let words = 0.3 + 0.25 + 1.2
+        let remnant = Self.chunk([Self.loudNoise(0.06)]).fadedOut(seconds: 0.06)
+        let clip = Self.chunk([Self.voiced(0.3), Self.silence(0.25), Self.voiced(1.2), Self.silence(0.4), Self.loudNoise(0.125), Self.samples(remnant)])
+        let trimmed = clip.trimmedTail()
+        #expect(trimmed.seconds > words + 0.04)
+        #expect(trimmed.seconds < words + 0.12)
+        let tail = Self.samples(trimmed).suffix(Int(0.3 * Self.rate))
+        #expect(tail.map { abs(Int($0)) }.max()! < 9000)
+        #expect(trimmed.trimmedTail().data == trimmed.data)
+    }
+
     @Test func aCleanClipKeepsItsWordsAndLosesOnlyTheSilenceAfter() {
         let clip = Self.chunk([Self.voiced(0.4), Self.silence(0.2), Self.voiced(0.8), Self.silence(0.5)])
         let trimmed = clip.trimmedTail()
@@ -74,8 +119,9 @@ import Testing
         cfg.protocolClasses = [PreviewStub.self]
         let chunk = try await GeminiLive.Key.preview(voice: "Kore", key: "test-key", session: URLSession(configuration: cfg))
         #expect(chunk.sampleRate == 24_000)
+        // The static follows the words with no pause, so the kept beat ends where it starts.
         #expect(chunk.seconds < 1.75 + 0.12)
-        #expect(chunk.seconds > 1.75 + 0.04)
+        #expect(chunk.seconds > 1.75 - 0.02)
     }
 }
 
