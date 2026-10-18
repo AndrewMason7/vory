@@ -6,6 +6,8 @@ public enum SocketState: Sendable, Equatable {
     case connecting
     case open
     case reconnecting(attempt: Int, delay: Double)
+    /// Still trying, after several attempts in a row that failed the same way: what the way is (#423).
+    case unreachable(ConnectProblem, attempt: Int)
     case authRejected(String)
     case failed(String)
 
@@ -16,6 +18,7 @@ public enum SocketState: Sendable, Equatable {
         case .connecting: return "Connecting…"
         case .open: return "Connected"
         case .reconnecting(let n, _): return "Reconnecting (\(n))…"
+        case .unreachable(let problem, _): return problem.title
         case .authRejected: return "Sign in required"
         case .failed: return "Connection failed"
         }
@@ -27,6 +30,10 @@ public enum SocketError: LocalizedError, Sendable {
     case timeout(String)
     case closed(code: Int, reason: String)
     case cancelled
+    /// The upgrade was answered with HTTP `status` instead of a socket (a Cloudflare error page, a redirect to a
+    /// sign-in): `location`, where a redirect pointed or the address it ended at; whether Cloudflare answered; whether
+    /// it was a web page.
+    case refused(status: Int, location: String?, cloudflare: Bool, html: Bool)
 
     public var errorDescription: String? {
         switch self {
@@ -34,8 +41,17 @@ public enum SocketError: LocalizedError, Sendable {
         case .timeout(let m): return "Timed out waiting for \(m)."
         case .closed(let code, let reason): return "WebSocket closed (\(code))\(reason.isEmpty ? "" : ": \(reason)")"
         case .cancelled: return "Cancelled."
+        case .refused(let status, _, let cloudflare, _): return "The gateway's address answered the WebSocket with HTTP \(status)\(cloudflare ? " from Cloudflare" : "")."
         }
     }
+}
+
+/// What a failed attempt says about the HTTP connection to the gateway, for the runtime to make it afresh (#423).
+public enum ConnectTrouble: Sendable, Equatable {
+    /// The address and ticket got no answer, twice in a row: the REST session's connection may be the one at fault.
+    case addressStepNoAnswer
+    /// The network path changed while the socket was waiting to try again.
+    case pathChanged
 }
 
 /// JSON-RPC 2.0 over `/api/ws`. Reconnects with backoff; re-mints tickets via `urlProvider` on every attempt.
@@ -80,6 +96,26 @@ public actor GatewaySocket {
     private var wantConnected = false
     private var everConnected = false
     private var attempt = 0
+    /// What the last failed attempts showed, and how many in a row showed it (#423).
+    private var problem: ConnectProblem?
+    private var problemStreak = 0
+    /// A 4401 has had its one retry with a fresh ticket since the socket was last open.
+    private var ticketRetried = false
+    /// The address and ticket step failed without an answer on the previous attempt too.
+    private var addressStepNoAnswer = false
+    private var onTrouble: (@Sendable (ConnectTrouble) async -> Void)?
+    /// Attempts in a row that fail the same way before the state names the problem instead of counting attempts, while
+    /// the first quick retries run; past them, a problem is named at once.
+    public static let problemShownAfter = 3
+    /// How long an attempt waits for its address and ticket (a REST call) before giving up on it.
+    public static let addressStepTimeout: Double = 25
+
+    private var addressStepTimeoutSeconds = GatewaySocket.addressStepTimeout
+    /// The tests' shorter wait for the address and ticket.
+    func setAddressStepTimeout(_ seconds: Double) { addressStepTimeoutSeconds = seconds }
+
+    /// Told when an attempt suggests the HTTP connection to the gateway should be made afresh (`ConnectTrouble`).
+    public func setTroubleHandler(_ handler: (@Sendable (ConnectTrouble) async -> Void)?) { onTrouble = handler }
 
     /// Events in batches: the sink is called once per batch, as it opens, and whoever takes
     /// the batch later gets everything that arrived in the meantime.
@@ -160,13 +196,20 @@ public actor GatewaySocket {
         while wantConnected, !Task.isCancelled {
             attempt += 1
             setState(attempt == 1 && !everConnected ? .connecting : .reconnecting(attempt: attempt, delay: 0))
+            var failure: Error?
+            var addressStepFailed = false
             do {
-                let (url, headers) = try await urlProvider()
+                let url: URL, headers: [String: String]
+                do { (url, headers) = try await addressAndTicket() }
+                catch { addressStepFailed = true; throw error }
                 try await open(url: url, headers: headers)
                 try await waitUntilReady(timeout: 20)
                 let wasReconnect = everConnected
                 everConnected = true
                 attempt = 0
+                problem = nil; problemStreak = 0
+                ticketRetried = false
+                addressStepNoAnswer = false
                 if wasReconnect { await onReconnected() }
                 return
             } catch let e as HermesAPIError where e.isUnauthorized {
@@ -176,16 +219,32 @@ public actor GatewaySocket {
             } catch let e as SocketError {
                 if case .closed(let code, let reason) = e, code == 4401 {
                     teardown(reason: "auth")
+                    // A ticket can run out between its minting and its use (a slow network, an upgrade held up on
+                    // the way): one more go with a fresh one before the sign-in is called refused.
+                    if !ticketRetried {
+                        ticketRetried = true
+                        log.warning("socket refused (4401); once more with a fresh ticket")
+                        continue
+                    }
                     setState(.authRejected(reason.isEmpty ? "The gateway rejected the WebSocket credential (4401)." : reason))
                     return
                 }
                 teardown(reason: "error")
+                failure = e
                 log.warning("connect failed: \(e.localizedDescription, privacy: .public)")
             } catch {
                 teardown(reason: "error")
+                failure = error
                 log.warning("connect failed: \(error.localizedDescription, privacy: .public)")
             }
             guard wantConnected else { return }
+            let seen = failure.flatMap(ConnectProblem.of)
+            if let seen, seen == problem { problemStreak += 1 } else { problem = seen; problemStreak = seen == nil ? 0 : 1 }
+            // The ticket's REST call went unanswered twice in a row: its connection may be one a network change broke,
+            // which only a new session mends (what quitting the app did, #423).
+            let noAnswerNow = addressStepFailed && seen == .noAnswer
+            if noAnswerNow, addressStepNoAnswer { await onTrouble?(.addressStepNoAnswer) }
+            addressStepNoAnswer = noAnswerNow
             // No usable path: nothing to try against, so the next attempt waits for the path to
             // change (a route coming up on first open), not for a growing delay (#305).
             let watch = NetworkWatch.shared
@@ -194,18 +253,50 @@ public actor GatewaySocket {
                 let mark = watch.mark
                 await watch.waitForChange(since: mark, upTo: 30)
                 if Task.isCancelled { return }
+                if watch.mark != mark { await onTrouble?(.pathChanged) }
                 continue
             }
             let delay = Self.retryDelay(attempt: attempt) * Double.random(in: 0.8...1.2)
-            setState(.reconnecting(attempt: attempt, delay: delay))
+            // Named after a few failures in a row while the first quick retries run (a blip at launch says nothing),
+            // and at once after that: by then attempts are seconds apart and a new cause is news (Access after an
+            // origin error waited three backed-off attempts, a minute and a half, to be named).
+            if let problem, problemStreak >= Self.problemShownAfter || attempt > Self.problemShownAfter {
+                setState(.unreachable(problem, attempt: attempt))
+            } else {
+                setState(.reconnecting(attempt: attempt, delay: delay))
+            }
             // The wait is cut short by a path change: the route came up, so the attempt goes now.
             let mark = watch.mark
             let deadline = Date().addingTimeInterval(delay)
             while Date() < deadline {
                 if Task.isCancelled { return }
-                if watch.mark != mark { break }
+                if watch.mark != mark { await onTrouble?(.pathChanged); break }
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             }
+        }
+    }
+
+    /// The attempt's address and ticket, given up on after `addressStepTimeout`. The ticket is a REST call, and one
+    /// on a connection the network had dropped could hold the loop for as long as it hung (#423). The call is left to
+    /// finish or fail on its own: waiting for it to notice its cancellation is the wait this avoids.
+    private func addressAndTicket() async throws -> (URL, [String: String]) {
+        let provider = urlProvider
+        let gate = OnceGate<(URL, [String: String])>()
+        let timeout = addressStepTimeoutSeconds
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<(URL, [String: String]), Error>) in
+                gate.arm(c)
+                let work = Task {
+                    do { gate.settle(.success(try await provider())) } catch { gate.settle(.failure(error)) }
+                }
+                let timer = Task {
+                    try? await Task.sleep(for: .seconds(timeout))
+                    if !Task.isCancelled, gate.settle(.failure(SocketError.timeout("the gateway's address and ticket"))) { work.cancel() }
+                }
+                gate.onSettle { timer.cancel() }
+            }
+        } onCancel: {
+            gate.settle(.failure(CancellationError()))
         }
     }
 
@@ -320,6 +411,12 @@ public actor GatewaySocket {
                     teardown(reason: "closed \(code)")
                     return
                 }
+                if state != .open, let refused = Self.refusal(of: t) {
+                    // The upgrade was answered with a page, not a socket: what it was, for the loop to tell apart.
+                    settleReadyWaiters(throwing: refused)
+                    teardown(reason: "refused")
+                    return
+                }
                 if state != .open {
                     settleReadyWaiters(throwing: SocketError.closed(code: code, reason: reason.isEmpty ? error.localizedDescription : reason))
                     teardown(reason: "closed")
@@ -329,6 +426,17 @@ public actor GatewaySocket {
                 return
             }
         }
+    }
+
+    /// An upgrade answered with something other than a socket (101): its status, where it pointed or ended up, and
+    /// whether Cloudflare sent it and it was a web page.
+    nonisolated static func refusal(of task: URLSessionTask) -> SocketError? {
+        guard let http = task.response as? HTTPURLResponse, http.statusCode != 101, http.statusCode != 0 else { return nil }
+        let server = (http.value(forHTTPHeaderField: "Server") ?? "").lowercased()
+        let cloudflare = server.contains("cloudflare") || http.value(forHTTPHeaderField: "CF-RAY") != nil
+        let type = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        let location = http.value(forHTTPHeaderField: "Location") ?? http.url?.absoluteString
+        return .refused(status: http.statusCode, location: location, cloudflare: cloudflare, html: type.contains("text/html"))
     }
 
     private func handle(_ frame: InboundFrame) {
@@ -418,5 +526,44 @@ public actor GatewaySocket {
     private func sendText(_ text: String) async {
         guard let task else { return }
         try? await task.send(.string(text))
+    }
+}
+
+/// A continuation resumed once, by whichever of its racers settles first; later settles are no-ops.
+final class OnceGate<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var early: Result<T, Error>?
+    private var settled = false
+    private var then: (() -> Void)?
+
+    func arm(_ c: CheckedContinuation<T, Error>) {
+        lock.lock()
+        if let early { lock.unlock(); c.resume(with: early); return }
+        continuation = c
+        lock.unlock()
+    }
+
+    /// Runs `f` once the gate settles (at once if it already has).
+    func onSettle(_ f: @escaping () -> Void) {
+        lock.lock()
+        if settled { lock.unlock(); f(); return }
+        then = f
+        lock.unlock()
+    }
+
+    /// True when this call was the one that settled it.
+    @discardableResult
+    func settle(_ r: Result<T, Error>) -> Bool {
+        lock.lock()
+        guard !settled else { lock.unlock(); return false }
+        settled = true
+        let c = continuation; continuation = nil
+        if c == nil { early = r }
+        let f = then; then = nil
+        lock.unlock()
+        c?.resume(with: r)
+        f?()
+        return true
     }
 }

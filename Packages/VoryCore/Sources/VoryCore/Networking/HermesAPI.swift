@@ -3,6 +3,8 @@ import Foundation
 public enum HermesAPIError: LocalizedError, Sendable {
     case transport(String)
     case htmlResponse(status: Int)
+    /// The HTML that answered is Cloudflare Access's sign-in page: a sign-in in a browser, which Vory cannot do.
+    case cloudflareAccess(status: Int)
     case http(status: Int, detail: String)
     case unauthorized(String)
     case decoding(String)
@@ -13,6 +15,8 @@ public enum HermesAPIError: LocalizedError, Sendable {
         case .transport(let m): return m
         case .htmlResponse:
             return "This URL is not the Hermes dashboard API (got an HTML login/page). Use the `hermes serve` / dashboard URL, add Access service-token headers if Cloudflare Access is on, and confirm the tunnel upgrades WebSockets."
+        case .cloudflareAccess:
+            return "Cloudflare Access asked for a sign-in in a browser, which Vory can't do. Check the tunnel's Access settings, or add an Access service token to this gateway in Vory."
         case .http(let status, let detail): return detail.isEmpty ? "HTTP \(status)" : "\(detail) (HTTP \(status))"
         case .unauthorized(let d): return d.isEmpty ? "The gateway rejected the credentials (401)." : d
         case .decoding(let m): return "Unexpected response from the gateway: \(m)"
@@ -35,7 +39,13 @@ public actor HermesAPI {
     /// in use before each connect.
     public private(set) var gateway: GatewayURL
     public private(set) var signer: RequestSigner
-    private let urlSession: URLSession
+    private var urlSession: URLSession
+    /// Makes the session that replaces this one (`resetSession`); nil makes one like it, from its configuration.
+    private let makeSession: (@Sendable () -> URLSession)?
+    /// How many times the session has been replaced (the tests read it).
+    public private(set) var sessionResets = 0
+    /// The session's configuration (the tests check a replacement keeps the transport's protocol classes).
+    public var sessionConfiguration: URLSessionConfiguration { urlSession.configuration }
     /// Called on 401 for bearer modes; returns a refreshed signer or throws.
     public var refresher: (@Sendable () async throws -> RequestSigner)?
     private var refreshInFlight: Task<RequestSigner, Error>?
@@ -59,10 +69,22 @@ public actor HermesAPI {
 
     public func setGateway(_ gateway: GatewayURL) { self.gateway = gateway }
 
-    public init(gateway: GatewayURL, signer: RequestSigner, urlSession: URLSession = HermesAPI.makeSession()) {
+    public init(gateway: GatewayURL, signer: RequestSigner, urlSession: URLSession = HermesAPI.makeSession(), makeSession: (@Sendable () -> URLSession)? = nil) {
         self.gateway = gateway
         self.signer = signer
         self.urlSession = urlSession
+        self.makeSession = makeSession
+    }
+
+    /// A new session for the gateway, its connections made afresh. One session lasted as long as the app, and a
+    /// connection to Cloudflare's edge that a network change had broken went on failing every call until the app was
+    /// quit (#423). The new session is in place before the old one is cancelled, so a call made from now on takes the
+    /// new one; a call still on the old one fails as a dropped connection does, into its caller's usual handling.
+    public func resetSession() {
+        let old = urlSession
+        urlSession = makeSession?() ?? URLSession(configuration: old.configuration)
+        sessionResets += 1
+        old.invalidateAndCancel()
     }
 
     public static func makeSession() -> URLSession {
@@ -153,7 +175,7 @@ public actor HermesAPI {
         let (data, http, refreshed) = try await answered(method, path, items: items, body: body, authenticated: authenticated, directOnly: directOnly)
         if http.statusCode >= 400 { throw Self.error(for: http, data: data) }
         // The retry after a renewal is judged by its status alone, as before.
-        if !refreshed, Self.looksLikeHTML(http: http, data: data) { throw HermesAPIError.htmlResponse(status: http.statusCode) }
+        if !refreshed, Self.looksLikeHTML(http: http, data: data) { throw Self.htmlError(http) }
         return (data, http)
     }
 
@@ -287,8 +309,16 @@ public actor HermesAPI {
             request.setValue(type, forHTTPHeaderField: "Content-Type")
         }
         let result: (Data, URLResponse)
-        do { result = try await urlSession.data(for: request) }
-        catch {
+        let session = urlSession
+        do {
+            do { result = try await session.data(for: request) }
+            catch let e as URLError where e.code == .cancelled && session !== urlSession && !Task.isCancelled && Self.isRead(method) {
+                // Cut off because its session was replaced (`resetSession`, #423): a read goes again, once, on the
+                // new one, so a load made just before a reset is not lost. A write is not sent twice: it fails into its
+                // caller's usual handling.
+                result = try await urlSession.data(for: request)
+            }
+        } catch {
             let code = (error as? URLError)?.code
             let cancelled = error is CancellationError || code == .cancelled
             if soft { throw DirectFailure(message: error.localizedDescription, cancelled: cancelled, beforeSend: code.map(Self.failsBeforeSending.contains) ?? false) }
@@ -334,8 +364,17 @@ public actor HermesAPI {
         return prefix.hasPrefix("<!doctype") || prefix.hasPrefix("<html")
     }
 
+    /// A call that only reads, and so may be sent again when its connection was cut under it.
+    nonisolated static func isRead(_ method: String) -> Bool { ["GET", "HEAD", "OPTIONS"].contains(method.uppercased()) }
+
+    /// A web page that answered instead of the gateway: Cloudflare Access's sign-in (the address the redirects ended
+    /// at), or any other.
+    public nonisolated static func htmlError(_ http: HTTPURLResponse) -> HermesAPIError {
+        ConnectProblem.isAccessSignIn(http.url?.absoluteString) ? .cloudflareAccess(status: http.statusCode) : .htmlResponse(status: http.statusCode)
+    }
+
     public nonisolated static func error(for http: HTTPURLResponse, data: Data) -> HermesAPIError {
-        if looksLikeHTML(http: http, data: data) { return .htmlResponse(status: http.statusCode) }
+        if looksLikeHTML(http: http, data: data) { return htmlError(http) }
         var detail = ""
         if let obj = try? JSONDecoder().decode(JSONValue.self, from: data) {
             if let d = obj["detail"]?.stringValue { detail = d }

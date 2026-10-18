@@ -555,6 +555,7 @@ struct ChatListView: View {
         case .open: return "checkmark.circle.fill"
         case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
         case .authRejected, .failed: return "xmark.octagon.fill"
+        case .unreachable: return "exclamationmark.triangle.fill"
         case .idle: return "circle"
         }
     }
@@ -1559,6 +1560,7 @@ struct ChatListProfileItems: View {
         case .open: return "checkmark.circle.fill"
         case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
         case .authRejected, .failed: return "xmark.octagon.fill"
+        case .unreachable: return "exclamationmark.triangle.fill"
         case .idle: return "circle"
         }
     }

@@ -1413,8 +1413,88 @@ PROFILES_DELAY = [0.0]
 PROFILES_FAIL = [0]
 
 
+# Test only (#423): what Cloudflare in front of the gateway can do to the app, switched at run time with
+# GET /mock/fault?mode=MODE[&status=N][&count=N]. Every mode but "none" first drops the open sockets, so the app meets it
+# on its next attempt.
+#   access          every request is redirected (302) to Cloudflare Access's sign-in page, served here as HTML
+#   origin          every request gets Cloudflare's "origin unreachable" page (status N, default 523)
+#   ws-origin       only the WebSocket upgrade gets that page; REST works
+#   ticket-expired  the next N upgrades (default 1) are closed with 4401 "ticket expired", then all is well
+#   stall           nothing answers: REST and upgrades hang, open sockets go quiet (pings unanswered)
+#   none            back to normal
+FAULT = {"mode": "none", "status": 523, "count": 0}
+
+
+def _cloudflare_page(status: int, title: str, text: str) -> Response:
+    body = (f"<!DOCTYPE html><html><head><title>{title}</title></head><body><h1>{title}</h1><p>{text}</p>"
+            "<p>Cloudflare Ray ID: mock</p></body></html>").encode()
+    reason = {302: "Found", 200: "OK"}.get(status, "Origin Error")
+    return Response(status, reason, Headers([("Content-Type", "text/html; charset=UTF-8"), ("Content-Length", str(len(body))),
+                                            ("Server", "cloudflare"), ("CF-RAY", "mock-ray")]), body)
+
+
+def _drop_sockets() -> int:
+    dropped = 0
+    for gw in list(GATEWAYS):
+        try:
+            gw.ws.transport.abort()
+            dropped += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return dropped
+
+
+async def _fault(request) -> Response | None:
+    """The answer a fault gives to this request instead of the gateway's, or None to go on as normal."""
+    path = request.path
+    base = path.split("?")[0]
+    mode = FAULT["mode"]
+    if mode == "none" or base.startswith("/mock/"):
+        return None
+    host = request.headers.get("Host", "127.0.0.1")
+    if mode == "access":
+        if base.startswith("/cdn-cgi/access/"):
+            return _cloudflare_page(200, "Sign in &middot; Cloudflare Access", "Get a login code emailed to you.")
+        target = f"http://{host}/cdn-cgi/access/login/{host.split(':')[0]}?kid=mock&redirect_url={base}"
+        resp = _cloudflare_page(302, "Found", "Redirecting to Cloudflare Access.")
+        resp.headers["Location"] = target
+        return resp
+    if mode == "origin" or (mode == "ws-origin" and base == "/api/ws"):
+        return _cloudflare_page(FAULT["status"], f"Error {FAULT['status']}", "Origin is unreachable.")
+    if mode == "stall":
+        await asyncio.sleep(600)
+    return None
+
+
 async def process_request(connection, request):
     base = request.path.split("?")[0]
+    if base == "/mock/fault":
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        FAULT["mode"] = q.get("mode", "none") or "none"
+        FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
+        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] == "ticket-expired" else 0)
+        dropped = _drop_sockets() if FAULT["mode"] != "none" else 0
+        print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
+        body = json.dumps({**FAULT, "dropped": dropped}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/mock/touch":
+        # Test only (#423): a chat changed on the gateway while the app is away (GET /mock/touch?title=…&preview=…),
+        # for a return to show it without being asked.
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        title, preview = unquote(q.get("title", "")).replace("+", " "), unquote(q.get("preview", "")).replace("+", " ")
+        touched = 0
+        for row in STORED_SESSIONS:
+            if title and title.lower() in (row.get("title") or "").lower():
+                row["preview"] = preview
+                row["last_active"] = time.time()
+                touched += 1
+        print(f"[mock] touched {touched} chat(s) titled {title!r}", flush=True)
+        body = json.dumps({"touched": touched}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    faulted = await _fault(request)
+    if faulted is not None:
+        print(f"[mock] fault {FAULT['mode']}: {request.path.split('?')[0]} -> {faulted.status_code}", flush=True)
+        return faulted
     if base == "/mock/profiles-fail":
         count = request.path.partition("count=")[2].split("&")[0]
         PROFILES_FAIL[0] = int(count) if count.isdigit() else 1
@@ -2324,6 +2404,8 @@ class Gateway:
     # -- dispatch -----------------------------------------------------------------------------
 
     async def handle(self, msg: dict) -> dict | None:
+        if FAULT["mode"] == "stall":
+            return None  # a socket gone quiet (#423's fault switch): nothing answered, pings included
         # A response to one of OUR requests (approval / clarify / ...).
         if ("result" in msg or "error" in msg) and isinstance(msg.get("id"), str):
             fut = self.pending.get(msg["id"]) or next((l.pending[msg["id"]] for l in LIVE.values() if msg["id"] in l.pending), None)
@@ -2695,6 +2777,13 @@ async def ws_handler(ws):
             await kanban_events(ws, query)
         except Exception:
             pass
+        return
+    if FAULT["mode"] == "ticket-expired" and FAULT["count"] > 0:
+        FAULT["count"] -= 1
+        print(f"[mock] fault ticket-expired: upgrade closed 4401 ({FAULT['count']} more)", flush=True)
+        if FAULT["count"] == 0:
+            FAULT["mode"] = "none"
+        await ws.close(4401, "ticket expired")
         return
     gw = Gateway(ws)
     GATEWAYS.add(gw)

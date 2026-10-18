@@ -31,7 +31,14 @@ public final class GatewayRuntime {
     /// their text without being redrawn, and are drawn once when it comes back.
     public var isAway = false {
         didSet {
+            if isAway, !oldValue { awaySince = Date() }
             guard oldValue, !isAway else { return }
+            // Away long enough for the network under the REST session to have changed (#423): its connections are
+            // made afresh before anything is asked of them.
+            if let since = awaySince, Date().timeIntervalSince(since) >= Self.awayResetAfter {
+                Task { [api] in await api.resetSession() }
+            }
+            awaySince = nil
             // The chats' views catch up once, when the app says (`scheduleCatchUp`); they stay
             // held until then, so a live change meanwhile does not have them catch up early.
             for chat in registry.all { chat.beginCatchUp() }
@@ -53,6 +60,10 @@ public final class GatewayRuntime {
             }
         }
     }
+    /// When the app went out of sight, and how long it must have been away for the REST session to be replaced.
+    private var awaySince: Date?
+    static let awayResetAfter: TimeInterval = 60
+
     /// When the chats' views catch up after a return: at once when not set (the Mac's wake, the
     /// tests). The phone runs it just after the return's first frame, out of the scene update,
     /// whose stretch on the main thread it lengthened by drawing the turn that ended away (#371).
@@ -153,6 +164,9 @@ public final class GatewayRuntime {
                 return await self.answer(serverRequest: req)
             },
             onReconnected: { [weak self] in await self?.didReconnect() })
+        // An attempt that got no answer from the ticket's REST call twice in a row, or a network change while
+        // waiting: the REST session's connections are made afresh, as quitting the app did (#423).
+        Task { [socket, api] in await socket?.setTroubleHandler { _ in await api.resetSession() } }
         Task { await api.setRefresher { [weak self] in
             guard let self else { throw HermesAPIError.sessionExpired }
             return try await self.refreshSigner()
@@ -344,6 +358,8 @@ public final class GatewayRuntime {
     }
 
     public func reconnectNow() async {
+        // Everything made afresh, the REST session's connections too: a Reconnect is what quitting the app did (#423).
+        await api.resetSession()
         await socket.disconnect()
         if socketEnabled { await socket.connect() }
     }
