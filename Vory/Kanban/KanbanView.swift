@@ -13,6 +13,7 @@ struct KanbanView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.barTab) private var barTab
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
     @State private var showNew = false
     @State private var detailTask: KanbanTask?
@@ -24,6 +25,8 @@ struct KanbanView: View {
     private var store: KanbanStore? { model.runtime?.kanban }
     private var column: KanbanStatus { KanbanStatus(rawValue: columnRaw) ?? .ready }
     private var active: Bool { embedded ? appeared : model.selectedTab == .kanban }
+    /// The Board tab's root under the phone's morph bar, which draws New Task.
+    private var barDrawsNew: Bool { MorphTopBar.active(model) && barTab == .kanban }
 
     var body: some View {
         Group {
@@ -46,7 +49,7 @@ struct KanbanView: View {
         .task(id: active) { await follow() }
         .reloadable { await store?.refresh() }
         .onChange(of: model.pageRequest) { _, r in
-            guard let r, r.kind == .boardNew else { return }
+            guard barDrawsNew, let r, r.kind == .boardNew else { return }
             model.pageRequest = nil; showNew = true
         }
         .sheet(item: $detailTask) { t in
@@ -205,7 +208,9 @@ struct KanbanView: View {
                 Button { Task { await store?.nudge() } } label: { Label("Nudge Dispatcher", systemImage: "hare") }
                 Button { Task { await store?.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             } label: { Label("Board options", systemImage: "ellipsis.circle") }
-            if !MorphTopBar.active(model) {
+            // The Board tab's root under the morph bar: the bar draws New Task. Pushed from
+            // Settings › Board the page has its own (#426).
+            if !barDrawsNew {
             Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
                 .disabled(store?.isPresent != true)
             }
