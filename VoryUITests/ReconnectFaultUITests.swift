@@ -119,16 +119,28 @@ final class ReconnectFaultUITests: XCTestCase {
         closeMenu()
     }
 
+    /// The open chat's composer, once any approval left waiting by an earlier test (the mock keeps it, and its card
+    /// stands where the composer was) is denied: the tests do not depend on their order.
+    private func composerClear() -> XCUIElement {
+        let composer = app.textViews["composer.text"].firstMatch
+        if !composer.waitForExistence(timeout: 8) {
+            let deny = app.buttons.matching(NSPredicate(format: "label == 'Deny'")).firstMatch
+            if deny.waitForExistence(timeout: 15) { deny.tap(); log("denied a waiting approval first") }
+        } else if app.buttons["Deny"].exists {
+            app.buttons["Deny"].tap(); log("denied a waiting approval first")
+        }
+        XCTAssertTrue(composer.waitForExistence(timeout: 20), "no composer")
+        return composer
+    }
+
     /// A message in a chat, and its reply's approval answered: the app works.
     private func sendAndAnswer(_ words: String, in title: String) -> Bool {
         if app.buttons["chat.back"].exists { app.buttons["chat.back"].tap(); pause(1) }
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
         guard row.waitForExistence(timeout: 15) else { log("no row \(title)"); return false }
         row.tap()
-        let composer = app.textViews["composer.text"].firstMatch
-        guard composer.waitForExistence(timeout: 15) else { log("no composer"); return false }
-        // A card left from an earlier turn: answered first, so the composer is the bar's.
-        if app.buttons["Deny"].exists { app.buttons["Deny"].tap(); pause(1.5) }
+        let composer = composerClear()
+        guard composer.exists else { log("no composer"); return false }
         composer.tap()
         composer.typeText(words)
         let send = app.buttons.matching(identifier: "composer.send").firstMatch
@@ -231,9 +243,7 @@ final class ReconnectFaultUITests: XCTestCase {
         XCTAssertTrue(any("chats.new").waitForExistence(timeout: 40))
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Disk cleanup")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
-        let composer = app.textViews["composer.text"].firstMatch
-        XCTAssertTrue(composer.waitForExistence(timeout: 15))
-        if app.buttons["Deny"].exists { app.buttons["Deny"].tap(); pause(1.5) }
+        let composer = composerClear()
         let words = "Mid-turn reset check"
         composer.tap(); composer.typeText(words)
         app.buttons.matching(identifier: "composer.send").firstMatch.tap()
@@ -247,11 +257,13 @@ final class ReconnectFaultUITests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.buttons["Once"].waitForExistence(timeout: 20), "the approval was lost in the reset")
         shot("7-approval-after")
+        // The message, once, where it is on screen: just above its approval. Counted before the reply moves it up and
+        // out of the thread's tree (rows off screen are not in it), with the chat holding earlier tests' turns too.
+        let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words))
+        XCTAssertEqual(sent.count, 1, "the message shows \(sent.count) times")
         app.buttons["Once"].tap()
         pause(4)
         XCTAssertFalse(app.buttons["Once"].exists, "the approval did not go")
-        let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words))
-        XCTAssertEqual(sent.count, 1, "the message shows \(sent.count) times")
         shot("8-turn-after")
     }
 
@@ -269,9 +281,7 @@ final class ReconnectFaultUITests: XCTestCase {
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Rewrite the nightly export")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         row.tap()
-        let composer = app.textViews["composer.text"].firstMatch
-        XCTAssertTrue(composer.waitForExistence(timeout: 15))
-        if app.buttons["Deny"].exists { app.buttons["Deny"].tap(); pause(1.5) }
+        let composer = composerClear()
         composer.tap(); composer.typeText("marathon 200")
         app.buttons.matching(identifier: "composer.send").firstMatch.tap()
         let step = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", " of 200: checking shard"))
