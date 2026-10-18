@@ -83,19 +83,24 @@ final class Crash421UITests: XCTestCase {
     /// The thread's tool cards and the top of the dock, read from one copy of the tree: a card found there cannot
     /// leave between the find and the tap, as rows do when the lazy stack takes them during a stream, and an element
     /// bound by index then pointed at another card or at none (27's gate). `key` keeps the cards whose label has it.
-    private func cardsOnScreen(_ key: String? = nil) -> (cards: [(label: String, frame: CGRect)], dockTop: CGFloat) {
-        guard let snap = try? app.snapshot() else { return ([], 0) }
+    private func cardsOnScreen(_ key: String? = nil) -> (cards: [(label: String, frame: CGRect)], dockTop: CGFloat, ended: Bool, step: Int) {
+        guard let snap = try? app.snapshot() else { return ([], 0, false, 0) }
         var cards: [(String, CGRect)] = []
         var dockTop = snap.frame.maxY - 140
+        var ended = false
+        var step = 0
         func walk(_ s: XCUIElementSnapshot) {
             if s.identifier == "chat.dock" { dockTop = s.frame.minY }
             if s.elementType == .button, s.label.localizedCaseInsensitiveContains("terminal"), key.map({ s.label.contains($0) }) ?? true {
                 cards.append((s.label, s.frame))
             }
+            // The marathon's reply, which comes at its end, and the newest step it shows ("Step 68 of 90: …").
+            if !ended, s.label.contains("Everything else looked healthy") { ended = true }
+            if let m = s.label.firstMatch(of: /Step (\d+) of \d+/), let n = Int(m.output.1), n > step { step = n }
             for c in s.children { walk(c) }
         }
         walk(snap)
-        return (cards, dockTop)
+        return (cards, dockTop, ended, step)
     }
 
     /// A card's header row, where a tap only folds or unfolds it (the middle of an open card is its output, its
@@ -114,32 +119,76 @@ final class Crash421UITests: XCTestCase {
         mark(String(format: "tap %@ %.2f s", name, Date().timeIntervalSince(t0)))
     }
 
+    /// The keyboard down (a drag from just above the dock to the bottom, as ChatFollowUITests does) and the thread
+    /// back on its end, following the turn. `send`'s swipe left the keyboard up and the reader above the rows the
+    /// stream adds: nearly every card was below the screen, out of reach.
+    private func followTheEnd() {
+        let dock = app.descendants(matching: .any).matching(identifier: "chat.dock").firstMatch
+        if dock.exists, dock.frame.maxY < app.frame.height - 120 {
+            let from = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.midX, dy: dock.frame.minY - 12))
+            let to = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.midX, dy: app.frame.height - 4))
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0)
+            pause(1)
+        }
+        let jump = app.buttons.matching(NSPredicate(format: "label == 'Jump to latest'")).firstMatch
+        if jump.exists, jump.isHittable { jump.tap(); pause(0.6) }
+    }
+
     func testToolCardsOpenedAndClosedWhileALongTurnStreams() throws {
+        // HERMES_E2E_421_MODE: "gate" (the default) leaves every third card open, swipes fast every fifth step and goes
+        // back to the end whenever no card is in reach (an open card, revealed, can fill the screen), so the cycles add
+        // up. For comparing builds (28): "found" is the same without the return to the end; "end" brings the reader
+        // back to the end after every tap, with no fast swipes, every third card still left open; "closed" closes every
+        // card again and keeps the reader up the thread. Each step marks the newest step the app shows, against the
+        // mock's log of when it sent each one; after the loop, when the app shows the turn's end.
+        let mode = ProcessInfo.processInfo.environment["HERMES_E2E_421_MODE"].flatMap { $0.isEmpty ? nil : $0 } ?? "gate"
         try launch()
         send("marathon 90", started: "of 90: checking shard")
+        followTheEnd()
+        if mode == "closed" { app.swipeDown(velocity: .slow); pause(1) }
+        mark("MODE \(mode)")
         let end = Date().addingTimeInterval(50)
         var i = 0
+        // Cycles (a card opened, and closed unless it is a third one) while the turn was still streaming: a floor, so
+        // a slow copy of the tree cannot quietly turn this into a weak test.
+        var whileStreaming = 0
         while Date() < end {
             i += 1
+            let t0 = Date()
             let seen = cardsOnScreen()
-            guard let card = seen.cards.last(where: { headerPoint($0.frame, dockTop: seen.dockTop) != nil }),
-                  let open = headerPoint(card.frame, dockTop: seen.dockTop) else { pause(0.5); continue }
+            let inRange = seen.cards.filter { headerPoint($0.frame, dockTop: seen.dockTop) != nil }
+            mark(String(format: "step %d: %d cards, %d in reach, copy %.2f s, app at step %d%@", i, seen.cards.count, inRange.count, Date().timeIntervalSince(t0), seen.step, seen.ended ? ", turn ended" : ""))
+            guard let card = inRange.last, let open = headerPoint(card.frame, dockTop: seen.dockTop) else {
+                if mode == "gate" { followTheEnd() }
+                pause(0.5); continue
+            }
             timedTap(open, "open \(i)")
             pause(0.3)
             // Every third one is left open, so open cards ride the stream. The card is found again by the shard its
             // command names, where it is now.
             let key = card.label.firstMatch(of: /shard-\d+/).map { String($0.output) } ?? card.label
-            if i % 3 != 0 {
+            var cycled = i % 3 == 0 && mode != "closed"
+            if !cycled {
                 let again = cardsOnScreen(key)
-                if let c = again.cards.first, let close = headerPoint(c.frame, dockTop: again.dockTop) { timedTap(close, "close \(i)") }
+                if let c = again.cards.first, let close = headerPoint(c.frame, dockTop: again.dockTop) { timedTap(close, "close \(i)"); cycled = true }
             }
-            if i % 5 == 0 {
+            if cycled, !seen.ended { whileStreaming += 1 }
+            if mode == "end" { followTheEnd() }
+            if mode == "found" || mode == "gate", i % 5 == 0 {
                 app.swipeDown(velocity: .fast); pause(0.3); app.swipeUp(velocity: .fast)
                 // The list coasts after a fast swipe: frames read meanwhile are where the rows were.
                 pause(1.5)
+                followTheEnd()
             }
             pause(0.2)
         }
+        mark("cycles while the turn streamed: \(whileStreaming)")
+        // When the app shows the turn's end (the mock's log says when it sent it), up to four minutes more.
+        let shownBy = Date().addingTimeInterval(240)
+        var last = cardsOnScreen()
+        while !last.ended, Date() < shownBy { pause(2); last = cardsOnScreen(); mark("waiting: app at step \(last.step)") }
+        mark(last.ended ? "TURN-SHOWN-ENDED" : "TURN-NOT-SHOWN-ENDED at step \(last.step)")
+        XCTAssertGreaterThanOrEqual(whileStreaming, 4, "only \(whileStreaming) open and close cycles while the turn streamed")
         alive("tool cards while streaming")
     }
 
