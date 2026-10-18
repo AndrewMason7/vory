@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.37"
+VERSION = "1.0.38"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -498,6 +498,26 @@ def write_status(**fields) -> None:
 # ── gateway client ────────────────────────────────────────────────────────────────────────────
 
 
+class RPCError(RuntimeError):
+    """A JSON-RPC error reply, with its code (-32601: the gateway does not know the method)."""
+    def __init__(self, code, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def is_unknown_method(exc: BaseException) -> bool:
+    """Whether a call failed because the gateway does not know the method (an older Hermes)."""
+    if isinstance(exc, RPCError) and exc.code == -32601:
+        return True
+    m = str(exc).lower()
+    return "unknown method" in m or "method not found" in m
+
+
+UNKNOWN_CAPABILITIES_HINT = ("vory-push: this Hermes does not know client.capabilities, so it runs without it: an approval "
+                             "raised while the phone is in the background is withdrawn instead of waiting for it. Update "
+                             "Hermes for approvals that wait.")
+
+
 class Gateway:
     def __init__(self) -> None:
         #: Exactly the URL the user typed in the app; nothing else is tried.
@@ -521,6 +541,9 @@ class Gateway:
         elif self.token:
             self.headers["X-Hermes-Session-Token"] = self.token
         self.ws = None
+        #: Whether the gateway took client.capabilities (None until connected): an older Hermes
+        #: does not know it, and runs on without it (#400).
+        self.server_requests: bool | None = None
         self._id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self.events: asyncio.Queue = asyncio.Queue()
@@ -599,7 +622,17 @@ class Gateway:
         # open_requests for the phone's next resume. Without this, an approval raised while the
         # phone is backgrounded and only the companion is attached would be withdrawn as
         # unanswerable instead of waiting — and the companion would never see it.
-        await self.call("client.capabilities", {"server_requests": True})
+        # An older Hermes does not know the method: everything else works without it, so the
+        # relay goes on and says once what is missing (#400). It used to reconnect every 30 s.
+        try:
+            await self.call("client.capabilities", {"server_requests": True})
+            self.server_requests = True
+        except Exception as exc:  # noqa: BLE001
+            if not is_unknown_method(exc):
+                raise
+            if self.server_requests is not False:
+                log.warning(UNKNOWN_CAPABILITIES_HINT)
+            self.server_requests = False
         self.requests: asyncio.Queue = asyncio.Queue()
 
     async def _reader(self) -> None:
@@ -616,7 +649,8 @@ class Gateway:
                         await self.events.put(msg.get("params") or {})
                     elif "id" in msg and isinstance(msg["id"], int) and (fut := self._pending.pop(msg["id"], None)):
                         if "error" in msg:
-                            fut.set_exception(RuntimeError(msg["error"].get("message", "rpc error")))
+                            err = msg["error"] if isinstance(msg["error"], dict) else {"message": str(msg["error"])}
+                            fut.set_exception(RPCError(err.get("code"), err.get("message", "rpc error")))
                         else:
                             fut.set_result(msg.get("result") or {})
                     elif isinstance(msg.get("id"), str) and msg.get("method"):
@@ -655,7 +689,8 @@ class Relay:
         self.last_la: dict = {}                  # what the last Live Activity push was and what the relay said
 
     def _status(self, **fields) -> None:
-        write_status(**fields, **self.last_test, **self.last_la)
+        # Whether the gateway takes client.capabilities, for the app's Companion settings (#400).
+        write_status(**fields, **self.last_test, **self.last_la, server_requests=self.gw.server_requests)
 
     def _note_la(self, event: str, ok: bool, detail: str | None = None) -> None:
         self.last_la = {"last_la_event": event, "last_la_ok": ok, "last_la_response": (detail if detail is not None else self.apns.last_response)[:300], "last_la_at": time.time()}
