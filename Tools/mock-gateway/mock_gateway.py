@@ -2079,6 +2079,35 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": answer, "usage": usage(s.output_tokens, 1), "status": "complete", "reasoning": reasoning})
 
+    async def _reasoning_steps_turn(self, s: Session, prompt: str) -> None:
+        """A model that thinks before each tool call and says nothing between them (#424, #421): `steps 6` gives
+        that many steps of streamed reasoning, then a tool call, then a short answer. Filed as the gateway stores
+        it: each step an assistant row with empty content, its reasoning and its tool call, then the tool's row."""
+        m = re.search(r"\d+", prompt)
+        n = max(1, min(40, int(m.group()) if m else 6))
+        await self.event("message.start", s.sid)
+        steps: list[dict] = []
+        for i in range(n):
+            thought = (f"Step {i + 1}: the export's shard {i + 1:02d} is next. I'll read its log before touching anything, "
+                       "because the last run retried twice and I want to know why before I change the schedule. ") * 3
+            await self.stream_words(s, thought, delay=0.02, kind="reasoning.delta")
+            tool_id = f"call_{uuid.uuid4().hex[:8]}"
+            cmd = f"tail -n 20 /var/log/app/shard-{i + 1:02d}.log"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
+            await asyncio.sleep(0.6)
+            out = "\n".join(f"shard-{i + 1:02d} INFO request {k} served in {k % 90 + 3} ms" for k in range(20))
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.6,
+                                                      "summary": "20 lines", "result_text": out})
+            steps.append({"role": "assistant", "content": "", "finish_reason": "tool_calls", "reasoning": thought, "reasoning_content": thought,
+                          "tool_calls": [{"id": tool_id, "type": "function", "function": {"name": "terminal", "arguments": json.dumps({"command": cmd})}}]})
+            steps.append({"role": "tool", "content": out, "tool_call_id": tool_id, "tool_name": "terminal"})
+        answer = f"Done: all {n} shards read, no errors since the last run."
+        await self.stream_words(s, answer, delay=0.02)
+        steps.append({"role": "assistant", "content": answer, "finish_reason": "stop"})
+        self.file_reasoning_turn(s, prompt, steps)
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": answer, "usage": usage(s.output_tokens, n + 1), "status": "complete"})
+
     async def _thinking_turn(self, s: Session, prompt: str) -> None:
         """A model that thinks before it answers: its thinking as reasoning.delta (the real
         reasoning), a wait notice as thinking.delta (a status line, not reasoning; the empty
@@ -2220,6 +2249,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("huge"):
             await self._huge_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("steps"):
+            await self._reasoning_steps_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)

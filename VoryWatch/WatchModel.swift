@@ -523,7 +523,7 @@ final class WatchCardNotifier: CardNotifying {
         let content = UNMutableNotificationContent()
         content.title = chat.profileName
         content.subtitle = chat.title
-        if let error, !error.isEmpty { content.body = error } else if case .assistant(let text, _, _)? = chat.items.last(where: { if case .assistant = $0.kind { return true }; return false })?.kind { content.body = String(text.prefix(160)) } else { content.body = "Turn finished" }
+        if let error, !error.isEmpty { content.body = error } else if case .assistant(let text, _, _)? = chat.items.last(where: { if case .assistant = $0.kind { return !$0.isThinkingOnly }; return false })?.kind { content.body = String(text.prefix(160)) } else { content.body = "Turn finished" }
         content.categoryIdentifier = WatchNotifier.turnCategory
         content.userInfo = ["hermes": ["session_id": chat.storedID, "kind": "turn"]]
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "turn-\(chat.storedID)-\(Int(Date().timeIntervalSince1970))", content: content, trigger: nil))

@@ -136,8 +136,13 @@ import Testing
         TranscriptMessage(role: role, text: text, timestamp: at, reasoning: reasoning, apiContent: api, finishReason: finish, hasToolCalls: tools)
     }
 
+    /// The replies, not the steps that only thought (their cards, #424).
     private func replies(_ items: [TranscriptItem]) -> [String] {
-        items.compactMap { if case .assistant(let t, _, _) = $0.kind { return t }; return nil }
+        items.compactMap { if case .assistant(let t, _, _) = $0.kind, !$0.isThinkingOnly { return t }; return nil }
+    }
+
+    private func cards(_ items: [TranscriptItem]) -> [String] {
+        items.compactMap { if case .assistant(_, let r, _) = $0.kind, $0.isThinkingOnly { return r }; return nil }
     }
 
     @Test func historyShowsAnAnswerStoredWithEmptyContent() {
@@ -157,11 +162,15 @@ import Testing
         // Still running: the last row may be thinking in progress.
         let running = [row("user", "rank the labs", at: 1), row("assistant", "", reasoning: "Searching first", at: 2)]
         #expect(replies(TranscriptItem.fromHistory(running, running: true)).isEmpty)
-        // Before a tool call: followed by the tool, or marked as asking for one.
+        #expect(cards(TranscriptItem.fromHistory(running, running: true)).isEmpty)
+        // Before a tool call: followed by the tool, or marked as asking for one. The thinking is
+        // that step's card (#424), not a reply.
         let beforeTool = [row("user", "q", at: 1), row("assistant", "", reasoning: "I should search", at: 2), row("tool", "results", at: 3)]
         #expect(replies(TranscriptItem.fromHistory(beforeTool)).isEmpty)
+        #expect(cards(TranscriptItem.fromHistory(beforeTool)) == ["I should search"])
         let asked = [row("user", "q", at: 1), row("assistant", "", reasoning: "I should search", tools: true, at: 2)]
         #expect(replies(TranscriptItem.fromHistory(asked)).isEmpty)
+        #expect(cards(TranscriptItem.fromHistory(asked, running: true)) == ["I should search"])
         // Cut off by length: not an answer.
         let cut = [row("user", "q", at: 1), row("assistant", "", reasoning: "Half a thou", finish: "length", at: 2)]
         #expect(replies(TranscriptItem.fromHistory(cut)).isEmpty)
