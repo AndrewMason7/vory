@@ -253,8 +253,10 @@ struct ChatListView: View {
             .toolbar {
                 if selecting {
                     // Select mode outlives a page switch now that the Mac keeps this page mounted;
-                    // its Done and actions stand in the bar only while the page is on show.
-                    if pageShown {
+                    // its Done and actions stand in the bar only while the page is on show. Under
+                    // the morph bar they are the bar's own (`AppModel.chatsSelect`): here they sat
+                    // under its capsules, out of reach (#408).
+                    if pageShown, !MorphTopBar.active(model) {
                     ToolbarItem(placement: .topBarLeading) { Button("Done") { endSelecting() }.accessibilityIdentifier("chats.select.done") }
                     ToolbarItemGroup(placement: .topBarTrailing) { selectionActions }
                     }
@@ -309,6 +311,11 @@ struct ChatListView: View {
                 case .newBot: showNewBot = true
                 case .manageProjects: showProjects = true
                 case .selectChats: withAnimation(selectMotion) { selecting = true }
+                // Select's controls in the morph bar (#408).
+                case .selectDone: endSelecting()
+                case .selectMove: movingSelection = true
+                case .selectArchive: let list = picked; endSelecting(); Task { await archive(list) }
+                case .selectDelete: pendingDeleteMany = true
                 }
             }
             .onChange(of: model.newChatSheetRequest) { _, r in
@@ -383,6 +390,8 @@ struct ChatListView: View {
             } message: { Text("This removes the sessions and their transcripts from the gateway.") }
             // A modifier of its own: one more alert inline put this chain past the type checker.
             .modifier(ActionFailureAlert(failure: $actionFailure))
+            // Select mode's state for the morph bar (#408), a modifier of its own for the same reason.
+            .modifier(ChatsSelectPublisher(state: selectBarState))
             .alert("Delete chat?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let s = pendingDelete { Task { await delete(s) } } }
                 Button("Cancel", role: .cancel) {}
@@ -793,6 +802,15 @@ struct ChatListView: View {
     /// UIKit's hosting like a pushed chat, which the cut did not reach (likely the same for the
     /// column; not recorded). The Mac never had the cut.
     private var selectMotion: Animation? { MorphTopBar.cutsPages && !model.wideLayout ? nil : .snappy }
+
+    /// What the morph bar shows while selecting (#408): nil when not selecting, the page is not on
+    /// show, or the bar is not over the list (a wide window, the Mac: the toolbar has them).
+    private var selectBarState: AppModel.ChatsSelect? {
+        guard selecting, pageShown, MorphTopBar.active(model) else { return nil }
+        return AppModel.ChatsSelect(title: selection.isEmpty ? "Select Chats" : "\(selection.count) Selected",
+                                    canAct: !selection.isEmpty,
+                                    canMove: runtime?.projects.available == true && runtime?.projects.canMove == true)
+    }
 
     @ViewBuilder private var selectionActions: some View {
         if let runtime, runtime.projects.available == true, runtime.projects.canMove {
@@ -1661,4 +1679,15 @@ extension Notification.Name {
     /// The Mac's Chats › Refresh Chats (⌘R): the Chats list's own refresh, which also asks for
     /// the bots when their first answer failed.
     static let refreshChats = Notification.Name("vory.refreshChats")
+}
+
+/// Hands the list's Select mode to the morph bar, and takes it back when the list goes.
+private struct ChatsSelectPublisher: ViewModifier {
+    var state: AppModel.ChatsSelect?
+    @Environment(AppModel.self) private var model
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: state, initial: true) { _, s in if model.chatsSelect != s { model.chatsSelect = s } }
+            .onDisappear { model.chatsSelect = nil }
+    }
 }

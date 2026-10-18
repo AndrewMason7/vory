@@ -527,6 +527,7 @@ struct MorphTopBar: View {
             .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown))
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
+            .animation(.snappy(duration: 0.22), value: selecting)
             .animation(goesAtOnce ? nil : .snappy(duration: 0.22), value: present)
         }
     }
@@ -612,10 +613,21 @@ struct MorphTopBar: View {
         }
     }
 
+    /// The Chats list's Select mode, while it is the page on show (#408).
+    private var selecting: AppModel.ChatsSelect? { model.selectedTab == .chats ? model.chatsSelect : nil }
+
     @ViewBuilder private func listContent(_ slot: MorphSlot) -> some View {
         let chrome = tabChrome(model.selectedTab)
         switch slot {
         case .lead:
+            if selecting != nil {
+                // Select mode's Done, where the bot's circle sits (#408).
+                Button { model.chatListRequest = .init(.selectDone) } label: {
+                    Text("Done").font(.body.weight(.semibold)).padding(.horizontal, 16).frame(height: 44).contentShape(.capsule)
+                }
+                .buttonStyle(MorphPressStyle(kind: .icon)).foregroundStyle(.tint)
+                .accessibilityIdentifier("chats.select.done")
+            } else {
             switch chrome.lead {
             case .botMenu:
                 Menu { ChatListProfileItems() } label: {
@@ -630,13 +642,22 @@ struct MorphTopBar: View {
                 circleButton("house", label: "Home", id: "files.home") { model.pageRequest = .init(.filesHome) }
             case nil: EmptyView()
             }
+            }
         case .mid:
             HStack(spacing: 0) {
-                Text(model.selectedTab.title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
+                Text(selecting?.title ?? model.selectedTab.title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("morph.title")
                 PullRefreshWheel(fromBelow: model.pullStates[model.selectedTab])
             }
         case .trail:
+            if let sel = selecting {
+                // The selection's actions, where the list's sit; none until a chat is picked.
+                trailButtons((sel.canMove ? [("folder", "Move to Project", "chats.select.move", { model.chatListRequest = .init(.selectMove) })] : [])
+                             + [("archivebox", "Archive", "chats.select.archive", { model.chatListRequest = .init(.selectArchive) }),
+                                ("trash", "Delete", "chats.select.delete", { model.chatListRequest = .init(.selectDelete) })])
+                    // The bar's button style does not dim a disabled button: done here.
+                    .disabled(!sel.canAct).opacity(sel.canAct ? 1 : 0.35)
+            } else {
             switch chrome.trail {
             case .chatActions: liveActions
             case .plus(let label):
@@ -658,6 +679,7 @@ struct MorphTopBar: View {
                 .accessibilityLabel("Options").accessibilityIdentifier("sessions.options")
                 .accessibilityShowsLargeContentViewer { Label("Options", systemImage: "gearshape") }
             case nil: EmptyView()
+            }
             }
         }
     }
@@ -741,18 +763,24 @@ struct MorphTopBar: View {
         // headings like bot and settings they should all be on the exact same spot"; centred in a
         // row of 44 pt circles, Bots' sat 4 pt below Settings' bare one).
         return HStack(spacing: 10) {
-            if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
+            if let _ = selecting {
+                Text("Done").font(.body.weight(.semibold)).padding(.horizontal, 16).frame(height: 44).hidden()
+                    .measured(.lead, into: $listFrames, last: $lastListFrames)
+            } else if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
             // The title alone: the pull's wheel widens the seen capsule itself (CapsuleFrame), so
             // a pull never changes what is measured here. Hidden, not only unseen: at opacity 0 under
             // accessibilityHidden it stayed in the tree as a second title, a "Settings" text over a
             // pushed page's Back.
-            Text(model.selectedTab.title).font(.headline).fixedSize().hidden()
+            Text(selecting?.title ?? model.selectedTab.title).font(.headline).fixedSize().hidden()
             // A set height, not the text's measured one: measured afresh on each tab switch it
             // came out a few points taller for a moment and the capsule breathed (Matt,
             // 2026-10-12: "the height of the bubble from bot to settings seems to change").
             .padding(.horizontal, 12).frame(height: titleHeight)
             .measured(.mid, into: $listFrames, last: $lastListFrames)
             Spacer(minLength: 0)
+            if let sel = selecting {
+                trailIcons((sel.canMove ? ["folder"] : []) + ["archivebox", "trash"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
+            } else {
             switch chrome.trail {
             case .chatActions: actions.measured(.trail, into: $listFrames, last: $lastListFrames)
             case .plus: trailIcons(["plus"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
@@ -760,6 +788,7 @@ struct MorphTopBar: View {
             case .boardActions: trailIcons(["ellipsis.circle", "plus"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
             case .sessionsOptions: trailIcons(["gearshape"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
             case nil: EmptyView()
+            }
             }
         }
         .frame(minHeight: 44)

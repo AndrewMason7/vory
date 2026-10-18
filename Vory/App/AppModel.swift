@@ -229,8 +229,14 @@ final class AppModel {
     /// actions, or the Chats list for one of its own; each carries an id so repeats are seen.
     struct ChatRequest: Equatable { enum Kind { case back, profile, rename, context, newChat, close }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
     var chatRequest: ChatRequest?
-    struct ChatListRequest: Equatable { enum Kind { case newBot, manageProjects, selectChats }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
+    struct ChatListRequest: Equatable { enum Kind { case newBot, manageProjects, selectChats, selectDone, selectMove, selectArchive, selectDelete }; let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind } }
     var chatListRequest: ChatListRequest?
+    /// Select mode on the Chats list, while the morph bar is over it: the bar draws Done, the count
+    /// and the selection's actions in its own capsules and asks the list for them
+    /// (`chatListRequest`). The list's own toolbar items sat under the bar's, Done under the bot
+    /// circle and the actions under + and the filters, and could not be reached (#408).
+    struct ChatsSelect: Equatable { var title: String; var canAct: Bool; var canMove: Bool }
+    var chatsSelect: ChatsSelect?
     /// The other root pages' bar actions, asked for by the morph prototype's bar; each page
     /// answers its own.
     struct PageRequest: Equatable {
