@@ -625,8 +625,10 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             return 422, {"detail": [{"loc": ["query", "limit"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}]}
         # The mock lists every chat under every bot (the demo data is small), but each row says
         # whose store it is in, as the real gateway's rows do.
-        return 200, {"sessions": [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS],
-                     "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
+        rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS]
+        if NO_PINS:
+            rows = [{k: v for k, v in r.items() if k != "pinned"} for r in rows]
+        return 200, {"sessions": rows, "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
@@ -1218,6 +1220,11 @@ NEUTRAL_MODELS = "--neutral-models" in sys.argv
 # A gateway without the PDF tools: every PDF is refused the way the real one refuses them (a
 # tester's "attachments seem to be broken").
 NO_PDF_TOOLS = "--no-pdf-tools" in sys.argv
+# A gateway from before Hermes kept a pin (2026-07-24): its chat rows carry no "pinned", and a
+# PATCH with nothing it knows is refused (#406).
+NO_PINS = "--no-pins" in sys.argv
+# Rows that say "pinned" but a pin refused all the same, for the app's refusal path (#406).
+REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
 NEUTRAL_NAMES = [
     ("claude-subscription/claude-opus-4.6", "local/assistant"),
     ("claude-subscription-directsdk-experimental", "local-assistant"),
@@ -1581,11 +1588,15 @@ def _process_request(connection, request):
         # after its own change agrees with it (a pin used to be put back by that reload).
         sid = base.split("/")[3]
         row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
-        if row and isinstance(body_json, dict):
-            for key in ("pinned", "archived", "title"):
-                if key in body_json:
-                    row[key] = body_json[key]
-        result = (200, {"ok": True, "title": row["title"] if row else ""})
+        known = ("archived", "title") if REFUSE_PINS else ("pinned", "archived", "title")
+        if REFUSE_PINS and isinstance(body_json, dict) and not any(k in body_json for k in known):
+            result = (400, {"detail": "Nothing to update; provide 'title' and/or 'archived'."})
+        else:
+            if row and isinstance(body_json, dict):
+                for key in known:
+                    if key in body_json:
+                        row[key] = body_json[key]
+            result = (200, {"ok": True, "title": row["title"] if row else ""})
     elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
         # Held while the task "runs": answered later, without holding up anything else.
         async def held() -> Response:
@@ -2875,6 +2886,8 @@ async def main() -> None:
     ap.add_argument("--voice-live", action="store_true", help="GPT-Live status answers available")
     ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
     ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
+    ap.add_argument("--refuse-pins", action="store_true", help="rows say \"pinned\", but a PATCH of only a pin is refused as an old gateway does")
+    ap.add_argument("--no-pins", action="store_true", help="no pins, as a gateway from before Hermes kept them: rows without \"pinned\", a PATCH of only a pin refused")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
