@@ -2284,9 +2284,10 @@ struct CodeBlock: View {
 
     var body: some View {
         // Capped in characters as well as lines: a few lines of minified output can be a megabyte. What is shown is
-        // drawn in pieces (#361); the whole output is on the tool's page and in Copy.
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : lines.prefix(lineCap).joined(separator: "\n"))
+        // drawn in pieces (#361); the whole output is on the tool's page and in Copy. The lines are counted, not
+        // split: split on every redraw, a big output took most of a second to open or close its card (#421).
+        let lines = TextPieces.lines(text, cap: lineCap)
+        let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : String(lines.head))
         VStack(alignment: .leading, spacing: 4) {
             LongText(shown.text, code: true).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true).padding(10).padding(.trailing, 24)
