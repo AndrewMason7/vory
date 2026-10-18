@@ -759,19 +759,19 @@ private final class StubChat: ChatIdentity {
         #expect(d?.message == "hold the export")
     }
     @Test func dmTransportWithQueryFileAndEnvPrefix() {
-        let cmd = "HERMES_BIN=/home/hermes/.hermes/venv/bin/hermes; $HERMES_BIN -p defender chat --in ~ -c \"Bot Chat\" --create-if-missing -Q --query-file /tmp/hermes-dm-1003/dm-coa-status.md"
-        #expect(BotDelivery.parse(name: "terminal", context: cmd, argsText: nil)?.target == "defender")
+        let cmd = "HERMES_BIN=/home/hermes/.hermes/venv/bin/hermes; $HERMES_BIN -p ops chat --in ~ -c \"Bot Chat\" --create-if-missing -Q --query-file /tmp/hermes-dm-1003/dm-coa-status.md"
+        #expect(BotDelivery.parse(name: "terminal", context: cmd, argsText: nil)?.target == "ops")
     }
     @Test func botChatTargetWithoutQuietFlag() {
         #expect(BotDelivery.parse(name: "terminal", context: "hermes --profile mailman chat -c 'Bot Chat' --create-if-missing", argsText: nil)?.target == "mailman")
     }
     @Test func dmRunnerWithTruncatedPreviewAndFullArgs() {
-        let preview = "/home/hermes/.hermes/tools/python-3.14.7/bin/python3 /home/hermes/.hermes/hermes-agent/tools/bot_mode_dm.py --run-delivery --author '{\"id\":\"defende"
-        let args = "{\"command\": \"/home/hermes/.hermes/tools/python-3.14.7/bin/python3 /home/hermes/.hermes/hermes-agent/tools/bot_mode_dm.py --run-delivery --author '{\\\"id\\\":\\\"defender\\\"}' local /home/hermes/.hermes/profiles/defender/cache/bot_dm/dm-1.md --profile-home /home/hermes/.hermes/profiles/unifi /home/hermes/.hermes/venv/bin/hermes -p unifi chat --in ~ -c 'Bot Chat' --create-if-missing -Q\", \"background\": true}"
-        #expect(BotDelivery.parse(name: "terminal", context: preview, argsText: args)?.target == "unifi")
+        let preview = "/home/hermes/.hermes/tools/python-3.14.7/bin/python3 /home/hermes/.hermes/hermes-agent/tools/bot_mode_dm.py --run-delivery --author '{\"id\":\"op"
+        let args = "{\"command\": \"/home/hermes/.hermes/tools/python-3.14.7/bin/python3 /home/hermes/.hermes/hermes-agent/tools/bot_mode_dm.py --run-delivery --author '{\\\"id\\\":\\\"ops\\\"}' local /home/hermes/.hermes/profiles/ops/cache/bot_dm/dm-1.md --profile-home /home/hermes/.hermes/profiles/infra /home/hermes/.hermes/venv/bin/hermes -p infra chat --in ~ -c 'Bot Chat' --create-if-missing -Q\", \"background\": true}"
+        #expect(BotDelivery.parse(name: "terminal", context: preview, argsText: args)?.target == "infra")
     }
     @Test func dmRunnerPeerFormReadsTheTargetNotTheSender() {
-        let cmd = "python3 bot_mode_dm.py --run-delivery peer /tmp/dm.md /usr/local/bin/hermes -p defender peer dm laptop/scribe"
+        let cmd = "python3 bot_mode_dm.py --run-delivery peer /tmp/dm.md /usr/local/bin/hermes -p ops peer dm laptop/scribe"
         #expect(BotDelivery.parse(name: "terminal", context: cmd, argsText: nil)?.target == "scribe")
     }
     @Test func peerDM() {
@@ -787,8 +787,8 @@ private final class StubChat: ChatIdentity {
         #expect(BotDelivery.parse(name: "terminal", context: "hermes chat -q \"what time is it\"", argsText: nil) == nil)
     }
     @Test func inboundRows() {
-        #expect(AgentMessage.parse("Message from 🤖 Defender (@defender): all quiet")?.key == "defender")
+        #expect(AgentMessage.parse("Message from 🤖 Ops (@ops): all quiet")?.key == "ops")
         #expect(AgentMessage.parse("[Message from agent 'Mailman'] inbox clear")?.body == "inbox clear")
-        #expect(AgentMessage.parse("Please message defender for me") == nil)
+        #expect(AgentMessage.parse("Please message ops for me") == nil)
     }
 }

@@ -411,7 +411,7 @@ struct ConversationView: View {
     }
 
     #if os(macOS)
-    /// "unifi · grok-4.7 · Thinking…": the bot, its model, and the status while it works.
+    /// "ops · <model> · Thinking…": the bot, its model, and the status while it works.
     private func macSubtitle(_ chat: ChatSession) -> String {
         let bot = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
         let model = chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName
