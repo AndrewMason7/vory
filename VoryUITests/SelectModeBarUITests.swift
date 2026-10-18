@@ -101,4 +101,97 @@ final class SelectModeBarUITests: XCTestCase {
         XCTAssertFalse(app.buttons["chats.select.done"].firstMatch.exists, "Done stayed after Done")
         shot("select-bar-after-done")
     }
+
+    private func launchOnChats() throws {
+        let e = ProcessInfo.processInfo.environment
+        guard let url = e["HERMES_E2E_URL"], let token = e["HERMES_E2E_TOKEN"], !url.isEmpty else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        if let bundle = e["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
+            app = XCUIApplication(bundleIdentifier: bundle)
+            app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-launchTab", "chats", "-colorSchemePreference", "dark"]
+        } else {
+            app = XCUIApplication()
+            app.launchArguments = ["-launchTab", "chats", "-colorSchemePreference", "dark"]
+        }
+        app.launch()
+        XCTAssertTrue(row("Rewrite the nightly export job").waitForExistence(timeout: 40), "no chat rows")
+        pause(2)
+    }
+
+    /// The row titled `title`, scrolled clear of the bar above and the tab bar below (the mock's
+    /// extra chats sit below the first screen; a row under the tab bar is "hittable" but a press
+    /// there lands on the tab bar).
+    private func reveal(_ title: String) -> XCUIElement {
+        let height = app.windows.firstMatch.frame.height
+        func clear() -> Bool { let r = row(title); return r.isHittable && r.frame.midY > 140 && r.frame.midY < height - 130 }
+        for _ in 0..<8 where !clear() { app.swipeUp(velocity: .slow); pause(0.5) }
+        for _ in 0..<12 where !clear() { app.swipeDown(velocity: .slow); pause(0.5) }
+        return row(title)
+    }
+
+    /// Select mode from a row's menu, with that row picked.
+    private func select(from title: String) {
+        reveal(title).press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Select"].firstMatch.waitForExistence(timeout: 5), "no Select in \(title)'s menu")
+        app.buttons["Select"].firstMatch.tap()
+        pause(1.5)
+        XCTAssertEqual(app.staticTexts["morph.title"].firstMatch.label, "1 Selected")
+    }
+
+    /// (a) and (b) of the tester's follow-up on 26 ("selecting chats doesn't actually select
+    /// them", and a long press opened the row's usual menu): in Select mode a tap picks and
+    /// unpicks a row, the count and the actions follow it, and a long press or a swipe opens no
+    /// menu of the row's own.
+    func testInSelectModeATapPicksAndALongPressOpensNoMenu() throws {
+        continueAfterFailure = true
+        try launchOnChats()
+        select(from: "Weekly dependency audit")
+        let archive = app.buttons["chats.select.archive"].firstMatch
+
+        reveal("Backup verification").tap(); pause(1)
+        XCTAssertEqual(app.staticTexts["morph.title"].firstMatch.label, "2 Selected", "a tap did not pick the row")
+        XCTAssertTrue(archive.isEnabled, "Archive is off with two picked")
+        reveal("Backup verification").tap(); pause(1)
+        XCTAssertEqual(app.staticTexts["morph.title"].firstMatch.label, "1 Selected", "a second tap did not unpick the row")
+        shot("select-tap-toggles")
+
+        // A long press: no Open, Pin, Select or Ask Siri of the row's own.
+        reveal("Rotate the API keys").press(forDuration: 1.2); pause(1)
+        shot("select-long-press")
+        // The bar's own Move to Project (chats.select.move) is the selection's, not the row's.
+        for item in ["Open", "Select", "Pin", "Ask Siri", "Move to Project"] {
+            let rowItem = app.buttons.matching(NSPredicate(format: "label == %@ AND NOT (identifier BEGINSWITH 'chats.select')", item)).firstMatch
+            XCTAssertFalse(rowItem.exists, "a long press in Select mode opened the row's menu (\(item))")
+        }
+        let title = app.staticTexts["morph.title"].firstMatch.label
+        XCTAssertTrue(["1 Selected", "2 Selected"].contains(title), "Select mode left after the long press: \(title)")
+        if title == "2 Selected" { reveal("Rotate the API keys").tap(); pause(1) }
+
+        // A swipe: no Delete or Archive of the row's own (the bar's are the selection's).
+        reveal("Rotate the API keys").swipeLeft(); pause(1)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == 'Delete'")).count, 1, "a swipe in Select mode showed the row's Delete")
+        shot("select-swipe")
+        app.buttons["chats.select.done"].firstMatch.tap(); pause(1)
+    }
+
+    /// (c): the bar's Archive acts on exactly the chats picked, and the others stay.
+    func testTheSelectionsArchiveTakesThePickedChatsOnly() throws {
+        continueAfterFailure = true
+        try launchOnChats()
+        select(from: "Standup notes")
+        reveal("Trim the CI cache").tap(); pause(1)
+        XCTAssertEqual(app.staticTexts["morph.title"].firstMatch.label, "2 Selected")
+        shot("select-two-picked")
+        app.buttons["chats.select.archive"].firstMatch.tap(); pause(3)
+        shot("select-after-archive")
+        // The picked two are archived (the list shows archived chats by default, marked
+        // "Archived"); the rest are not.
+        for picked in ["Standup notes", "Trim the CI cache"] {
+            let label = reveal(picked).label
+            XCTAssertTrue(label.hasPrefix("Archived"), "\(picked) was not archived: \(label)")
+        }
+        for kept in ["Rotate the API keys", "Backup verification", "Weekly dependency audit", "Rewrite the nightly export job"] {
+            let label = reveal(kept).label
+            XCTAssertFalse(label.hasPrefix("Archived"), "\(kept) was archived with the selection: \(label)")
+        }
+    }
 }

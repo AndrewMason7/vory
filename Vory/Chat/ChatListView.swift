@@ -1118,7 +1118,11 @@ struct ChatListView: View {
                     SessionPreview(session: s, runtime: runtime, profile: prefs.allBots ? s.profile : nil).withAppModel()
                 }
                 #endif
+                // In Select mode a long press or a swipe does nothing: the row's menu and swipes are
+                // the list's, and opened while selecting they acted on the one row (a tester read the
+                // selection as not taking, #408).
                 .contextMenu {
+                    if !selecting {
                     Button { open(route) } label: { Label("Open", systemImage: "bubble.left") }
                     if pinsKept {
                         Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
@@ -1132,20 +1136,23 @@ struct ChatListView: View {
                     Button { withAnimation(selectMotion) { selecting = true; selection = [s.id] } } label: { Label("Select", systemImage: "checkmark.circle") }
                     Divider()
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
+                    }
                 } preview: {
                     SessionPreview(session: s, runtime: runtime, profile: prefs.allBots ? s.profile : nil).withAppModel()
                 }
                 // Delete alone on the trailing edge; Archive lives with Pin on the leading edge so
                 // the two are never a thumb-width apart.
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
+                    if !selecting { Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") } }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     // No Pin where the gateway does not keep pins: it went back as soon as it was made (#406).
-                    if pinsKept {
+                    if !selecting, pinsKept {
                         Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
                     }
+                    if !selecting {
                     Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
+                    }
                 }
     }
 
@@ -1182,18 +1189,20 @@ struct ChatListView: View {
                     if aiSummaries, let events = roomLogs[room.roomId] { summarizer.refreshRoom(room, events: events) }
                 }
                 .contextMenu {
+                    if !selecting {
                     Button { open(RoomRoute(room: room, initialText: nil)) } label: { Label("Open", systemImage: "bubble.left") }
                     Button { setArchived(room, !archived) } label: { Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     Divider()
                     Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") }
+                    }
                 } preview: {
                     RoomPreview(room: room, runtime: runtime).withAppModel()
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") }
+                    if !selecting { Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") } }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button { setArchived(room, !archived) } label: { Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
+                    if !selecting { Button { setArchived(room, !archived) } label: { Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange) }
                 }
     }
 
