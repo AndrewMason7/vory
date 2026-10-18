@@ -266,11 +266,9 @@ struct EnvView: View {
             }
         }
         .pageSearchable(text: $search, always: true)
-        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } } }
-        .onChange(of: model.pageRequest) { _, r in
-            guard let r, r.kind == .tasksAdd else { return }
-            model.pageRequest = nil; showAdd = true
-        }
+        // Never a tab's root, so never under the morph bar's actions: its Add is its own (#426;
+        // hidden under the bar, a variable could not be added on the iPhone).
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } }
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
@@ -890,12 +888,15 @@ struct CronJobDetailView: View {
 
 struct SessionsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.barTab) private var barTab
     @State private var sessions: [StoredSession] = []
     @State private var search = ""
     @State private var error: String?
     @State private var stats: JSONValue?
     @State private var showAdvanced = false
     private var rt: GatewayRuntime? { model.runtime }
+    /// The Sessions tab's root under the phone's morph bar, which draws Options.
+    private var barDrawsOptions: Bool { MorphTopBar.active(model) && barTab == .sessions }
 
     var body: some View {
         SettingsList {
@@ -916,12 +917,14 @@ struct SessionsView: View {
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .onChange(of: model.pageRequest) { _, r in
-            guard let r, r.kind == .sessionsAdvanced else { return }
+            guard barDrawsOptions, let r, r.kind == .sessionsAdvanced else { return }
             model.pageRequest = nil; showAdvanced = true
         }
         .pageToolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if !MorphTopBar.active(model) {
+                // The Sessions tab's root under the morph bar: the bar draws Options. Pushed from
+                // Settings › Sessions the page has its own (#426).
+                if !barDrawsOptions {
                 Menu {
                     Button { showAdvanced = true } label: { Label("Advanced", systemImage: "internaldrive") }
                 } label: { Label("Options", systemImage: "gearshape") }

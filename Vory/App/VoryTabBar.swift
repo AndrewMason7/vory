@@ -416,6 +416,8 @@ struct TabRoot: ViewModifier {
     private func publishPull() { model.pullStates[tab] = pullBelow ?? pullAround }
     func body(content: Content) -> some View {
         content
+            // The bar draws this page's actions (`barTab`); the page leaves its own out.
+            .environment(\.barTab, tab)
             // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
             // refresh wheel sits beside it on the pages that can refresh.
             .pageHeading(tab.title, on: !model.wideLayout && !MorphTopBar.on)

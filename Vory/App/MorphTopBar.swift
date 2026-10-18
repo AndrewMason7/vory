@@ -24,7 +24,6 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     case .bots: (nil, .plus("New bot"))
     case .files: (.filesHome, .filesActions)
     case .projects: (nil, .plus("New project"))
-    case .cron: (nil, .plus("Add"))
     case .kanban: (nil, .boardActions)
     case .sessions: (nil, .sessionsOptions)
     default: (nil, nil)
@@ -685,13 +684,12 @@ struct MorphTopBar: View {
     }
 
     private func pageRequestID(for tab: AppModel.AppTab) -> String {
-        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; case .cron: "tasks.add"; default: "\(tab.rawValue).plus" }
+        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; default: "\(tab.rawValue).plus" }
     }
     private func plusRequest(for tab: AppModel.AppTab) {
         switch tab {
         case .bots: model.pageRequest = .init(.botsNewBot)
         case .projects: model.pageRequest = .init(.projectsNew)
-        case .cron: model.pageRequest = .init(.tasksAdd)
         default: break
         }
     }

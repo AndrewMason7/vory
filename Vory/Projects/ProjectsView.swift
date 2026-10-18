@@ -6,6 +6,7 @@ import VoryCore
 /// it works inside one of those folders, so a new chat started in a project begins there.
 struct ProjectsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.barTab) private var barTab
     @State private var showCreate = false
     @State private var renaming: Project?
     @State private var newName = ""
@@ -13,6 +14,10 @@ struct ProjectsView: View {
     @State private var error: String?
 
     @State private var searchText = ""
+
+    /// The Projects tab's root under the phone's morph bar, which draws the + (and asks for it
+    /// by `pageRequest`). Pushed from Settings or in Manage projects' sheet, the page has its own.
+    private var barDrawsPlus: Bool { MorphTopBar.active(model) && barTab == .projects }
 
     var body: some View {
         SettingsList {
@@ -46,7 +51,7 @@ struct ProjectsView: View {
         .pageToolbar {
             ToolbarItem(placement: .primaryAction) {
                 #if os(iOS)
-                if MorphTopBar.active(model) { EmptyView() } else {
+                if barDrawsPlus { EmptyView() } else {
                 Button { showCreate = true } label: { Label("New project", systemImage: "plus") }
                     .disabled(model.runtime?.projects.available != true)
                 }
@@ -75,7 +80,7 @@ struct ProjectsView: View {
         .task { await model.runtime?.projects.refresh() }
         .reloadable { await model.runtime?.projects.refresh() }
         .onChange(of: model.pageRequest) { _, r in
-            guard let r, r.kind == .projectsNew else { return }
+            guard barDrawsPlus, let r, r.kind == .projectsNew else { return }
             model.pageRequest = nil; showCreate = true
         }
     }
