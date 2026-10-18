@@ -80,6 +80,12 @@ struct ChatListView: View {
     @State private var searchResults: [StoredSession] = []
     @State private var loading = false
     @State private var errorText: String?
+    /// A pin, an unpin or an archive the gateway refused, said in an alert: the list's red line
+    /// was cleared by the next refresh, which a list of scheduled runs does every few minutes, and
+    /// all a tester saw was the row going back (#406).
+    @State private var actionFailure: ActionFailure?
+    /// The gateway keeps chats' pins (`PinSupport`): Pin is offered only then.
+    @State private var pinsKept = true
     @State private var ownPath = NavigationPath()
     private var path: Binding<NavigationPath> {
         if let detailPath { return detailPath }
@@ -375,6 +381,8 @@ struct ChatListView: View {
                 Button("Delete", role: .destructive) { let list = picked; endSelecting(); Task { await delete(list) } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This removes the sessions and their transcripts from the gateway.") }
+            // A modifier of its own: one more alert inline put this chain past the type checker.
+            .modifier(ActionFailureAlert(failure: $actionFailure))
             .alert("Delete chat?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let s = pendingDelete { Task { await delete(s) } } }
                 Button("Cancel", role: .cancel) {}
@@ -799,12 +807,18 @@ struct ChatListView: View {
 
     private func archive(_ list: [StoredSession]) async {
         guard let runtime else { return }
+        var failed: [(StoredSession, Error)] = []
         for s in list where s.archived != true {
             var body: [String: JSONValue] = ["archived": .bool(true)]
             if s.pinned == true { body["pinned"] = .bool(false) }
             if let p = s.profile ?? runtime.selectedProfile, !p.isEmpty { body["profile"] = .string(p) }
             do { let _: JSONValue? = try await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body)) }
-            catch { errorText = "Could not archive \u{201C}\(s.displayTitle)\u{201D}: \(error.localizedDescription)" }
+            catch { failed.append((s, error)) }
+        }
+        // One alert for the batch, not one per chat (and not a red line the reload below clears).
+        if let (first, error) = failed.first {
+            actionFailure = ActionFailure(title: failed.count == 1 ? "Could not archive \u{201C}\(first.displayTitle)\u{201D}" : "Could not archive \(failed.count) chats",
+                                          message: PinSupport.reason(error))
         }
         await load()
     }
@@ -889,6 +903,7 @@ struct ChatListView: View {
                 let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: listed)
                 all = r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
             }
+            pinsKept = PinSupport.kept(rows: all, connection: runtime.connection.id)
             // Chats open in the app that the gateway does not list yet: a new chat gets its
             // stored row on the first prompt and the row fills in as the turn flushes, so a chat
             // started moments ago (or one still running) could vanish from the list on the way
@@ -1087,7 +1102,9 @@ struct ChatListView: View {
                 #endif
                 .contextMenu {
                     Button { open(route) } label: { Label("Open", systemImage: "bubble.left") }
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
+                    if pinsKept {
+                        Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
+                    }
                     Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     if runtime.projects.available == true, runtime.projects.canMove {
                         Menu {
@@ -1106,7 +1123,10 @@ struct ChatListView: View {
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
+                    // No Pin where the gateway does not keep pins: it went back as soon as it was made (#406).
+                    if pinsKept {
+                        Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
+                    }
                     Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
                 }
     }
@@ -1247,10 +1267,81 @@ struct ChatListView: View {
             withAnimation(.snappy) {
                 if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i].pinned = was.pinned; sessions[i].archived = was.archived }
             }
-            errorText = "Could not update the chat: \(error.localizedDescription)"
+            if pinned != nil, archived == nil, PinSupport.isOldGatewayRefusal(error) {
+                PinSupport.noteRefused(runtime.connection.id)
+                pinsKept = false
+                actionFailure = ActionFailure(title: "Pinning is not available", message: PinSupport.tooOld)
+            } else {
+                let title = archived != nil ? "Could not archive the chat" : pinned == false ? "Could not unpin the chat" : pinned != nil ? "Could not pin the chat" : "Could not update the chat"
+                actionFailure = ActionFailure(title: title, message: PinSupport.reason(error))
+            }
             return
         }
         await load()
+    }
+}
+
+/// Whether a gateway keeps chats' pins (#406). Hermes from before it kept them (2026-07-24) sends
+/// rows without "pinned" and refuses a pin as having nothing to update; Pin is not offered there,
+/// as it went back as soon as it was made. Decided from the key, not its value: a row that says
+/// false is a gateway that keeps pins. A refusal is remembered per connection, until the first
+/// list of a later launch whose rows carry the key (the gateway's Hermes was updated).
+@MainActor
+enum PinSupport {
+    static let tooOld = "This gateway\u{2019}s Hermes is too old to pin chats. Update Hermes to pin."
+    private static let key = "vory.pins.refused"
+
+    static func refused(_ connection: UUID) -> Bool { (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(connection.uuidString) }
+    static func noteRefused(_ connection: UUID) {
+        var ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        ids.insert(connection.uuidString)
+        UserDefaults.standard.set(Array(ids), forKey: key)
+    }
+    private static func clear(_ connection: UUID) {
+        guard refused(connection) else { return }
+        UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: key) ?? []).filter { $0 != connection.uuidString }, forKey: key)
+    }
+
+    /// Connections listed since launch: the first list is a fresh connect.
+    private static var listedThisLaunch: Set<UUID> = []
+
+    /// From rows the gateway listed: kept when any carries "pinned" and no refusal stands; not
+    /// when none does. An empty list says nothing, and what was remembered stands.
+    static func kept(rows: [StoredSession], connection: UUID) -> Bool {
+        let fresh = listedThisLaunch.insert(connection).inserted
+        guard !rows.isEmpty else { return !refused(connection) }
+        let carries = rows.contains { $0.pinned != nil }
+        if carries, fresh { clear(connection) }
+        return carries && !refused(connection)
+    }
+
+    /// An older Hermes's answer to a PATCH with nothing it knows (a pin alone).
+    static func isOldGatewayRefusal(_ error: Error) -> Bool {
+        if let e = error as? HermesAPIError, case .http(400, let detail) = e { return detail.localizedCaseInsensitiveContains("nothing to update") }
+        return false
+    }
+
+    /// The gateway's reason in plain words, without the HTTP status.
+    static func reason(_ error: Error) -> String {
+        if let e = error as? HermesAPIError, case .http(_, let detail) = e, !detail.isEmpty { return detail }
+        return error.localizedDescription
+    }
+}
+
+/// A change to a chat the gateway refused, for the list's alert.
+struct ActionFailure: Equatable {
+    var title: String
+    var message: String
+}
+
+private struct ActionFailureAlert: ViewModifier {
+    @Binding var failure: ActionFailure?
+    func body(content: Content) -> some View {
+        content.alert(failure?.title ?? "", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(failure?.message ?? "")
+        }
     }
 }
 
