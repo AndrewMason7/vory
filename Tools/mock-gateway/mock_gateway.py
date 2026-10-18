@@ -2054,7 +2054,9 @@ class Gateway:
         """One piece of text too big to draw in one go (#371 candidate 3, test only), streamed in
         large chunks (`huge link 6`: one paragraph of that many KB with a link in it): `huge reasoning 100` a single-paragraph reasoning of that many KB, then a
         short answer; `huge code 2000` a reply with a code block of that many lines; `huge tool
-        60000` a tool call with that many characters of output, then a short answer."""
+        60000` a tool call with that many characters of output, then a short answer; `huge blob 2000000` a tool
+        call whose output is one line of minified JSON of that many characters (#421: no line breaks for a line
+        cap to stop at, as a tool that prints a whole API response gives)."""
         words = prompt.strip().lower().split()
         kind = words[1] if len(words) > 1 else "reasoning"
         m = re.search(r"\d+", prompt)
@@ -2094,14 +2096,35 @@ class Gateway:
             s.inflight = None
             await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
             return
+        if kind == "blob":
+            size = max(1000, min(12_000_000, n or 60000))
+            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            cmd = "curl -s https://api.example.com/v1/exports?all=1"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
+            recs, total, k = [], 2, 0
+            while total < size:
+                r = json.dumps({"id": k, "shard": f"shard-{k % 97:03d}", "status": "ok", "ms": k % 90 + 3,
+                                "checksum": f"{k * 7919 % 1000003:07x}"}, separators=(",", ":"))
+                recs.append(r)
+                total += len(r) + 1
+                k += 1
+            out = ("[" + ",".join(recs) + "]")[:size]
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.3,
+                                                      "summary": f"{len(out)} characters", "result_text": out})
+            await chunks(answer, "message.delta")
+            self.store_turn(s, prompt, [1, answer])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": answer, "status": "complete", "usage": usage(s.output_tokens, 2)})
+            return
         if kind == "tool":
-            size = max(1000, min(2_000_000, n or 60000))
+            size = max(1000, min(12_000_000, n or 60000))
             tool_id = f"t-{uuid.uuid4().hex[:8]}"
             cmd = "cat /var/log/app/export.log"
             await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
-            out, k = [], 0
-            while sum(len(x) + 1 for x in out) < size:
+            out, k, total = [], 0, 0
+            while total < size:   # a running total: summed again each line, 10 MB never finished
                 out.append(f"{k + 1:05d}  shard-{k % 97:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms")
+                total += len(out[-1]) + 1
                 k += 1
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.3,
                                                       "summary": f"{k} lines", "result_text": "\n".join(out)[:size]})
