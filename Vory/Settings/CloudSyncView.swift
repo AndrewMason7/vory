@@ -111,7 +111,7 @@ struct CloudSyncView: View {
 
     private func row(_ symbol: String, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol).foregroundStyle(.tint).frame(width: 24)
+            Image(systemName: symbol).foregroundStyle(.tint).frame(width: 24).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                 Text(detail).font(.caption).foregroundStyle(.secondary)

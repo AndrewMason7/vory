@@ -55,6 +55,7 @@ struct AttachPanel: View {
                     HStack(spacing: 16) {
                         Image(systemName: item.symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
                             .frame(width: 40, height: 40).background(item.color, in: .circle)
+                            .accessibilityHidden(true)
                         Text(item.title).font(.title3).foregroundStyle(.primary)
                         Spacer(minLength: 0)
                     }

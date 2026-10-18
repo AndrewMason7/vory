@@ -1434,7 +1434,8 @@ struct TranscriptRow: View, Equatable {
             .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
         case .system(let text, let symbol):
             HStack(spacing: 6) {
-                Image(systemName: symbol)
+                // The words say it; the icon read its own name ("Info", "Cpu Chip", #409).
+                Image(systemName: symbol).accessibilityHidden(true)
                 Text(text)
             }
             .font(.caption).foregroundStyle(.secondary)
@@ -2202,7 +2203,7 @@ struct ToolCardView: View {
                 }
                 Spacer()
                 if let d = activity.durationSeconds { Text(String(format: "%.1fs", d)).font(.caption2).foregroundStyle(.secondary) }
-                Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
             }
             if let todos {
                 TodoChecklist(items: todos, all: expanded || compact == false && todos.count <= 4)
@@ -2265,8 +2266,9 @@ struct ToolCardView: View {
     @ViewBuilder private var statusIcon: some View {
         switch activity.status {
         case .running: ProgressView().controlSize(.small)
-        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+        // Its state in words, as it changes ("Checkmark Circle" before, #409); nothing else in the card says it.
+        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Done")
+        case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(.red).accessibilityLabel("Failed")
         }
     }
 }
@@ -2372,6 +2374,16 @@ struct TodoChecklist: View {
     var items: [TodoItem]
     var all: Bool
 
+    /// A step's state in words, where its icon read its own name ("Checkmark Circle, Run the cleanup", #409).
+    static func spoken(_ s: String) -> String {
+        switch s {
+        case "completed", "done": return "Done"
+        case "in_progress", "in-progress", "active", "doing": return "In progress"
+        case "cancelled", "canceled", "skipped": return "Skipped"
+        default: return "To do"
+        }
+    }
+
     private func symbol(_ s: String) -> (String, Color) {
         switch s {
         case "completed", "done": return ("checkmark.circle.fill", .green)
@@ -2388,7 +2400,7 @@ struct TodoChecklist: View {
             ForEach(shown) { t in
                 let (sym, color) = symbol(t.status)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: sym).foregroundStyle(color).font(.caption)
+                    Image(systemName: sym).foregroundStyle(color).font(.caption).accessibilityLabel(Self.spoken(t.status))
                     Text(t.content).font(.caption)
                         .strikethrough(["completed", "done"].contains(t.status), color: .secondary)
                         .foregroundStyle(["completed", "done"].contains(t.status) ? .secondary : .primary)

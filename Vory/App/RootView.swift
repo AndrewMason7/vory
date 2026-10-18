@@ -65,6 +65,12 @@ struct RootView: View {
         .background { TouchSignpostProbe().frame(width: 0, height: 0) }
         // The fold and the camera, for every floating piece below (Step D).
         .modifier(ReservedRegionsEnvironment())
+        #if DEBUG && os(iOS)
+        // `-vory-ax-oracle`: what VoiceOver would stop on, for UI tests (`VoiceOverOracle`, #409).
+        .overlay(alignment: .topLeading) {
+            if VoiceOverOracle.isOn { VoiceOverOracle.Probe().frame(width: 1, height: 1).allowsHitTesting(false) }
+        }
+        #endif
         #if DEBUG
         // `-vory-geometry-probe`: the window's numbers in the corner, for reading a pose off a
         // screenshot (the Duo simulator has no other way to report its insets).
@@ -206,7 +212,7 @@ struct LockScreenView: View {
         ZStack {
             Rectangle().fill(.regularMaterial).ignoresSafeArea()
             VStack(spacing: 20) {
-                Image(systemName: "lock.fill").font(.system(size: 44)).foregroundStyle(.secondary)
+                Image(systemName: "lock.fill").font(.system(size: 44)).foregroundStyle(.secondary).accessibilityHidden(true)
                 Text("Vory is locked").font(.title2.weight(.semibold))
                 if let e = model.lock.lastError { Text(e).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
                 Button("Unlock with \(model.lock.biometryName)") { Task { await model.lock.unlock() } }

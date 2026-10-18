@@ -169,7 +169,7 @@ struct KanbanView: View {
                 let n = board.count(s)
                 Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: s.symbol).font(.caption2)
+                        Image(systemName: s.symbol).font(.caption2).accessibilityHidden(true)
                         Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
                         if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
                     }
