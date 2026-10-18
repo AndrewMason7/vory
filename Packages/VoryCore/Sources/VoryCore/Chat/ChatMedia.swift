@@ -65,12 +65,28 @@ public enum MediaScan {
     /// every time its body runs, and the scan is a regular expression over the whole output, which
     /// a long turn's cards re-ran with every event (#371, a fifth of the main thread's time in the
     /// background). Bounded by the outputs' size; the system may empty it under memory pressure.
+    ///
+    /// A long output is looked through at its start and its end only (`scanned`): the expression takes about a tenth
+    /// of a second a megabyte, and a 10 MB output, too big to be remembered, held the main thread for seconds on every
+    /// redraw of its open card, more than ten as it opened (#421). A tool that made a picture says where near its start
+    /// or its end.
     public static func imagePaths(inToolOutput text: String) -> [MediaRef] {
-        let key = text as NSString
+        let looked = scanned(text)
+        let key = looked as NSString
         if let known = toolOutputPaths.object(forKey: key) { return known.paths }
-        let paths = scanImagePaths(inToolOutput: text)
-        toolOutputPaths.setObject(KnownPaths(paths), forKey: key, cost: text.utf8.count)
+        let paths = scanImagePaths(inToolOutput: looked)
+        toolOutputPaths.setObject(KnownPaths(paths), forKey: key, cost: looked.utf8.count)
         return paths
+    }
+
+    /// The part of a tool's output looked through for pictures: all of it up to 256 KB, else its first 192 KB and its
+    /// last 64 KB (a character cut in two at either seam reads as a replacement mark, which no path holds).
+    static func scanned(_ text: String) -> String {
+        let u = text.utf8
+        guard u.count > 256 << 10 else { return text }
+        let head = u.index(u.startIndex, offsetBy: 192 << 10)
+        let tail = u.index(u.endIndex, offsetBy: -(64 << 10))
+        return String(decoding: u[..<head], as: UTF8.self) + "\n" + String(decoding: u[tail...], as: UTF8.self)
     }
 
     private final class KnownPaths {
