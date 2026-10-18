@@ -163,7 +163,8 @@ public final class GatewayRuntime {
                 guard let self else { return nil }
                 return await self.answer(serverRequest: req)
             },
-            onReconnected: { [weak self] in await self?.didReconnect() })
+            onReconnected: { [weak self] in await self?.didReconnect() },
+            onFirstConnected: { [weak self] in await self?.didConnectFirst() })
         // An attempt that got no answer from the ticket's REST call twice in a row, or a network change while
         // waiting: the REST session's connections are made afresh, as quitting the app did (#423).
         Task { [socket, api] in await socket?.setTroubleHandler { _ in await api.resetSession() } }
@@ -384,8 +385,31 @@ public final class GatewayRuntime {
         await advertiseCapabilities()
         // The bots, if the first load went out before the route was up (#305).
         if profiles.isEmpty { lastError = nil; await loadProfiles() }
-        for chat in registry.all { await chat.reattachAfterReconnect() }
+        for chat in registry.all {
+            if !attachIfFailed(chat) { await chat.reattachAfterReconnect() }
+        }
         await probeCodeSkew()
+    }
+
+    /// The socket's first open: there is nothing to re-attach, except a chat opened before it
+    /// whose attach failed waiting for it (#422: a cold launch restores the chat that was open,
+    /// and a gateway unreachable then, whose refused connects fail a waiting attach at once, or
+    /// slower than the attach's 20 s wait, left it showing its cached rows with no live attach,
+    /// every send refused, until it was closed and opened again).
+    private func didConnectFirst() async {
+        for chat in registry.all { _ = attachIfFailed(chat) }
+    }
+
+    /// A connection is up: a chat whose attach failed is attached as it was opened, which clears
+    /// the failure (re-attached as the others are on a reconnect, it stayed failed and every send
+    /// was refused); one still attaching is left to finish, and tried again only if that fails.
+    /// Whether the chat was seen to here (else it is attached, and a reconnect re-attaches it).
+    private func attachIfFailed(_ chat: ChatSession) -> Bool {
+        if chat.isResuming {
+            Task { await chat.awaitResume(); chat.retryFailedAttach() }
+            return true
+        }
+        return chat.retryFailedAttach()
     }
 
     /// One cheap GET; only the 503 skew refusal sets the flag, every other outcome clears it.

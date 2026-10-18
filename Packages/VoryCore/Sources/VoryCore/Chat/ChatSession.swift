@@ -526,16 +526,32 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             stale = true
             if !(error is CancellationError), !error.localizedDescription.contains("CancellationError") {
                 let why = error.localizedDescription
-                if why.localizedCaseInsensitiveContains("not found") {
-                    // A one-off run (a scheduled task, say) the gateway never kept, or one it
-                    // dropped on restart: say so instead of quoting the error.
-                    banner = "The gateway no longer has this chat. It may have been a one-off run, or the gateway restarted without it. Start a new chat to carry on."
+                if Self.isGone(why) {
+                    banner = Self.goneBanner
                 } else {
                     banner = "Reconnected, but the chat could not be re-attached: \(why)"
                 }
                 bannerIsReconnect = true
             }
         }
+    }
+
+    /// A one-off run (a scheduled task, say) the gateway never kept, one it dropped on restart,
+    /// or a chat deleted elsewhere: said so instead of quoting the error.
+    static let goneBanner = "The gateway no longer has this chat. It may have been a one-off run, or the gateway restarted without it. Start a new chat to carry on."
+    /// The gateway's answer for a chat it does not have ("session not found", 4007).
+    static func isGone(_ why: String) -> Bool { why.localizedCaseInsensitiveContains("not found") }
+
+    /// The last attach failed because the gateway has no such chat: a connection that comes up
+    /// later cannot attach it, so it is not tried again on its own (a reopen still tries).
+    private var attachGone = false
+
+    /// Attaches again a chat whose attach failed, as it was opened (`beginResume`); a chat
+    /// attached, attaching, or one the gateway does not have is left alone. Whether it did.
+    @discardableResult public func retryFailedAttach() -> Bool {
+        guard resumeError != nil, !isResuming, !attachGone, !storedID.isEmpty else { return false }
+        beginResume()
+        return true
     }
 
     // MARK: Instant open
@@ -559,8 +575,17 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         resumeTask = Task { [weak self] in
             guard let self else { return }
             if needsPrefetch { Task { [weak self] in await self?.prefetchFromREST() } }
-            do { try await resume(); resumeError = nil }
-            catch { resumeError = error.localizedDescription }
+            do {
+                try await resume(); resumeError = nil; attachGone = false
+                if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
+            } catch {
+                let why = error.localizedDescription
+                resumeError = why
+                // A chat the gateway does not have opened with its cached rows: they read as the
+                // chat, and a send was the first sign it is gone (#422).
+                attachGone = Self.isGone(why)
+                if attachGone { banner = Self.goneBanner; bannerIsReconnect = true }
+            }
             isResuming = false
         }
     }
