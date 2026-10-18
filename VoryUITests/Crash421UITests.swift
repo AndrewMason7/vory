@@ -63,9 +63,55 @@ final class Crash421UITests: XCTestCase {
 
     /// Whether the app is still there to answer (XCTest's app.state reads foreground whatever happens on iOS 27).
     private func alive(_ name: String) {
-        let ok = app.textViews["composer.text"].firstMatch.waitForExistence(timeout: 10)
+        // The message bar is the waveform while dictation listens: the app answers, but a tap of the test's landed on
+        // the bar's microphone, which it should not have (reported, so a run that does it can be told apart).
+        let listening = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Listening'")).firstMatch
+        let ok = app.textViews["composer.text"].firstMatch.waitForExistence(timeout: 10) || listening.exists
+        if listening.exists { mark("\(name): DICTATION started by a stray tap") }
         mark("\(name): app \(ok ? "answers" : "GONE")")
+        if !ok {
+            // What is on screen instead: a sheet over the chat, or nothing answering at all.
+            let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); a.name = "alive-failed"; a.lifetime = .keepAlways; add(a)
+            shot("alive-failed")
+            let t0 = Date()
+            let sheet = app.buttons["Done"].exists || app.buttons["Open the full call"].exists
+            mark(String(format: "ALIVE-FAILED tree answered in %.2f s; a sheet or open card's buttons %@", Date().timeIntervalSince(t0), sheet ? "up" : "not up"))
+        }
         XCTAssertTrue(ok, "the app stopped answering after \(name)")
+    }
+
+    /// The thread's tool cards and the top of the dock, read from one copy of the tree: a card found there cannot
+    /// leave between the find and the tap, as rows do when the lazy stack takes them during a stream, and an element
+    /// bound by index then pointed at another card or at none (27's gate). `key` keeps the cards whose label has it.
+    private func cardsOnScreen(_ key: String? = nil) -> (cards: [(label: String, frame: CGRect)], dockTop: CGFloat) {
+        guard let snap = try? app.snapshot() else { return ([], 0) }
+        var cards: [(String, CGRect)] = []
+        var dockTop = snap.frame.maxY - 140
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.identifier == "chat.dock" { dockTop = s.frame.minY }
+            if s.elementType == .button, s.label.localizedCaseInsensitiveContains("terminal"), key.map({ s.label.contains($0) }) ?? true {
+                cards.append((s.label, s.frame))
+            }
+            for c in s.children { walk(c) }
+        }
+        walk(snap)
+        return (cards, dockTop)
+    }
+
+    /// A card's header row, where a tap only folds or unfolds it (the middle of an open card is its output, its
+    /// "Show more lines" and "Open the full call"), if that row is between the top bar and the dock: a tap read off a
+    /// frame while the list coasted, or under the dock, landed on the message bar and started dictation (27's gate).
+    private func headerPoint(_ f: CGRect, dockTop: CGFloat) -> XCUICoordinate? {
+        let y = f.minY + 22
+        guard f.width > 0, y > 150, y < dockTop - 12 else { return nil }
+        return app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX, dy: y))
+    }
+
+    /// A tap at a point, timed (`timedTap`'s measure).
+    private func timedTap(_ point: XCUICoordinate, _ name: String) {
+        let t0 = Date()
+        point.tap()
+        mark(String(format: "tap %@ %.2f s", name, Date().timeIntervalSince(t0)))
     }
 
     func testToolCardsOpenedAndClosedWhileALongTurnStreams() throws {
@@ -75,13 +121,23 @@ final class Crash421UITests: XCTestCase {
         var i = 0
         while Date() < end {
             i += 1
-            let cards = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "terminal"))
-            guard let card = cards.allElementsBoundByIndex.last(where: { $0.exists && $0.isHittable }) else { pause(0.5); continue }
-            timedTap(card, "open \(i)")
+            let seen = cardsOnScreen()
+            guard let card = seen.cards.last(where: { headerPoint($0.frame, dockTop: seen.dockTop) != nil }),
+                  let open = headerPoint(card.frame, dockTop: seen.dockTop) else { pause(0.5); continue }
+            timedTap(open, "open \(i)")
             pause(0.3)
-            // Every third one is left open, so open cards ride the stream.
-            if i % 3 != 0 { timedTap(card, "close \(i)") }
-            if i % 5 == 0 { app.swipeDown(velocity: .fast); pause(0.3); app.swipeUp(velocity: .fast) }
+            // Every third one is left open, so open cards ride the stream. The card is found again by the shard its
+            // command names, where it is now.
+            let key = card.label.firstMatch(of: /shard-\d+/).map { String($0.output) } ?? card.label
+            if i % 3 != 0 {
+                let again = cardsOnScreen(key)
+                if let c = again.cards.first, let close = headerPoint(c.frame, dockTop: again.dockTop) { timedTap(close, "close \(i)") }
+            }
+            if i % 5 == 0 {
+                app.swipeDown(velocity: .fast); pause(0.3); app.swipeUp(velocity: .fast)
+                // The list coasts after a fast swipe: frames read meanwhile are where the rows were.
+                pause(1.5)
+            }
             pause(0.2)
         }
         alive("tool cards while streaming")
