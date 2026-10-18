@@ -63,6 +63,56 @@ final class ComposerCardAccessUITests: XCTestCase {
         return out
     }
 
+    /// The largest text size, in a chat with the context ring (#396): Send stands inside the card
+    /// and the window, and a tap on it sends. The +, the ring's number and the chip ran past the
+    /// card there, Send was cut by its edge, and a tap on what showed of it sent nothing.
+    func testSendStandsInTheCardAndSendsAtTheLargestSize() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        continueAfterFailure = false
+        launch(url: url, token: token, size: "UICTContentSizeCategoryAccessibilityXXXL")
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup' AND identifier != 'chat.titlePill'"))
+        let row = rows.allElementsBoundByIndex.first { $0.isHittable } ?? rows.firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 40), "no Disk cleanup row")
+        row.tap()
+        let composer = app.textViews["composer.text"].firstMatch
+        // An approval left waiting by an earlier test hides the composer: denied first.
+        if !composer.waitForExistence(timeout: 8) {
+            let deny = app.buttons.matching(NSPredicate(format: "label == 'Deny'")).firstMatch
+            if deny.waitForExistence(timeout: 10) { deny.tap() }
+        }
+        XCTAssertTrue(composer.waitForExistence(timeout: 20), "no composer")
+        // The chat has its usage, so the context ring stands in the row (the tester's case).
+        let ring = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Context'")).firstMatch
+        XCTAssertTrue(ring.waitForExistence(timeout: 30), "no context ring in the row")
+        composer.tap()
+        composer.typeText("table 2 please")
+        settle(1.5)
+        shot("card-access-3-xxxl-typed")
+        let send = app.buttons["composer.send"].firstMatch
+        let dock = app.otherElements["chat.dock"].firstMatch
+        XCTAssertTrue(send.exists, "no Send")
+        print("SEND-FRAME send \(send.frame) dock \(dock.frame) window \(app.windows.firstMatch.frame)")
+        XCTAssertTrue(dock.frame.insetBy(dx: -1, dy: -1).contains(send.frame), "Send runs past the card: \(send.frame) in \(dock.frame)")
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(send.frame), "Send runs off the window")
+        // Still a circle, at most a control's size: its arrow drawn at the text's size outgrew the
+        // 28 pt circle, which was left as two blue arcs around a white arrow.
+        XCTAssertLessThanOrEqual(send.frame.height, 44, "Send grew to \(send.frame.size)")
+        XCTAssertLessThan(abs(send.frame.width - send.frame.height), 2, "Send is not round: \(send.frame.size)")
+        XCTAssertTrue(send.isHittable, "Send cannot be tapped")
+        // The audit at this size: anything in the composer's card fails it.
+        let card = dock.frame
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
+            let inCard = issue.element.map { card.intersects($0.frame) } ?? false
+            print("COMPOSER-AUDIT \(inCard ? "card" : "chat") '\(issue.compactDescription)' label '\(issue.element?.label ?? "")' id '\(issue.element?.identifier ?? "")'")
+            return !inCard
+        }
+        send.tap()
+        let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'table 2 please'")).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 15), "the tap on Send sent nothing")
+        settle(1)
+        shot("card-access-4-xxxl-sent")
+    }
+
     func testTheCardReadsInOrderAndFitsAtLargeType() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         continueAfterFailure = true
