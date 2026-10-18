@@ -101,12 +101,14 @@ struct StatusView: View {
     private func isFailed(_ s: SocketState) -> Bool {
         if case .failed = s { return true }
         if case .authRejected = s { return true }
+        if case .unreachable = s { return true }
         return false
     }
     private func gatewayDetail(_ s: SocketState, _ rt: GatewayRuntime) -> String {
         switch s {
         case .connecting: return "Connecting to \(rt.connection.name)…"
         case .reconnecting(let n, _): return "Lost the connection; trying again (attempt \(n))"
+        case .unreachable(let problem, _): return problem.detail
         case .failed(let why): return "Cannot reach \(rt.connection.name): \(why)"
         case .authRejected: return "\(rt.connection.name) refused the sign-in"
         case .idle: return "Not connected yet"

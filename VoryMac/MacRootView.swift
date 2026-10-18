@@ -503,7 +503,7 @@ private struct GatewayFooter: View {
         switch s {
         case .open: return .green
         case .connecting, .reconnecting, .idle: return .orange
-        case .authRejected, .failed: return .red
+        case .authRejected, .failed, .unreachable: return .red
         }
     }
 

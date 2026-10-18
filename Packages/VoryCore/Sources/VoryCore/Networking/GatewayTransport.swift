@@ -16,6 +16,14 @@ public protocol GatewayFramePipe: AnyObject, Sendable {
     /// Why the pipe closed, once `receive` has thrown: the close code (0 when there was none)
     /// and the reason the other end gave.
     var closeInfo: (code: Int, reason: String) { get }
+    /// What answered the handshake when it was not a socket (a Cloudflare page, a redirect to a sign-in), for the
+    /// socket to say why it can't connect (#423); nil when there was no HTTP answer, or no handshake at all.
+    var upgradeResponse: HTTPURLResponse? { get }
+}
+
+extension GatewayFramePipe {
+    /// A pipe with no HTTP handshake (the demo's) has no answer to give.
+    public var upgradeResponse: HTTPURLResponse? { nil }
 }
 
 /// A gateway on the network: a URLSession web socket.
@@ -63,6 +71,8 @@ final class WebSocketPipe: GatewayFramePipe, @unchecked Sendable {
     var closeInfo: (code: Int, reason: String) {
         (task.closeCode.rawValue, task.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? "")
     }
+
+    var upgradeResponse: HTTPURLResponse? { task.response as? HTTPURLResponse }
 }
 
 /// How a runtime reaches its gateway: over the network, for every gateway a person adds, or in

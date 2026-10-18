@@ -17,7 +17,7 @@ struct ConnectionPill: View {
         switch state {
         case .open: return .green
         case .connecting, .reconnecting: return .orange
-        case .authRejected, .failed: return .red
+        case .authRejected, .failed, .unreachable: return .red
         case .idle: return .gray
         }
     }
