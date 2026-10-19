@@ -450,7 +450,7 @@ extension TranscriptView {
             // changed: a token landing in the reply at the end used to re-evaluate every row
             // the lazy stack had drawn, which with a long history was most of a core for the
             // whole reply (the Mac's "beachball on send"). Now a token touches the tail only.
-            OlderRows(rows: Array(all[..<split]), context: ctx).equatable()
+            OlderRows(rows: Array(all[..<split]), context: ctx.forOlderRows).equatable()
         }
         let entering = Self.enteringRowID(all, opening: settling || chat.isResuming)
         ForEach(Array(all[split...])) { row in ctx.rowView(row, entering: row.id == entering) }
@@ -788,6 +788,31 @@ struct RowContext: Equatable {
             && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
     }
 
+    /// The tool name for the typing bubble, given only to the row that draws it: a reply with no words yet, still
+    /// streaming. Every row compares what it is given (`TranscriptRow.==`), and the name changes at every tool step of
+    /// a turn ("terminal", nothing, "terminal"…), so a row that never draws the bubble gets nil and stays equal: with
+    /// the name on every row, each step rebuilt the whole thread (#422, 900 to 1,400 row evaluations a second while a
+    /// long turn streamed).
+    func bubbleTool(for item: TranscriptItem) -> String? {
+        guard case .assistant(let text, _, let streaming) = item.kind, streaming, text.isEmpty else { return nil }
+        return typingTool
+    }
+
+    /// Why the turn was cut short, for the last row only: the others get nil and stay equal when a new row arrives.
+    func interruptCause(for id: String) -> InterruptedTurn.Cause? { id == lastID ? interruptCause : nil }
+
+    /// The context the older, lazy rows are drawn with: what only the thread's last row uses left out (the typing
+    /// bubble's tool, which row is last, why a turn was cut short). An older row is never the last one. With them in,
+    /// `OlderRows` compared unequal at every tool step and every new row, and every older row the lazy stack had drawn
+    /// was rebuilt with it (#422).
+    var forOlderRows: RowContext {
+        var c = self
+        c.typingTool = nil
+        c.lastID = nil
+        c.interruptCause = nil
+        return c
+    }
+
     /// One row of the thread: the time separator before it when there is one, and the message
     /// with the time waiting past its right edge. `entering`: the row fades in if it is new
     /// (see `TranscriptView.enteringRowID`); every other row appears and goes as it is.
@@ -799,10 +824,10 @@ struct RowContext: Equatable {
         let id = row.item.id
         let actions = actions
         TranscriptRow(item: row.item, profile: profile, bot: bot, botShown: row.lastOfRun,
-                      typingTool: typingTool,
+                      typingTool: bubbleTool(for: row.item),
                       showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
                       onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
-                      interruptCause: id == lastID ? interruptCause : nil, onKeepRunning: actions.onKeepRunning,
+                      interruptCause: interruptCause(for: id), onKeepRunning: actions.onKeepRunning,
                       reasoningOpen: openReasoning.contains(id), setReasoningOpen: { actions.setReasoningOpen(id, $0) },
                       onSelectText: actions.onSelectText,
                       onShowAll: actions.onShowAll, botLabel: botLabel,
