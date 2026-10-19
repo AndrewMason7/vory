@@ -74,8 +74,12 @@ struct TranscriptView: View {
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     @State private var awayFromBottom = false
-    /// The card being opened and where its top was when the tap landed.
-    @State private var revealAnchor: (id: String, top: CGFloat)?
+    /// A card is opening or closing: the thread's size changes anchor at the top meanwhile, so the card keeps its place
+    /// (`holdCard`). Bumped per toggle, so an earlier toggle's release stands down.
+    @State private var holdingCard = false
+    @State private var cardHold = 0
+    /// A row arrived during a hold: the thread follows it once the hold is over (`holdCard`).
+    @State private var followAfterHold = false
     /// Scrolling is by content edge, not by the "bottom" marker view: with the lazy stack a
     /// marker that is not yet laid out gets an estimated position, and the jump-to-bottom button
     /// overshot and bounced back up.
@@ -98,7 +102,6 @@ struct TranscriptView: View {
     /// has set it: it moves only while the thread rests at its end. `TranscriptRowModel.split`
     /// says when it is not used.
     @State private var tailFrom: Int?
-    @State private var revealTask: Task<Void, Never>?
     @State private var overscrollTask: Task<Void, Never>?
     /// When the keyboard last moved: its own spring carries a stuck thread to the end, so a
     /// small overshoot is not landed against it.
@@ -284,10 +287,6 @@ struct TranscriptView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, new in
                 metrics.offsetY = new
             }
-            // A tool card or reasoning block that opened low on the screen grew under the
-            // composer; once its height has settled, the thread scrolls just enough to show
-            // its bottom edge. Collapsing posts nothing, so the thread stays put then.
-            .onReceive(NotificationCenter.default.publisher(for: .hermesRevealRow)) { revealRow($0) }
             // Your own message brings the thread to the end, as in Messages, however far up it
             // was scrolled: a tester sent one from up the thread, saw nothing happen, and had to
             // find the arrow to see the reply.
@@ -383,7 +382,11 @@ struct TranscriptView: View {
             .ignoresSafeArea(.container, edges: .top)
             #endif
             .scrollDismissesKeyboard(.interactively)
-            .defaultScrollAnchor(.bottom)
+            // Starts at the end and follows it. While a card opens or closes, size changes anchor at the top instead,
+            // so the tapped card stays where it is and the rows below glide (#437).
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            .defaultScrollAnchor(holdingCard ? .top : .bottom, for: .sizeChanges)
             // Streaming text, and the tokens/sec footer landing after it, follow by the anchor for
             // size changes (`.defaultScrollAnchor(.bottom)` above), with no scroll asked per token:
             // that write ran the transcript's body a second time on every token. A new message
@@ -479,8 +482,9 @@ extension TranscriptView {
         actions.onKeepRunning = { showAwayGrace = true }
         actions.onSelectText = { selectText = SelectTextItem(text: $0) }
         actions.onShowAll = { title, text in selectText = SelectTextItem(title: title, text: text, monospaced: title.hasPrefix("Code")) }
-        actions.setReasoningOpen = { id, on in if on { openReasoning.insert(id) } else { openReasoning.remove(id) } }
-        actions.setToolOpen = { id, on in if on { openTools.insert(id) } else { openTools.remove(id) } }
+        // Called inside the card's own animation: the hold and the change land in one update (`holdCard`).
+        actions.setReasoningOpen = { id, on in holdCard(opening: on); if on { openReasoning.insert(id) } else { openReasoning.remove(id) } }
+        actions.setToolOpen = { id, on in holdCard(opening: on); if on { openTools.insert(id) } else { openTools.remove(id) } }
         return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName,
                           botLabel: chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
                           showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
@@ -488,42 +492,34 @@ extension TranscriptView {
                           wide: wideReplies, maxBubble: bubbleCap, actions: actions)
     }
 
-    /// A tool card or reasoning block opened: keeps its top where the finger found it while it
-    /// grows, then shows its bottom edge if that ran under the composer.
-    private func revealRow(_ n: Notification) {
-        guard let bottom = n.userInfo?["bottom"] as? CGFloat, let id = n.userInfo?["id"] as? String else { return }
-        let top = n.userInfo?["top"] as? CGFloat ?? bottom
-        // While the card grows, its top stays where the finger found it: the thread is
-        // anchored at its bottom, so the growth used to push the card up by its own
-        // height and the reveal then pulled it back down, a visible jitter on every
-        // expand. Each frame of the growth is countered on the scroll view directly.
-        if revealAnchor?.id != id { revealAnchor = (id, top); metrics.stickToBottom = false }
-        #if os(iOS)
-        if let a = revealAnchor, a.id == id, let sv = metrics.scrollView, abs(top - a.top) > 0.5 {
-            let y = max(-sv.adjustedContentInset.top, sv.contentOffset.y + (top - a.top))
-            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
-        }
+    /// A card opening or closing keeps its place: for the length of the toggle's animation the thread's size changes
+    /// anchor at its top, so the tapped card's top does not move and the rows below it glide. Anchored at the end, a
+    /// card that grew pushed itself up and was pulled back a frame later, and one near the bottom was scrolled into view
+    /// after it opened, a second motion (#437). A close with the thread at its very end keeps the end anchored: the
+    /// thread is shorter after it, so the rows above come down, in the same animation as the close.
+    /// Once the hold ends, a thread still locked to its end follows a running turn again, eased as `followRows` does
+    /// (rows that arrived meanwhile were held back): a card toggled near the end while a turn streams does not stop the
+    /// thread following it. With no turn running, nothing moves after the toggle.
+    private func holdCard(opening: Bool) {
+        guard opening || metrics.distanceFromBottom >= 4 else { return }
+        cardHold += 1
+        let hold = cardHold
+        holdingCard = true
+        #if DEBUG
+        CardMotionProbe.holding = true
         #endif
-        let settledBottom = bottom - (top - (revealAnchor?.top ?? top))
-        revealTask?.cancel()
-        revealTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(80))
-            guard !Task.isCancelled else { return }
-            revealAnchor = nil
-            // Only when the opened row runs under the composer; then its bottom edge is
-            // aligned to the visible bottom (the scroll view resolves the row itself,
-            // so no offset arithmetic across coordinate spaces).
-            let limit = (dockTop > 0 ? dockTop : windowGeometry.bounds.height - fallbackInset) - 8
-            let overshoot = settledBottom - limit
-            guard overshoot > 0 else { return }
-            #if os(iOS)
-            if let sv = metrics.scrollView {
-                let maxY = max(0, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
-                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(maxY, sv.contentOffset.y + overshoot)), animated: true)
-                return
-            }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard cardHold == hold else { return }
+            holdingCard = false
+            #if DEBUG
+            CardMotionProbe.holding = false
             #endif
-            withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
+            // A turn running under a thread locked to its end goes on being followed (eased, as `followRows` does); with
+            // no turn running the thread stays where the card left it.
+            let follow = followAfterHold || chat.isRunning
+            followAfterHold = false
+            if follow, mayFollow(), metrics.distanceFromBottom > 4 { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
     }
 
@@ -602,6 +598,8 @@ extension TranscriptView {
 
     private func followRows(from old: Int, to new: Int) {
         guard mayFollow() else { return }
+        // Not while a card holds its place: the thread follows once the hold is over.
+        if holdingCard { followAfterHold = true; return }
         // Rows crossing into the lazy stack change the height above the screen: the thread
         // lands at its end at once then, with nothing to glide through.
         let crossed = TranscriptRowModel.split(count: old, tailFrom: tailFrom) != TranscriptRowModel.split(count: new, tailFrom: tailFrom)
@@ -1357,7 +1355,7 @@ struct TranscriptRow: View, Equatable {
                     // same place, so an open card stays open (#424); no reply, so no menu.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
+                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1373,7 +1371,7 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), itemID: item.id, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
@@ -1443,7 +1441,7 @@ struct TranscriptRow: View, Equatable {
                 }
             }
         case .tool(let act):
-            ToolCardView(activity: act, itemID: item.id, open: Binding(get: { toolOpen }, set: setToolOpen), showOutput: showToolOutput, compact: compactTools)
+            ToolCardView(activity: act, open: Binding(get: { toolOpen }, set: setToolOpen), showOutput: showToolOutput, compact: compactTools)
         case .system(let text, let symbol) where symbol == "terminal":
             // A slash command's reply: reading size, selectable, with Copy; the terminal mark
             // and a quiet background keep it apart from the bot's words (a tester could neither
@@ -1609,7 +1607,7 @@ struct InjectedNoteRow: View {
                     .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
                     .frame(width: rowWidth > 0 ? rowWidth : nil, alignment: .leading)
                     // Revealed by the glass, not faded or moved: it is already in place.
-                    .folded(open: open, keep: body.text.utf8.count <= 6_000)
+                    .folded(open: open, keep: body.text.utf8.count <= 6_000, fade: false)
             }
             .frame(width: rowWidth > 0 && pillWidth > 0 ? (open ? rowWidth : min(pillWidth, rowWidth)) : nil)
             .clipShape(.rect(cornerRadius: open ? 14 : 20))
@@ -1633,6 +1631,10 @@ struct Folded: ViewModifier {
     /// Kept laid out through the close, so the edge covers it. Not for a big fold: a few screens of text laid out and
     /// animated only to be covered, the close went with the fold at once (#361).
     var keep = true
+    /// The content fades in as the edge uncovers it and out as the edge covers it, in the same animation: uncovered at
+    /// full strength, text read as cut by a moving line (#437). Off where the edge itself is the reveal (a background
+    /// process's note, revealed by its widening glass).
+    var fade = true
     /// Mounted while open and for the close animation after; not before the first open.
     @State private var shown = false
     /// Bumped on every change, so a close's delayed unmount stands down when it reopened since.
@@ -1642,7 +1644,7 @@ struct Folded: ViewModifier {
             // No transition of its own, and its natural height whatever the fold proposes: it is
             // in place at full size and the edge does the rest (a Text offered the shrinking
             // height re-wrapped to fewer lines mid-close).
-            if open || shown { content.fixedSize(horizontal: false, vertical: true).transition(.identity) }
+            if open || shown { content.fixedSize(horizontal: false, vertical: true).opacity(fade && !open ? 0 : 1).transition(.identity) }
         }
         .frame(height: open ? nil : 0, alignment: .top)
         .clipped()
@@ -1658,8 +1660,46 @@ struct Folded: ViewModifier {
 }
 
 extension View {
-    func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep)) }
+    func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true, fade: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep, fade: fade)) }
 }
+
+#if DEBUG
+/// DEBUG, for the card checks (#437): with `-vory-card-probe`, a card toggled in the last second writes its top and
+/// height on screen to the perf log at every layout ("card-motion …"), so a test can say whether its top moved while it
+/// opened or closed, frame by frame.
+@MainActor
+enum CardMotionProbe {
+    nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-card-probe")
+    /// Each toggled card's top and height at each layout, and when (seconds after the first tap). Toggles within a
+    /// second of each other add to the same record (open, close, open; two cards), each card under its own key.
+    private(set) static var samples: [(key: String, t: Double, top: CGFloat, height: CGFloat)] = []
+    private static var began = Date.distantPast
+    /// Whether the thread is holding a card's place now (`TranscriptView.holdCard`).
+    static var holding = false
+    static func begin() { if Date().timeIntervalSince(began) > 1 { samples = []; began = Date() } }
+    static func note(_ kind: String, _ f: CGRect, until: Date) {
+        guard isOn, Date() < until else { return }
+        samples.append((kind, Date().timeIntervalSince(began), f.minY, f.height))
+        Perf.note("card-motion \(kind) top \(String(format: "%.2f", f.minY)) height \(String(format: "%.2f", f.height))")
+    }
+    /// "holding|key,t,top,height;…", read by a UI test after the animation (`Readout`).
+    static var summary: String { (holding ? "1|" : "0|") + samples.map { "\($0.key)," + String(format: "%.3f,%.2f,%.2f", $0.t, $0.top, $0.height) }.joined(separator: ";") }
+
+    #if os(iOS)
+    /// A 1 pt element ("debug.cardmotion") whose value is `summary`, taken when it is read.
+    final class ReadoutView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.cardmotion" } set {} }
+        override var accessibilityLabel: String? { get { "Card motion" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { CardMotionProbe.summary } } set {} }
+    }
+    struct Readout: UIViewRepresentable {
+        func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
+        func updateUIView(_ v: ReadoutView, context: Context) {}
+    }
+    #endif
+}
+#endif
 
 /// The whole tool call on its own page: the command or arguments and the output, as text you
 /// can select by range and share.
@@ -1746,10 +1786,12 @@ struct BotMessageNotice: View {
 struct ReasoningDisclosure: View {
     var text: String
     @Binding var open: Bool
-    var itemID: String? = nil
     /// The whole reasoning, when the fold shows only its start (`TextPieces.foldCap`).
     var onShowAll: ((String) -> Void)? = nil
-    @State private var revealing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if DEBUG
+    @State private var probeUntil = Date.distantPast
+    #endif
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // One full-width hit target, edge to edge, rather than DisclosureGroup's label-only one.
@@ -1775,20 +1817,25 @@ struct ReasoningDisclosure: View {
             }
             .folded(open: open, spacing: 4, keep: shown.text.utf8.count <= 6_000)
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
-            if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
-        }
+        // One width, open or closed: the closed card was as wide as its header and the open one as wide as its text, so
+        // the width grew with the height and the text, laid out at its final width, showed cut on the right (#437).
+        .frame(maxWidth: .infinity, alignment: .leading)
+        #if DEBUG
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in CardMotionProbe.note("reasoning-\(abs(text.hashValue) % 100_000)", f, until: probeUntil) }
+        #endif
     }
 
+    /// The thread keeps the card where it is meanwhile (`TranscriptView.holdCard`, through the binding). With Reduce
+    /// Motion, at once.
     private func toggle() {
-        if !open { revealing = true; Task { try? await Task.sleep(for: .milliseconds(600)); revealing = false } }
-        withAnimation(.snappy) { open.toggle() }
+        #if DEBUG
+        probeUntil = Date().addingTimeInterval(1); CardMotionProbe.begin()
+        #endif
+        withAnimation(reduceMotion ? nil : .snappy) { open.toggle() }
     }
 }
 
 extension Notification.Name {
-    /// A row that just expanded reports its bottom edge (global y) so the thread can show it.
-    static let hermesRevealRow = Notification.Name("hermesRevealRow")
     /// A message left the composer (object: its chat): the thread goes to the end for it.
     static let hermesMessageSent = Notification.Name("hermesMessageSent")
 }
@@ -2203,17 +2250,17 @@ struct MarkdownImageView: View {
 
 struct ToolCardView: View {
     var activity: ToolActivity
-    /// The transcript row this card is, for the reveal after it opens.
-    var itemID: String? = nil
     /// Open state owned by the thread (so a recycled row keeps it and the turn's end can fold it).
     var open: Binding<Bool> = .constant(false)
     /// The Output block when open (Appearance › Chat).
     var showOutput = true
     /// One line: name, time and chevron; the context and summary lines only when open.
     var compact = false
-    /// Set while the card opens: its frame changes are reported so the thread can reveal it.
-    @State private var revealing = false
     @State private var showFull = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if DEBUG
+    @State private var probeUntil = Date.distantPast
+    #endif
     private var expanded: Bool { open.wrappedValue }
     /// What the tool was asked: the command out of the args when they are JSON with one, the
     /// args as sent, or the context line.
@@ -2286,17 +2333,21 @@ struct ToolCardView: View {
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: compact ? 10 : 14))
         .overlay(RoundedRectangle(cornerRadius: compact ? 10 : 14, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         .contentShape(.rect)
+        // The thread keeps the card where it is meanwhile (`TranscriptView.holdCard`, through the binding). With Reduce
+        // Motion, at once.
         .onTapGesture {
-            if !expanded { revealing = true; Task { try? await Task.sleep(for: .milliseconds(600)); revealing = false } }
-            withAnimation(.snappy) { open.wrappedValue.toggle() }
+            #if DEBUG
+            probeUntil = Date().addingTimeInterval(1); CardMotionProbe.begin()
+            #endif
+            withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { _, y in
-            if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": y, "id": itemID]) }
-        }
+        #if DEBUG
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in CardMotionProbe.note("tool-\(activity.id)", f, until: probeUntil) }
+        #endif
         .accessibilityElement(children: .combine)
         // A tap gesture alone gives assistive tech nothing to press (on the Mac the card was plain text).
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { withAnimation(.snappy) { open.wrappedValue.toggle() } }
+        .accessibilityAction { withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() } }
         .accessibilityHint(DeviceWords.isMac ? "Expands the tool log" : "Double-tap to expand the tool log")
     }
 

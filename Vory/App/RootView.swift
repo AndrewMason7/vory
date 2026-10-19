@@ -69,6 +69,8 @@ struct RootView: View {
         // `-vory-ax-oracle`: what VoiceOver would stop on, for UI tests (`VoiceOverOracle`, #409).
         .overlay(alignment: .topLeading) {
             if VoiceOverOracle.isOn { VoiceOverOracle.Probe().frame(width: 1, height: 1).allowsHitTesting(false) }
+            // `-vory-card-probe`: where a toggled card's top was at each frame, for the card checks (#437).
+            if CardMotionProbe.isOn { CardMotionProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
         }
         #endif
         #if DEBUG
