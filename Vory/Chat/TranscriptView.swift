@@ -419,13 +419,13 @@ struct TranscriptView: View {
             // Once the history is in and laid out, make sure the end is really on screen.
             .task(id: chat.isResuming) { await landAfterResume() }
             .onChange(of: chat.statusLine) { _, _ in
-                if mayFollow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
+                if mayFollowNow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
             // The turn ending takes the typing bubble and status line out from under the last
             // reply; a locked thread follows so no blank band is left there.
             .onChange(of: chat.isRunning) { _, running in
                 if !running, collapseAfterTurn { withAnimation(.snappy) { openReasoning = []; openTools = [] } }
-                if mayFollow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
+                if mayFollowNow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
             // The dock changing height (an approval card arriving or leaving) moves the bottom
             // margin; a locked thread follows, so no blank band opens under the last row. Once
@@ -437,6 +437,7 @@ struct TranscriptView: View {
                 insetSettle = Task {
                     try? await Task.sleep(for: .milliseconds(80))
                     guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
+                    if holdingCard { followAfterHold = true; return }
                     if settling { scrollPosition.scrollTo(edge: .bottom) }
                     else { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
                 }
@@ -587,6 +588,15 @@ extension TranscriptView {
         return true
     }
 
+    /// `mayFollow`, and no card holding its place (`holdCard`): the thread follows once the hold is over. Every follow of
+    /// the end a turn sets off goes through here (rows, the status line, the turn's end, the dock), so a card toggled
+    /// while a turn streams stays where it is: the status line's follow at each tool step scrolled it away (#437).
+    private func mayFollowNow() -> Bool {
+        guard mayFollow() else { return false }
+        if holdingCard { followAfterHold = true; return false }
+        return true
+    }
+
     /// A row came or went under a locked thread: the thread eases to its end with it.
     /// The keyboard now covers `inset` of the window above the bottom safe area (`WindowGeometry`).
     /// The keyboard moves on UIKit's own spring; this spring tracks it closely, so the thread and
@@ -612,9 +622,7 @@ extension TranscriptView {
     }
 
     private func followRows(from old: Int, to new: Int) {
-        guard mayFollow() else { return }
-        // Not while a card holds its place: the thread follows once the hold is over.
-        if holdingCard { followAfterHold = true; return }
+        guard mayFollowNow() else { return }
         // Rows crossing into the lazy stack change the height above the screen: the thread
         // lands at its end at once then, with nothing to glide through.
         let crossed = TranscriptRowModel.split(count: old, tailFrom: tailFrom) != TranscriptRowModel.split(count: new, tailFrom: tailFrom)
