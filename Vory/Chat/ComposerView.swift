@@ -810,11 +810,14 @@ struct ComposerView: View {
             Image(systemName: "plus").font(.body.weight(.semibold))
                 .rotationEffect(.degrees(showAttach ? 45 : 0))
                 .frame(width: 36, height: 36)
+                // The whole circle takes the tap and is the control's frame: on iOS 26 the button was its 14 pt glyph
+                // (the audit's "hit area is too small" on 26.5), and a tap near the circle's edge missed.
+                .contentShape(.circle)
                 .glassEffect(.regular.interactive(), in: .circle)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { attachButtonFrame = $0 }
-            .accessibilityIdentifier(newMessage != nil ? "newchat.attach" : "composer.attach")
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(newMessage != nil ? "newchat.attach" : "composer.attach")
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
         .accessibilityShowsLargeContentViewer { Label(showAttach ? "Close attach panel" : "Attach", systemImage: "plus") }
     }

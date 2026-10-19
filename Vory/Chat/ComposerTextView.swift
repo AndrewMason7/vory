@@ -592,6 +592,8 @@ final class PasteTextView: UITextView {
         placeholderLabel.textColor = .placeholderText
         placeholderLabel.numberOfLines = 1
         placeholderLabel.isUserInteractionEnabled = false
+        // The field is the element ("Message"); its placeholder is a hint drawn in it, not a text of its own.
+        placeholderLabel.isAccessibilityElement = false
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholderLabel)
         NSLayoutConstraint.activate([
