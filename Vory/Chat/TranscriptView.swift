@@ -117,6 +117,8 @@ struct TranscriptView: View {
     @State private var openReasoning: Set<String> = []
     /// The rows' actions, one object for the view's life (see `RowContext`).
     @State private var actions = RowActions()
+    /// The rows as last built (see `rows`).
+    @State private var rowCache = RowCache()
     @State private var selectText: SelectTextItem?
     @AppStorage(ChatStyle.showToolCalls) private var showToolCalls = true
     @AppStorage(ChatStyle.showReasoning) private var showReasoning = true
@@ -160,7 +162,20 @@ struct TranscriptView: View {
         return false
     }
 
-    private var rows: [TranscriptRowModel] { TranscriptRowModel.build(visibleItems) }
+    /// The thread's rows, built again only when the chat's items, the settings that pick them or the day change
+    /// (#439). The view is evaluated far more often than that (the thread scrolling, the status line, a card
+    /// toggled), and each build walked the whole thread: an old chat of a few thousand rows spent most of its main
+    /// thread there. A streaming reply changes the items at every token, so while one streams the rows are built at
+    /// every pass, as before.
+    private var rows: [TranscriptRowModel] {
+        // Read on a hit too: the view is told when the items change.
+        _ = chat.items
+        let day = Calendar.current.startOfDay(for: Date())
+        let key = RowCache.Key(chat: ObjectIdentifier(chat), items: chat.itemsRevision, showToolCalls: showToolCalls,
+                               currentStepOnly: currentStepOnly, showSystemNotes: showSystemNotes,
+                               showReasoning: showReasoning, day: day)
+        return rowCache.rows(for: key) { TranscriptRowModel.build(visibleItems, now: day) }
+    }
     /// True while the last item is a reply still waiting for its first words (that row shows
     /// the typing bubble itself).
     private var lastIsEmptyStreamingReply: Bool {
@@ -391,9 +406,9 @@ struct TranscriptView: View {
             // size changes (`.defaultScrollAnchor(.bottom)` above), with no scroll asked per token:
             // that write ran the transcript's body a second time on every token. A new message
             // fades in where it belongs and the thread eases up to it (`followRows`).
-            .onChange(of: visibleItems.count) { old, new in followRows(from: old, to: new) }
+            .onChange(of: rows.count) { old, new in followRows(from: old, to: new) }
             // Again when the turn ends: rows cross into the lazy stack between turns only.
-            .task(id: [visibleItems.count, chat.isRunning ? 1 : 0]) { await settleTail() }
+            .task(id: [rows.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear { openedAt = Date(); refreshMentionNames() }
             // The thread's place after a layout switch rebuilt it: the distance from the end it
             // had (`ChatViewMemory`), put back once the content is laid out; at the end, nothing.
@@ -453,7 +468,7 @@ extension TranscriptView {
             // changed: a token landing in the reply at the end used to re-evaluate every row
             // the lazy stack had drawn, which with a long history was most of a core for the
             // whole reply (the Mac's "beachball on send"). Now a token touches the tail only.
-            OlderRows(rows: Array(all[..<split]), context: ctx.forOlderRows).equatable()
+            OlderRows(rows: rowCache.older(than: split), context: ctx.forOlderRows).equatable()
         }
         let entering = Self.enteringRowID(all, opening: settling || chat.isResuming)
         ForEach(Array(all[split...])) { row in ctx.rowView(row, entering: row.id == entering) }
@@ -618,7 +633,7 @@ extension TranscriptView {
     private func settleTail() async {
         try? await Task.sleep(for: .milliseconds(400))
         guard !Task.isCancelled else { return }
-        let count = visibleItems.count
+        let count = rows.count
         let wanted = TranscriptRowModel.tailStart(count)
         // Not set yet while a turn runs: set where the rows already split, wherever the reader
         // is (nothing moves), so the rest of the turn holds its rows out of the lazy stack.
@@ -1101,6 +1116,48 @@ enum ChatStyle {
         case "large": return all[min(all.count - 1, i + 1)]
         default: return base
         }
+    }
+}
+
+/// The thread's rows as last built and what they were built from (#439). A class, so filling it while the view is
+/// evaluated is no change to the view's state.
+@MainActor final class RowCache {
+    struct Key: Equatable {
+        var chat: ObjectIdentifier
+        /// The chat's `itemsRevision`.
+        var items: Int
+        var showToolCalls: Bool
+        var currentStepOnly: Bool
+        var showSystemNotes: Bool
+        var showReasoning: Bool
+        /// The day the separators were written on ("Today", "Yesterday", a weekday).
+        var day: Date
+    }
+    private var key: Key?
+    private var built: [TranscriptRowModel] = []
+    private(set) var builds = 0
+    private var olderSplit: Int?
+    private var older: [TranscriptRowModel] = []
+
+    func rows(for key: Key, build: () -> [TranscriptRowModel]) -> [TranscriptRowModel] {
+        if key != self.key {
+            built = build()
+            self.key = key
+            olderSplit = nil
+            builds += 1
+        }
+        return built
+    }
+
+    /// The rows before `split` of those `rows(for:build:)` last returned, as the same array while they and the split
+    /// hold: `OlderRows` compared with its last pass is then equal at once (Array's `==` sees its own storage), not
+    /// after comparing every row in full.
+    func older(than split: Int) -> [TranscriptRowModel] {
+        if split != olderSplit {
+            older = Array(built[..<split])
+            olderSplit = split
+        }
+        return older
     }
 }
 
