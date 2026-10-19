@@ -2645,6 +2645,17 @@ class Gateway:
                         {"role": "user", "text": "[IMPORTANT: Background process proc_bb0091529c2c completed normally (exit code 0).\nCommand: cd /srv/app/_meta && python3 convert_to_mp4.py 2>&1 | tee convert_run.log\nOutput:\n...(first 1910 characters cut)\nremux 39/40 ok\nverify 39/40 ok]", "timestamp": row["last_active"] - 30, "row_id": 4},
                         {"role": "assistant", "text": REPLY_PART_3, "timestamp": row["last_active"], "row_id": 5},
                     ]
+                    # MOCK_WIDE_NOTE=1: the notice's output has lines with nowhere to break (#433, a tester's
+                    # chat drawn wider than the screen after one): a 300-character token, a long command, a URL.
+                    if os.environ.get("MOCK_WIDE_NOTE"):
+                        token = "sha256:" + ("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" * 5)[:293]
+                        live.history[3]["text"] = (
+                            "[IMPORTANT: Background process proc_5e1f0c2a9d71 completed normally (exit code 0).\n"
+                            "Command: cd ~/srv/stack/services/api-gateway && docker compose --project-name stack-api-gateway up -d --force-recreate "
+                            "> /tmp/stack-api-gateway-rotate-keys-up.log 2>&1; echo \"EXIT=$?\" >> /tmp/stack-api-gateway-rotate-keys-up.log\n"
+                            "Output:\n" + token + "\n"
+                            "https://registry.example.com/v2/stack/api-gateway/manifests/sha256-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08?platform=linux-arm64\n"
+                            "EXIT=0]")
                 elif row:
                     live.history = [
                         {"role": "user", "text": "The log host is at 94% disk. Can you take a look? [User attached image: upload_20261003_120000_1.png]",
