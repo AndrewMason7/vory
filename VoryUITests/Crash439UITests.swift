@@ -37,27 +37,32 @@ final class Crash439UITests: XCTestCase {
 
     /// One copy of the tree: the folds in reach (tool cards and "Show reasoning", by their header row), the rows of
     /// the thread, and the top of the dock.
-    private func folds() -> (points: [CGPoint], rows: Int, dockTop: CGFloat) {
-        guard let snap = try? app.snapshot() else { return ([], 0, 0) }
-        var points: [CGPoint] = [], rows = 0
+    /// A fold in reach: a "Show reasoning" button (tapped where it is) or a folded tool card (tapped as an element,
+    /// found by its label: a tap by coordinate on a card's header did not always open it).
+    enum Fold { case reasoning(CGPoint), card(String) }
+
+    private func folds() -> (folds: [Fold], rows: Int, dockTop: CGFloat, open: Int) {
+        guard let snap = try? app.snapshot() else { return ([], 0, 0, 0) }
+        var out: [Fold] = [], rows = 0, open = 0
         var dockTop = snap.frame.maxY - 140
-        var found: [(CGRect, Bool)] = []
+        var found: [(CGRect, String, Bool)] = []
         func walk(_ s: XCUIElementSnapshot) {
             if s.identifier == "chat.dock" { dockTop = s.frame.minY }
             if s.identifier.hasPrefix("thread.row.") { rows += 1 }
             if s.elementType == .button {
-                if s.label == "Show reasoning" { found.append((s.frame, false)) }
-                else if s.identifier.isEmpty, s.label.localizedCaseInsensitiveContains("terminal") || s.label.localizedCaseInsensitiveContains("read file") { found.append((s.frame, true)) }
+                if s.label == "Show reasoning" { found.append((s.frame, s.label, false)) }
+                else if s.label == "Hide reasoning" { open += 1 }
+                else if s.identifier.isEmpty, s.label.localizedCaseInsensitiveContains("terminal") || s.label.localizedCaseInsensitiveContains("read file") {
+                    if s.frame.height > 200 { open += 1 } else { found.append((s.frame, s.label, true)) }
+                }
             }
             for c in s.children { walk(c) }
         }
         walk(snap)
-        for (f, card) in found {
-            // A card is folded and unfolded by its header row; the reasoning by its own button.
-            let y = card ? f.minY + 22 : f.midY
-            if f.width > 0, y > 150, y < dockTop - 12 { points.append(CGPoint(x: f.midX, y: y)) }
+        for (f, label, card) in found where f.width > 0 && f.midY > 150 && f.midY < dockTop - 12 {
+            out.append(card ? .card(label) : .reasoning(CGPoint(x: f.midX, y: f.midY)))
         }
-        return (points, rows, dockTop)
+        return (out, rows, dockTop, open)
     }
 
     private func tap(_ p: CGPoint, _ name: String) {
@@ -85,13 +90,24 @@ final class Crash439UITests: XCTestCase {
         XCTAssertTrue(app.textViews["composer.text"].firstMatch.waitForExistence(timeout: 40), "the chat did not open")
         pause(5)
         var seen = folds()
-        mark("OPENED \(seen.rows) rows in the tree, \(seen.points.count) folds in reach")
+        mark("OPENED \(seen.rows) rows in the tree, \(seen.folds.count) folds in reach")
         shot("439-opened")
-        // Cards and reasoning opened, a few screens up the thread: one copy per screen, then taps by coordinate.
+        // Cards and reasoning opened, a few screens up the thread: one copy per screen, then the taps.
         var opened = 0
         for screen in 1...4 {
-            for p in seen.points.prefix(4) { tap(p, "open \(opened + 1)"); opened += 1; pause(0.6) }
-            mark("SCREEN \(screen) done, \(opened) opened")
+            for f in seen.folds.prefix(4) {
+                switch f {
+                case .reasoning(let p): tap(p, "open \(opened + 1)")
+                case .card(let label):
+                    let card = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+                    let t0 = Date()
+                    if card.exists { card.tap() }
+                    mark(String(format: "tap open %d %.2f s", opened + 1, Date().timeIntervalSince(t0)))
+                }
+                opened += 1; pause(0.6)
+            }
+            let check = folds()
+            mark("SCREEN \(screen) done, \(opened) tapped, \(check.open) open in view")
             app.swipeDown(velocity: .slow)
             pause(1.5)
             seen = folds()
