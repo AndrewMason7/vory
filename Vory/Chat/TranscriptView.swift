@@ -1706,9 +1706,9 @@ struct InjectedNoteRow: View {
     var onShowAll: ((_ title: String, _ text: String) -> Void)? = nil
     @State private var open = false
     /// The pill's own width and the row's: the glass animates between the two. The row's is the width the list
-    /// offers the note, measured on an empty view beside it, never on the note: measured on the note, a note
-    /// that came out wider than its row once kept that width as the width to lay its details out at, and the
-    /// whole chat stayed wider than the screen (#433, after a notice whose output had lines with nowhere to break).
+    /// offers the note, measured on an empty view the row places at that width (`OfferedWidthRow`), never on the
+    /// note or on anything the note can widen: a note that came out wider than its row once kept that width as the
+    /// width to lay its details out at, and the whole chat stayed wider than the screen (#433, #440).
     @State private var pillWidth: CGFloat = 0
     @State private var rowWidth: CGFloat = 0
     var body: some View {
@@ -1727,9 +1727,9 @@ struct InjectedNoteRow: View {
         // Its own width, wrapping only where the row is narrower than the title (the largest text sizes).
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pillWidth = $0 }
-        // The offered width, from a sibling with nothing in it: the stack proposes it the same width as the note,
-        // and an empty view takes exactly that, whatever the note's own size (a background would get the note's).
-        ZStack(alignment: .top) {
+        // The offered width, from a view with nothing in it that the row places at exactly that width (`OfferedWidthRow`),
+        // whatever the note's own size (a background would get the note's).
+        OfferedWidthRow {
             Color.clear.frame(height: 0).frame(maxWidth: .infinity)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
                 .accessibilityHidden(true)
@@ -1756,6 +1756,27 @@ struct InjectedNoteRow: View {
             .frame(maxWidth: .infinity)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// A background process's note in its row, as wide as the row is offered whatever the note's own width (#440). The
+/// first view, empty, is placed at exactly the width offered, and the note measures it as the width to lay its details
+/// out at; the second, the note, goes on top, centred. A ZStack placed both at its own size: a note laid out wider than
+/// its row (its details still at an older row's width, an iPad turned back to portrait with a note open) made the stack
+/// that wide, the empty view measured that, and the width held, the thread and then the whole chat wider than their
+/// column. Here a note wider than its row lasts one pass: the measure is the row's, and the details follow it.
+private struct OfferedWidthRow: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let note = subviews.count > 1 ? subviews[1].sizeThatFits(proposal) : .zero
+        guard let width = proposal.width, width.isFinite else { return note }
+        return CGSize(width: width, height: note.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: 0))
+        guard subviews.count > 1 else { return }
+        subviews[1].place(at: CGPoint(x: bounds.midX, y: bounds.minY), anchor: .top,
+                          proposal: ProposedViewSize(width: bounds.width, height: proposal.height))
     }
 }
 
