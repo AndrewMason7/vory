@@ -46,6 +46,17 @@ enum BotAvatarStore {
     private static let cache = Cache()
     private static var photoCache: NSCache<NSString, UIImage> { cache.store }
 
+    /// Moves on whenever a photo is written, removed or moved, so a face drawn from the old one is not
+    /// shown again (BotAvatarImage keeps its faces across the background, by look).
+    private final class Generation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+        func bump() { lock.lock(); n += 1; lock.unlock() }
+    }
+    private static let photoGen = Generation()
+    static var photoGeneration: Int { photoGen.value }
+
     static func stored() -> [String: String] {
         BotLookMaps.map(UserDefaults.standard.string(forKey: storageKey))
     }
@@ -101,6 +112,7 @@ enum BotAvatarStore {
         guard let jpeg = squared.jpegData(compressionQuality: 0.85) else { throw CocoaError(.fileWriteUnknown) }
         try jpeg.write(to: url, options: .atomic)
         photoCache.removeObject(forKey: profile as NSString)
+        photoGen.bump()
     }
 
     static func photo(for profile: String) -> UIImage? {
@@ -114,11 +126,13 @@ enum BotAvatarStore {
     static func removeAllPhotos() {
         if let dir = photoURL(for: "x")?.deletingLastPathComponent() { try? FileManager.default.removeItem(at: dir) }
         photoCache.removeAllObjects()
+        photoGen.bump()
     }
 
     static func removePhoto(for profile: String) {
         if let url = photoURL(for: profile) { try? FileManager.default.removeItem(at: url) }
         photoCache.removeObject(forKey: profile as NSString)
+        photoGen.bump()
     }
 
     /// A renamed bot's photo follows it (#315): the file moves, both caches are dropped.
@@ -129,6 +143,7 @@ enum BotAvatarStore {
         try? FileManager.default.moveItem(at: from, to: to)
         photoCache.removeObject(forKey: old as NSString)
         photoCache.removeObject(forKey: new as NSString)
+        photoGen.bump()
     }
 }
 
