@@ -10,3 +10,15 @@ struct DemoTag: View {
             .foregroundStyle(Color.accentColor)
     }
 }
+
+/// What a page shows in the demo when it needs a gateway of one's own (#392): the Companion, push setup.
+struct DemoNeedsGateway: View {
+    let what: String
+    var body: some View {
+        ContentUnavailableView {
+            Label("Connect your gateway", systemImage: "network")
+        } description: {
+            Text("\(what) come from the Vory Companion on your own Hermes gateway. The demo has none: connect yours in Settings › Gateway.")
+        }
+    }
+}

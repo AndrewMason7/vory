@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import VoryCore
+@testable import Vory
 
 /// Demo mode leaves no trace on the device and sends nothing anywhere (#392). A demo used end to end through the real
 /// client (every chat opened, a turn sent and its approval answered, a chat renamed, the board read, a picture fetched,
@@ -128,5 +129,14 @@ import Testing
         // Nothing sent anywhere.
         #expect(SharedSessionWatch.seen.isEmpty, "the shared session was asked for \(SharedSessionWatch.seen)")
         #expect(DemoURLProtocol.refused == refusedBefore, "a demo session asked for another host")
+    }
+
+    /// Home's "since you were here" mark is kept from the person's own visits only: a visit in the demo writes none, so
+    /// after leaving it Home measures from their own last visit (the demo legs found the demo's Home visit kept).
+    @Test func homesVisitMarkIsNeverTheDemos() {
+        #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
+        #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)
+        #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: false) == 200)
+        #expect(HomeVisit.mark(kept: 300, visitStart: 200, inDemo: false) == 300)
     }
 }

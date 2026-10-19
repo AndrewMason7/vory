@@ -354,6 +354,12 @@ final class AppModel {
     /// was in use comes back, or the first screen when there is none.
     func endDemo() async {
         guard isInDemo else { return }
+        // What it showed outside the app goes too: its turns' Live Activities and its notifications; and its drafts.
+        #if os(iOS)
+        LiveActivityController.endAll(connection: GatewayConnection.demoID)
+        #endif
+        LocalNotifier.removeAll(connection: GatewayConnection.demoID)
+        ComposerDrafts.forgetDemo()
         await deactivate()
         store.leaveDemo()
         if let c = store.active { await activate(c) }

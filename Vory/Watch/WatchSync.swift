@@ -31,7 +31,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
         let secrets = Self.contextSecrets(store)
         guard let cdata = try? JSONEncoder().encode(store.connections), let sdata = try? JSONEncoder().encode(secrets) else { return }
         var ctx: [String: Any] = ["connections": cdata, "secrets": sdata, "sent": Date().timeIntervalSince1970]
-        if let a = store.activeConnectionID { ctx["active"] = a.uuidString }
+        // Never the demo (#392): the watch keeps what it is told, and the demo is the phone's only, for its run.
+        if let a = store.activeConnectionID, a != GatewayConnection.demoID { ctx["active"] = a.uuidString }
         // The bots as this phone draws them (shape, eyes, colour, photo thumbnail): the watch
         // draws the same faces from this, static.
         if let looks = try? JSONEncoder().encode(BotLooks.load()) { ctx["looks"] = looks }

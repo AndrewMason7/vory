@@ -89,6 +89,11 @@ struct PushSetupView: View {
     private var turnKey: String { "\(step.rawValue)-\(isDone(step))" }
 
     var body: some View {
+        // The demo (#392) has no Companion or push: they live on a gateway of one's own.
+        if model.isInDemo { DemoNeedsGateway(what: "Notifications and approval cards on the Lock Screen") } else { setupBody }
+    }
+
+    @ViewBuilder private var setupBody: some View {
         ZStack {
             StepPage(step: step, done: isDone(step), headerHeight: $headerHeight) {
                 if let rt { content(for: step, runtime: rt) } else { Text("Connect a gateway first.").foregroundStyle(.secondary) }
@@ -789,6 +794,11 @@ struct CompanionView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
+        // The demo (#392) has no Companion or push: they live on a gateway of one's own.
+        if model.isInDemo { DemoNeedsGateway(what: "Notifications and approval cards on the Lock Screen") } else { setupBody }
+    }
+
+    @ViewBuilder private var setupBody: some View {
         SettingsList {
             SettingsHeaderSection(title: "Companion", symbol: "puzzlepiece.fill", color: .blue, description: "The plugin on your gateway that brings \(DeviceWords.companionBrings) to \(DeviceWords.this).")
             if let rt {
@@ -1123,7 +1133,7 @@ final class PushSetupModel {
 
     private static func completedKey(_ rt: GatewayRuntime) -> String { "pushSetupCompleted." + rt.connection.id.uuidString }
     func isCompleted(for rt: GatewayRuntime) -> Bool { UserDefaults.standard.bool(forKey: Self.completedKey(rt)) }
-    func markCompleted(for rt: GatewayRuntime) { UserDefaults.standard.set(true, forKey: Self.completedKey(rt)) }
+    func markCompleted(for rt: GatewayRuntime) { if !rt.isEphemeral { UserDefaults.standard.set(true, forKey: Self.completedKey(rt)) } }
 
     /// Removes the companion for good: the plugin is disabled, this phone's device file is
     /// withdrawn, Hermes is asked to run `install.sh --uninstall` (service, plugin folder and the

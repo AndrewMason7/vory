@@ -7,6 +7,14 @@ import WidgetKit
 /// back up, and what changed since the last visit (summed up on the phone by the on-device
 /// model when there is one). The cards, their order and their size come from `HomeLayout`;
 /// the numbers from the gateway's analytics endpoint; the sessions from its chat list.
+/// Home's "since you were here" mark (`dashboard.lastVisit`): the later of the one kept and this visit's start. A visit
+/// in the demo keeps none (#392), not even the key: after leaving the demo, the person's own Home measures from their own
+/// last visit, as if the demo had never been opened.
+enum HomeVisit {
+    /// The mark to keep after a visit, or nil to leave the stored one as it is (and absent if it was).
+    static func mark(kept: Double, visitStart: Double, inDemo: Bool) -> Double? { inDemo ? nil : max(kept, visitStart) }
+}
+
 struct DashboardView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("user.name") private var userName = ""
@@ -39,6 +47,8 @@ struct DashboardView: View {
     @State private var loadedConnection: UUID?
 
     private var runtime: GatewayRuntime? { model.runtime }
+    /// This visit kept as "since you were here" (`HomeVisit`): never one of the demo's.
+    private func markVisit() { if let mark = HomeVisit.mark(kept: lastVisit, visitStart: visitStart, inDemo: model.isInDemo) { lastVisit = mark } }
     private var layout: HomeLayout { HomeLayout.parse(layoutRaw) }
     private func update(_ change: (inout HomeLayout) -> Void) { var l = layout; change(&l); layoutRaw = l.encoded }
 
@@ -101,9 +111,9 @@ struct DashboardView: View {
             if Self.counts(cancelled: Task.isCancelled, hasGateway: runtime != nil, gotList: gotList) { loadedKey = key; loadedConnection = connection }
         }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
-        .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }
+        .onDisappear { markVisit(); editingHome = false }
         .onChange(of: pageShown) { _, shown in
-            if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { lastVisit = max(lastVisit, visitStart); editingHome = false }
+            if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { markVisit(); editingHome = false }
         }
         .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).pushedPage() }
         .onChange(of: rangeDays) { _, _ in rangeMoved = true }

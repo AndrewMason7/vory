@@ -266,7 +266,7 @@ enum SiriAsk {
         }
         if let p = profile, rt.selectedProfile != p { rt.selectedProfile = p }
         guard let chat = try? await rt.newChat() else { return nil }
-        if !chat.storedID.isEmpty { UserDefaults.standard.set(chat.storedID, forKey: key) }
+        if !chat.storedID.isEmpty, !rt.isEphemeral { UserDefaults.standard.set(chat.storedID, forKey: key) }
         await chat.rename(chatTitle)
         return chat
     }

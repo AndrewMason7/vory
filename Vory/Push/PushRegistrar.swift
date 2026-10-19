@@ -317,6 +317,15 @@ final class LocalCardNotifier: CardNotifying {
 
 /// Local notifications for cards and finished turns while the app is not in the foreground.
 enum LocalNotifier {
+    /// Removes every notification a gateway's chats left, delivered or waiting: leaving the demo (#392) leaves none.
+    static func removeAll(connection: UUID) {
+        let center = UNUserNotificationCenter.current()
+        let id = connection.uuidString
+        @Sendable func ours(_ c: UNNotificationContent) -> Bool { (c.userInfo["hermes"] as? [String: Any])?["connection_id"] as? String == id }
+        center.getDeliveredNotifications { d in center.removeDeliveredNotifications(withIdentifiers: d.filter { ours($0.request.content) }.map(\.request.identifier)) }
+        center.getPendingNotificationRequests { p in center.removePendingNotificationRequests(withIdentifiers: p.filter { ours($0.content) }.map(\.identifier)) }
+    }
+
     static let approvalCategory = "HERMES_APPROVAL"
     static let clarifyCategory = "HERMES_CLARIFY"
     static let turnCategory = "HERMES_TURN"

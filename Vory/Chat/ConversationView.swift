@@ -906,13 +906,18 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
 @MainActor
 enum ComposerDrafts {
     private static func key(for chat: ChatSession) -> String { "composerDraft." + (chat.storedID ?? chat.runtimeID) }
+    /// The demo's drafts (#392), in memory for its run only.
+    private static var demo: [String: String] = [:]
+    static func forgetDemo() { demo = [:] }
 
     static func load(for chat: ChatSession) -> String? {
+        if chat.runtime.isEphemeral { return demo[key(for: chat)] }
         let t = UserDefaults.standard.string(forKey: key(for: chat)) ?? ""
         return t.isEmpty ? nil : t
     }
 
     static func save(_ text: String, for chat: ChatSession) {
+        if chat.runtime.isEphemeral { demo[key(for: chat)] = text.isEmpty ? nil : text; return }
         // Only a write that changes something: every defaults write re-runs the views that read
         // defaults (the chat list's filters), and an empty draft was written on every Back.
         let k = key(for: chat)

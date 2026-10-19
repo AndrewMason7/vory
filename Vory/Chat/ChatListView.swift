@@ -1003,10 +1003,13 @@ struct ChatListView: View {
             withTransaction(tx) {
                 sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
             }
-            // What Siri can name without the app on screen: the bots and the recent chats' titles (#310).
-            SiriCatalog.rememberBots(runtime.profiles)
-            SiriCatalog.rememberChats(sessions)
-            SessionCache.save(sessions, connection: runtime.connection.id, profile: cacheProfile)
+            // What Siri can name without the app on screen: the bots and the recent chats' titles (#310); and the list
+            // for the next launch. Neither for the demo (#392): its bots and chats stay out of Siri, Spotlight and the cache.
+            if !runtime.isEphemeral {
+                SiriCatalog.rememberBots(runtime.profiles)
+                SiriCatalog.rememberChats(sessions)
+                SessionCache.save(sessions, connection: runtime.connection.id, profile: cacheProfile)
+            }
             errorText = nil
             // Group chats live on the gateway's room driver; none when it has no rooms.
             if let r: GroupsListResult = try? await runtime.rpc("groups.list", ["limit": 50], timeout: 10).decode() {
@@ -1360,6 +1363,7 @@ enum PinSupport {
 
     static func refused(_ connection: UUID) -> Bool { (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(connection.uuidString) }
     static func noteRefused(_ connection: UUID) {
+        guard connection != GatewayConnection.demoID else { return }
         var ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
         ids.insert(connection.uuidString)
         UserDefaults.standard.set(Array(ids), forKey: key)
