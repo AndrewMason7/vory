@@ -18,7 +18,7 @@ extension GatewayTransport {
                 return URLSession(configuration: cfg)
             },
             makeFramePipe: { request, _ in DemoSocketPipe(gateway: gateway, path: request.url?.path ?? "/api/ws", query: request.url?.query) },
-            stop: { DemoURLProtocol.unbind(id) })
+            stop: { DemoURLProtocol.unbind(id) }, isInProcess: true)
     }
 }
 

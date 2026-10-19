@@ -38,9 +38,13 @@ public final class KanbanStore {
 
     func attach(_ runtime: GatewayRuntime) {
         self.runtime = runtime
+        // The demo keeps its board's answers in memory only, and reads none another gateway left.
+        guard !runtime.isEphemeral else { return }
         if let raw = UserDefaults.standard.string(forKey: cacheKey), let a = Availability(rawValue: raw) { cached = a }
         selectedBoard = UserDefaults.standard.string(forKey: boardKey)
     }
+
+    private var ephemeral: Bool { runtime?.isEphemeral ?? false }
 
     private var gatewayKey: String { runtime?.connection.id.uuidString ?? "" }
     private var cacheKey: String { "kanban.available." + gatewayKey }
@@ -75,7 +79,7 @@ public final class KanbanStore {
 
     private func set(_ a: Availability) {
         availability = a; cached = a
-        UserDefaults.standard.set(a.rawValue, forKey: cacheKey)
+        if !ephemeral { UserDefaults.standard.set(a.rawValue, forKey: cacheKey) }
     }
 
     // MARK: Reads
@@ -137,7 +141,7 @@ public final class KanbanStore {
     public func select(board slug: String) {
         guard slug != selectedBoard else { return }
         selectedBoard = slug
-        UserDefaults.standard.set(slug, forKey: boardKey)
+        if !ephemeral { UserDefaults.standard.set(slug, forKey: boardKey) }
         board = nil; workers = []
         cursor = KanbanEventCursor()
         Task { await refresh(); startEvents() }

@@ -9,8 +9,14 @@ public final class GatewayRuntime {
     public let connection: GatewayConnection
     /// How this runtime reaches its gateway: the network, or in process for the demo.
     public let transport: GatewayTransport
-    /// The demo (#392): nothing it does is saved or synced. The one check every persistence path asks.
-    public var isEphemeral: Bool { connection.isDemo }
+    /// The demo (#392): nothing it does is saved or synced. The one check every persistence path asks: the demo
+    /// connection, or any runtime on the in-process demo transport (onboarding's tour makes one of its own, #388).
+    public var isEphemeral: Bool { connection.isDemo || transport.isInProcess }
+    /// Where this runtime keeps files for the moment (staged attachments, downloads, fetched pictures): the system's
+    /// temporary folder, or for the demo a folder of its own that `stop()` removes, so leaving the demo leaves no file.
+    public let scratchDirectory: URL
+    /// Pictures and files fetched for the chats: the shared cache, or for the demo one in `scratchDirectory`.
+    public let media: MediaStore
     /// The address in use: the gateway's own, or for a gateway with a backup address (#283) the
     /// one that answered when the socket last connected.
     public private(set) var address: GatewayURL
@@ -142,13 +148,23 @@ public final class GatewayRuntime {
         self.connection = connection
         self.transport = transport
         self.store = store
+        let ephemeral = connection.isDemo || transport.isInProcess
+        if ephemeral {
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("vory-demo-" + UUID().uuidString, isDirectory: true)
+            scratchDirectory = scratch
+            media = MediaStore(directory: scratch.appendingPathComponent("media", isDirectory: true))
+        } else {
+            scratchDirectory = FileManager.default.temporaryDirectory
+            media = .shared
+        }
         let loadedSecrets = store.secrets(for: connection.id)
         self.secrets = loadedSecrets
         self.selectedProfile = connection.lastProfile
         let addresses = connection.addresses
         let first = AddressMemory().lastGood(for: connection.id).flatMap { addresses.indices.contains($0) ? addresses[$0] : nil } ?? connection.gateway
         self.address = first
-        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets), urlSession: transport.makeHTTPSession(), makeSession: { [transport] in transport.makeHTTPSession() })
+        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets), urlSession: transport.makeHTTPSession(), makeSession: { [transport] in transport.makeHTTPSession() },
+                              downloadDirectory: ephemeral ? scratchDirectory : nil)
         self.socket = GatewaySocket(
             urlProvider: { [weak self] in
                 guard let self else { throw SocketError.cancelled }
@@ -365,6 +381,8 @@ public final class GatewayRuntime {
         kanban.stopEvents()
         await socket.disconnect()
         transport.stop()
+        // The demo's files for the moment go with it.
+        if isEphemeral { try? FileManager.default.removeItem(at: scratchDirectory) }
     }
 
     public func reconnectNow() async {
@@ -727,6 +745,8 @@ public final class GatewayRuntime {
                                       needsAttention: needsAttention.count, chats: chats, contextPercent: ctx,
                                       connected: socketState.isOpen || (httpCountsAsOnline && lastListAnswered), usage: kept)
             snap.throughRelay = throughRelay ? true : nil
+            // The demo's chats stay in the app: not in the widgets' stored data, nor on the Watch.
+            guard !isEphemeral else { return }
             snap.save()
             onSnapshotPublished?(snap)
         }

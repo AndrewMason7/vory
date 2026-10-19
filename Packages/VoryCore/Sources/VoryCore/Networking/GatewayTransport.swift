@@ -87,13 +87,18 @@ public struct GatewayTransport: Sendable {
     public var makeFramePipe: @Sendable (URLRequest, URLSession?) -> any GatewayFramePipe
     /// The runtime has stopped: what the transport holds for it goes (the demo's binding of its requests to its gateway).
     public var stop: @Sendable () -> Void
+    /// Answered in process, with nothing on the network (the demo's): a runtime on it keeps nothing, whatever its
+    /// connection (`GatewayRuntime.isEphemeral`), so a runtime made for a moment on the demo (onboarding's tour, #388)
+    /// is covered as the demo connection is.
+    public var isInProcess: Bool
 
     public init(makeHTTPSession: @escaping @Sendable () -> URLSession,
                 makeFramePipe: @escaping @Sendable (URLRequest, URLSession?) -> any GatewayFramePipe,
-                stop: @escaping @Sendable () -> Void = {}) {
+                stop: @escaping @Sendable () -> Void = {}, isInProcess: Bool = false) {
         self.makeHTTPSession = makeHTTPSession
         self.makeFramePipe = makeFramePipe
         self.stop = stop
+        self.isInProcess = isInProcess
     }
 
     /// A gateway on the network, as every connection has always been reached.
