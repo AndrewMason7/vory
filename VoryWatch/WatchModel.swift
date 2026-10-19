@@ -56,8 +56,24 @@ final class WatchModel {
     /// Reply or a complication push that launched the app found it not yet activated.
     init() {
         connectivity.onContext = { [weak self] ctx in Task { @MainActor in self?.receive(context: ctx) } }
+        // The iPhone's word that a chat open here changed, and the phone coming within reach: the open chat's feed
+        // reads it again (#387) instead of asking every few seconds.
+        connectivity.onMessage = { [weak self] m in
+            guard m["op"] as? String == "chatChanged", let sid = m["session"] as? String else { return }
+            Task { @MainActor in self?.feeds[sid]?.value?.wake(.chatChanged) }
+        }
+        connectivity.onReachability = { [weak self] reachable in
+            guard reachable else { return }
+            Task { @MainActor in self?.feeds.values.forEach { $0.value?.wake(.phoneReachable) } }
+        }
         connectivity.activate()
     }
+
+    /// The chats open on the Watch, by stored id (`WatchChatFeed.run`), for the iPhone's word that one changed.
+    private var feeds: [String: WeakFeed] = [:]
+    private struct WeakFeed { weak var value: WatchChatFeed? }
+    func register(_ feed: WatchChatFeed) { feeds[feed.storedID] = WeakFeed(value: feed) }
+    func unregister(_ feed: WatchChatFeed) { if feeds[feed.storedID]?.value === feed { feeds[feed.storedID] = nil } }
 
     /// Settings › Connect through: the watch's own connection with the iPhone taking over when
     /// the gateway does not answer there (Automatic), or always the iPhone (no socket at all).
@@ -353,6 +369,10 @@ final class WatchModel {
 /// WCSession plumbing; callbacks arrive off the main thread and are hopped by the model.
 final class WatchConnectivityBridge: NSObject, WCSessionDelegate, @unchecked Sendable {
     nonisolated(unsafe) var onContext: (([String: Any]) -> Void)?
+    /// A message from the iPhone that wants no answer (`chatChanged`).
+    nonisolated(unsafe) var onMessage: (([String: Any]) -> Void)?
+    /// The iPhone came within reach, or went.
+    nonisolated(unsafe) var onReachability: ((Bool) -> Void)?
 
     func activate() {
         guard WCSession.isSupported() else { return }
@@ -367,6 +387,14 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate, @unchecked Sen
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         onContext?(applicationContext)
+    }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        onMessage?(message)
+    }
+
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        onReachability?(session.isReachable)
     }
 
     /// Whether the phone could take a message now.
