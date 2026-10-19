@@ -150,6 +150,16 @@ private struct MorphPageActions: ViewModifier {
     static let follows = !ProcessInfo.processInfo.arguments.contains("-vory-morph-timed")
 
     func push(_ c: ChatSession) {
+        // The chat under a chat being swiped away comes into view as the swipe starts: it takes the bar once the finger
+        // lets go and the swipe goes through. Taken at once, a swipe called off left it over the chat still on top,
+        // whose Back then went to it (#448).
+        if chat != nil, chat !== c, let tc = chatsNav?.transitionCoordinator, tc.isInteractive, chatBelow {
+            tc.notifyWhenInteractionChanges { [weak self] ctx in
+                guard let self, !ctx.isCancelled, self.chat !== c else { return }
+                self.push(c)
+            }
+            return
+        }
         generation += 1
         // The chat came to a page already in (it was opening): its controls form from the Back.
         if opening, followed == nil, t <= 0 {
@@ -230,8 +240,22 @@ private struct MorphPageActions: ViewModifier {
             t = awayHere ? 0 : 1
         }
     }
+    /// A chat is under the one going back: a Bot Chat opened from a "Messaged X" notice sits over the chat it came
+    /// from. The swipe back from it ends on that chat, not on the list, so the bar stays a chat's and the chat
+    /// underneath takes it as it comes in (`push`, from the chat in front changing), as Back does. Followed as a pop to
+    /// the list, the bar headed for the list's look and settled there, its chat gone, over the chat still up: no
+    /// Back, no pill, no ⋯ (#448). The Chats stack says it, in two ways for two moments, and neither does alone: while
+    /// a pop runs, where it is going, from the transition itself (the stack's list then already reads as if the pop
+    /// had happened, which a swipe called off undoes); with none running, what the stack holds (a flick that has
+    /// already popped, a pan that never did), where there is no transition to ask.
+    private var chatBelow: Bool {
+        guard chat != nil, let nav = chatsNav else { return false }
+        if let to = nav.transitionCoordinator?.viewController(forKey: .to) { return to !== nav.viewControllers.first }
+        return nav.viewControllers.count > 1
+    }
     func scrub(_ fraction: CGFloat) {
         guard away, chat != nil || opening || rootPopInFlight else { return }
+        if chatBelow { return }
         if !scrubbing { generation += 1; endFollow() }
         scrubbing = true
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = fraction >= 0.5 ? 1 : 0 } }
@@ -241,6 +265,12 @@ private struct MorphPageActions: ViewModifier {
     /// left of the transition.
     func release(_ fraction: CGFloat, over duration: Double) {
         guard away, chat != nil || opening || rootPopInFlight else { return }
+        // Back to the chat underneath (or a swipe from the one on top called off): a chat's bar either way (#448).
+        if chatBelow {
+            scrubbing = false
+            if t != 0 { generation += 1; withAnimation(.spring(duration: 0.2, bounce: 0)) { t = 0 } }
+            return
+        }
         scrubbing = false
         // With the page: the bar finishing ahead of the slide made the list's controls land
         // before the list (Matt, 2026-10-12: "the nav bar reappears weirdly").
