@@ -50,14 +50,22 @@ enum CloudBackupTask {
         }
     }
 
+    /// Where the request is submitted: a serial queue of its own, so two quick leaves submit one
+    /// after the other (the later replacing the earlier, as the scheduler does) and never at once.
+    private static let submitter = DispatchQueue(label: "dev.vory.backup-schedule", qos: .utility)
+
     /// Ask for the next run, a day out at the earliest; a request already pending is replaced.
+    /// Off the main thread: submitting is a call into the system made at every leave, where the
+    /// main thread's time belongs to the system's snapshot of the app (#422).
     static func schedule() {
-        let request = BGAppRefreshTaskRequest(identifier: CloudSync.backupTaskID)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: CloudSync.backupInterval)
-        do { try BGTaskScheduler.shared.submit(request) } catch {
-            // Not permitted on this device (Low Power Mode, a simulator): the app's own
-            // activation path still backs up when it is due.
-            log.notice("daily backup task not scheduled: \(error.localizedDescription, privacy: .public)")
+        submitter.async {
+            let request = BGAppRefreshTaskRequest(identifier: CloudSync.backupTaskID)
+            request.earliestBeginDate = Date(timeIntervalSinceNow: CloudSync.backupInterval)
+            do { try BGTaskScheduler.shared.submit(request) } catch {
+                // Not permitted on this device (Low Power Mode, a simulator): the app's own
+                // activation path still backs up when it is due.
+                log.notice("daily backup task not scheduled: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 }
