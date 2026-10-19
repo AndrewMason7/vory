@@ -412,7 +412,9 @@ final class AppModel {
         if !rt.isEphemeral { rt.pushRegistrar = push }
         rt.cardNotifier = LocalCardNotifier()
         #if os(iOS)
-        rt.activityReporterFactory = { LiveActivityController() }
+        // The Live Activity, passed on to a Watch that has the chat open (#387): a turn starting or ending and its cards
+        // changing tell the Watch, which then reads instead of asking every few seconds.
+        rt.activityReporterFactory = { WatchTurnRelay(inner: LiveActivityController()) }
         #else
         rt.activityReporterFactory = { MenuBarTurnReporter() }   // the menu-bar item is the Mac's Live Activity
         #endif
