@@ -136,4 +136,43 @@ final class BotChatReturnUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Say something to")).firstMatch.exists,
                        "back in the chat, it is a blank new chat")
     }
+
+    /// Back, then the same notice again: its Bot Chat opens again. The list took a route once only, and the same notice
+    /// made the same route (#448).
+    func testTheNoticeOpensItsBotChatAgainAfterBack() throws {
+        let firstChat = try chatWithANotice()
+        XCTAssertTrue(openBotChat("first tap"), "the notice did not open the Bot Chat the first time")
+        back.tap()
+        sleep(2)
+        bar("after Back")
+        XCTAssertEqual(pill.label, firstChat, "Back did not return to the chat it came from")
+        let again = openBotChat("second tap")
+        shot("botchat-second-tap")
+        XCTAssertTrue(again, "the same notice did nothing after Back")
+    }
+
+    /// The same in a chat opened from the list, as in Matt's report.
+    func testTheNoticeInAStoredChatOpensItsBotChatAgainAfterBack() throws {
+        _ = try chatWithANotice()
+        sleep(2)
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        // The chat just made, the newest in the list, still called New chat (another chat's title names the log host).
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ OR label CONTAINS %@", "New chat", "Can you look at the log host")).firstMatch
+        if !row.waitForExistence(timeout: 10) { print("BOTCHAT-LIST rows: \(app.buttons.allElementsBoundByIndex.prefix(14).map(\.label))") }
+        XCTAssertTrue(row.exists, "the chat is not in the list")
+        row.tap()
+        XCTAssertTrue(pill.waitForExistence(timeout: 10))
+        sleep(2)
+        let stored = pill.label
+        bar("stored chat open")
+        XCTAssertTrue(openBotChat("stored first tap"), "the notice did not open the Bot Chat from the stored chat")
+        back.tap()
+        sleep(2)
+        bar("stored after Back")
+        XCTAssertEqual(pill.label, stored, "Back did not return to the stored chat")
+        let again = openBotChat("stored second tap")
+        shot("botchat-stored-second-tap")
+        XCTAssertTrue(again, "the same notice did nothing after Back")
+    }
 }
