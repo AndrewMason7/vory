@@ -372,7 +372,10 @@ struct ChatListView: View {
             .onChange(of: runtime?.socketState) { _, s in if case .open? = s { Task { await load() } } }
             .onReceive(NotificationCenter.default.publisher(for: .hermesSessionsChanged)) { _ in Task { await load() } }
             .onChange(of: model.pendingRoute) { _, r in
-                guard let r, r != lastRouted else { return }
+                // A route is pushed once while it waits; once a chat has taken it (back to nil) it is forgotten, so the
+                // same one again opens its chat again: the same "Messaged X" notice after Back did nothing (#448).
+                guard let r else { lastRouted = nil; return }
+                guard r != lastRouted else { return }
                 lastRouted = r
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
