@@ -114,13 +114,23 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     @ObservationIgnored private var _items: [TranscriptItem] = []
     public var items: [TranscriptItem] {
         get { access(keyPath: \.items); return _items }
-        set { setTracked(\.items, \._items, newValue) }
+        set { if setTracked(\.items, \._items, newValue) { bumpItemsRevision() } }
         _modify {
             access(keyPath: \.items)
             let told = willModify(\.items)
-            defer { didModify(\.items, told) }
+            defer { bumpItemsRevision(); didModify(\.items, told) }
             yield &_items
         }
+    }
+    /// Changes with every change to `items`, quiet or told, to a value no chat has held before: what a thread keeps its
+    /// rows by (#439). An equal array set leaves it (it tells nobody either); a change in place always moves it. Moved
+    /// after the write, so whatever reads both together never pairs a new value with the old items. Not observed
+    /// itself: a view reads `items` for that.
+    @ObservationIgnored public private(set) var itemsRevision = 0
+    private static var lastItemsRevision = 0
+    private func bumpItemsRevision() {
+        Self.lastItemsRevision &+= 1
+        itemsRevision = Self.lastItemsRevision
     }
     @ObservationIgnored private var _usage: Usage?
     public var usage: Usage? {
@@ -368,11 +378,13 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         for tell in owed.values { tell() }
     }
 
-    /// The macro's setter (an equal value tells nobody), with the quiet branch.
-    private func setTracked<Member: Equatable>(_ keyPath: KeyPath<ChatSession, Member>, _ store: ReferenceWritableKeyPath<ChatSession, Member>, _ newValue: Member) {
-        guard shouldNotifyObservers(self[keyPath: store], newValue) else { self[keyPath: store] = newValue; return }
-        guard !viewsQuiet else { self[keyPath: store] = newValue; oweChange(keyPath); return }
+    /// The macro's setter (an equal value tells nobody), with the quiet branch: whether the value changed.
+    @discardableResult
+    private func setTracked<Member: Equatable>(_ keyPath: KeyPath<ChatSession, Member>, _ store: ReferenceWritableKeyPath<ChatSession, Member>, _ newValue: Member) -> Bool {
+        guard shouldNotifyObservers(self[keyPath: store], newValue) else { self[keyPath: store] = newValue; return false }
+        guard !viewsQuiet else { self[keyPath: store] = newValue; oweChange(keyPath); return true }
         withMutation(keyPath: keyPath) { self[keyPath: store] = newValue }
+        return true
     }
 
     /// The macro's `_modify` (always tells), with the quiet branch: whether it told.
