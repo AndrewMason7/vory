@@ -49,6 +49,27 @@ final class PageOwnButtonsUITests: XCTestCase {
     }
     private var wide: Bool { app.windows.firstMatch.frame.width > 700 }
 
+    /// A pushed page's own control: under the phone's morph bar the bar draws it beside its Back, by its id
+    /// (#435); elsewhere (a wide window) it is in the page's own navigation bar, by its label.
+    private func control(_ id: String, _ label: String) -> XCUIElement {
+        let inBar = any(id)
+        return inBar.waitForExistence(timeout: 5) ? inBar : barButton(label)
+    }
+
+    /// Under the morph bar: the control is in the bar's band, after the Back (VoiceOver reads Back first),
+    /// once (the page's own bar item is not there too), and the audit finds nothing in the band.
+    private func checkBar(_ id: String, _ label: String, page: String) throws {
+        guard any("page.back").exists else { return }
+        let c = any(id), back = any("page.back")
+        XCTAssertTrue(c.exists && c.frame.minY < 120, "\(page): \(label) is not in the bar: \(c.frame)")
+        XCTAssertLessThan(back.frame.midX, c.frame.midX, "\(page): \(label) comes before Back")
+        XCTAssertFalse(barButton(label).exists && barButton(label).isHittable, "\(page): \(label) is in the page's own bar as well")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
+            print("PAGE-AUDIT \(page) '\(issue.compactDescription)' label '\(issue.element?.label ?? "")' id '\(issue.element?.identifier ?? "")'")
+            return (issue.element?.frame.minY ?? 1000) > 120
+        }
+    }
+
     /// Settings' row `id`, scrolled to and opened.
     private func openSettingsRow(_ id: String) {
         let row = any("settings.row.\(id)")
@@ -75,9 +96,10 @@ final class PageOwnButtonsUITests: XCTestCase {
 
         // Settings › Projects: its own +, which opens New Project (#426's screen).
         openSettingsRow("projects")
-        let plus = barButton("New project")
+        let plus = control("projects.new", "New project")
         XCTAssertTrue(plus.waitForExistence(timeout: 10) && plus.isHittable, "Settings › Projects has no +")
         shot("426-\(device)-settings-projects")
+        try checkBar("projects.new", "New project", page: "Projects")
         if plus.exists {
             plus.tap()
             XCTAssertTrue(app.navigationBars["New Project"].waitForExistence(timeout: 5), "the + did not open New Project")
@@ -87,9 +109,10 @@ final class PageOwnButtonsUITests: XCTestCase {
 
         // Settings › API Keys & Environment: its own Add, which asks for the variable.
         openSettingsRow("env")
-        let add = barButton("Add")
+        let add = control("env.add", "Add")
         XCTAssertTrue(add.waitForExistence(timeout: 10) && add.isHittable, "API Keys & Environment has no Add")
         shot("426-\(device)-settings-env")
+        try checkBar("env.add", "Add", page: "API Keys")
         if add.exists {
             add.tap()
             XCTAssertTrue(app.alerts["Add variable"].waitForExistence(timeout: 5), "Add did not ask for a variable")
@@ -99,9 +122,10 @@ final class PageOwnButtonsUITests: XCTestCase {
 
         // Settings › Board: its own New Task (the mock has the kanban plugin).
         openSettingsRow("kanban")
-        let newTask = barButton("New Task")
+        let newTask = control("board.new", "New Task")
         XCTAssertTrue(newTask.waitForExistence(timeout: 10) && newTask.isHittable, "the Board from Settings has no New Task")
         shot("426-\(device)-settings-board")
+        try checkBar("board.new", "New Task", page: "Board")
         if newTask.exists {
             newTask.tap()
             XCTAssertTrue(app.navigationBars["New Task"].waitForExistence(timeout: 5), "New Task did not open its sheet")
@@ -111,9 +135,10 @@ final class PageOwnButtonsUITests: XCTestCase {
 
         // Settings › Sessions: its own Options, with Advanced in it.
         openSettingsRow("sessions")
-        let options = barButton("Options")
+        let options = control("sessions.options", "Options")
         XCTAssertTrue(options.waitForExistence(timeout: 10) && options.isHittable, "Sessions from Settings has no Options")
         shot("426-\(device)-settings-sessions")
+        try checkBar("sessions.options", "Options", page: "Sessions")
         if options.exists {
             options.tap()
             XCTAssertTrue(app.buttons["Advanced"].waitForExistence(timeout: 5), "Options has no Advanced")
@@ -130,7 +155,7 @@ final class PageOwnButtonsUITests: XCTestCase {
         launch(url: url, token: token, tab: "settings")
         if wide { throw XCTSkip("the morph bar is the phone's") }
         openSettingsRow("projects")
-        XCTAssertTrue(barButton("New project").waitForExistence(timeout: 10), "Settings › Projects has no +")
+        XCTAssertTrue(control("projects.new", "New project").waitForExistence(timeout: 10), "Settings › Projects has no +")
 
         // The Projects tab: the bar's +, one sheet.
         any("tab.projects").tap(); pause(1.5)
