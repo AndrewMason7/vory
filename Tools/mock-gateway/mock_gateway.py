@@ -150,6 +150,38 @@ def digest_history(rounds: int, end: float) -> list[dict]:
     return out
 
 
+def coding_history(rounds: int, end: float) -> list[dict]:
+    """A long coding chat (MOCK_CODING, #439): `rounds` rounds of a request, steps that only think before each tool
+    call (their reasoning, empty words, as the gateway stores them), tool rows with real output (a source file read
+    whole, a build log, a test run) and a reply with a code block, oldest first, ending at `end`. About ten rows a
+    round, like a working day's coding chat. Generic file and project names only."""
+    files = ["Sources/App/ThreadView.swift", "Sources/App/RowModel.swift", "Sources/Core/Session.swift",
+             "Sources/Core/Socket.swift", "Tests/AppTests/RowModelTests.swift"]
+    out, rid = [], 1
+    for r in range(rounds):
+        t0 = end - (rounds - r) * 1200
+        f = files[r % len(files)]
+        out.append({"role": "user", "text": f"Can you tidy up {f} and make sure the tests still pass?", "timestamp": t0, "row_id": rid}); rid += 1
+        steps = [("read file", f, "\n".join(f"{n + 1:4d}  " + ("    func layout(_ rows: [Row]) -> [CGRect] {" if n % 17 == 0 else
+                                                              "        let height = row.estimatedHeight(for: width)" if n % 5 == 0 else
+                                                              f"        // step {n}: keep the rows in order and measure each one once") for n in range(80 + (r % 4) * 40))),
+                 ("terminal", "xcodebuild build -scheme App", "\n".join(f"CompileSwift normal arm64 Sources/App/File{n:02d}.swift" for n in range(40)) + "\n** BUILD SUCCEEDED **"),
+                 ("terminal", "xcodebuild test -scheme App", "\n".join(f"Test Case 'RowModelTests.test{n:02d}' passed ({0.01 * n:.3f} seconds)." for n in range(30)) + "\nExecuted 30 tests, with 0 failures")]
+        for k, (name, ctx, output) in enumerate(steps[: 2 + r % 2]):
+            thought = (f"Step {k + 1} of round {r + 1}: before touching {f} I want to see how the rows are measured now, "
+                       "because the last change estimated heights twice and the list jumped. ") * (2 + r % 3)
+            out.append({"role": "assistant", "text": "", "reasoning": thought, "timestamp": t0 + 10 + k * 20, "row_id": rid}); rid += 1
+            out.append({"role": "tool", "name": name, "context": ctx, "text": output, "timestamp": t0 + 15 + k * 20})
+        body = (f"Done. {f} is tidier and the tests pass.\n\n### What changed\n\n"
+                f"- The row heights are measured once and kept\n- Two helpers merged into one\n- {3 + r % 5} comments brought up to date\n\n"
+                f"```swift\nfunc layout(_ rows: [Row], width: CGFloat) -> [CGRect] {{\n    var y: CGFloat = 0\n    return rows.map {{ row in\n"
+                f"        let h = row.height(for: width)\n        defer {{ y += h }}\n        return CGRect(x: 0, y: y, width: width, height: h)\n    }}\n}}\n```\n\n"
+                f"Say the word if you want the same done to the next file.")
+        out.append({"role": "assistant", "text": body, "reasoning": f"Round {r + 1} is done; summarise what changed and show the new layout function.",
+                    "timestamp": t0 + 90, "row_id": rid}); rid += 1
+    return out
+
+
 DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper and pull the answers together."""
 
 DELEGATE_PART_2 = """Both are back. The nginx side has one stale block, `staging.example`, pointing at an
@@ -2676,6 +2708,10 @@ class Gateway:
                     digest = int(os.environ.get("MOCK_DIGEST", "0") or 0)
                     if digest > 0:
                         live.history = digest_history(digest, row["last_active"])
+                    # MOCK_CODING=n: a long coding chat (#439): thinking steps, tool rows with output, code replies.
+                    coding = int(os.environ.get("MOCK_CODING", "0") or 0)
+                    if coding > 0:
+                        live.history = coding_history(coding, row["last_active"])
                     # MOCK_LONG=n: the same exchange n times over, for scroll-performance checks.
                     reps = int(os.environ.get("MOCK_LONG", "1") or 1)
                     if reps > 1:
