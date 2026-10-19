@@ -447,6 +447,8 @@ struct ComposerTextView: UIViewRepresentable {
         v.returnKeyType = returnSends ? .send : .default
         v.enablesReturnKeyAutomatically = returnSends
         v.accessibilityIdentifier = accessibilityID
+        // What VoiceOver calls the field: its placeholder is a hint, not its name (the audit's "no description").
+        v.accessibilityLabel = "Message"
         v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         v.setContentHuggingPriority(.defaultLow, for: .horizontal)
         v.placeholderLabel.text = placeholder
@@ -476,14 +478,27 @@ struct ComposerTextView: UIViewRepresentable {
         }
     }
 
+    /// What the field asks for when the layout offers it no width (its ideal size): a field has no width of its
+    /// own, the layout gives it one. Wide enough that a few words measure a line or two tall.
+    static let idealWidth: CGFloat = 120
+
     func sizeThatFits(_ proposal: ProposedViewSize, uiView v: PasteTextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? v.bounds.width
+        Self.fit(proposal, v, maxLines: maxLines)
+    }
+
+    /// The field's size for a proposal: the width offered and its text's height at that width, up to `maxLines`
+    /// (it scrolls past them). Asked for its ideal size, the field gave the width it had: a bar laid out wider once
+    /// (an iPad turned to landscape and back) kept that width at every later ask, and the chat page, a stack of the
+    /// thread and the bar, took it too: wider than its column, cut at both edges (#433, a tester's "zoomed in" chat).
+    /// Not nil there either: UITextView's own intrinsic size would bring a width of its own back.
+    static func fit(_ proposal: ProposedViewSize, _ v: UITextView, maxLines: Int) -> CGSize? {
+        let width = proposal.width ?? idealWidth
         guard width > 0 else { return nil }
         let line = v.font?.lineHeight ?? 22
-        let fit = v.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        let measured = v.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         let cap = ceil(line * CGFloat(maxLines))
-        let h = min(max(fit.height, line), cap)
-        let scrolls = fit.height > cap + 1
+        let h = min(max(measured.height, line), cap)
+        let scrolls = measured.height > cap + 1
         if v.isScrollEnabled != scrolls { v.isScrollEnabled = scrolls }
         return CGSize(width: width, height: ceil(h))
     }
@@ -577,6 +592,8 @@ final class PasteTextView: UITextView {
         placeholderLabel.textColor = .placeholderText
         placeholderLabel.numberOfLines = 1
         placeholderLabel.isUserInteractionEnabled = false
+        // The field is the element ("Message"); its placeholder is a hint drawn in it, not a text of its own.
+        placeholderLabel.isAccessibilityElement = false
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholderLabel)
         NSLayoutConstraint.activate([

@@ -80,6 +80,12 @@ struct ChatListView: View {
     @State private var searchResults: [StoredSession] = []
     @State private var loading = false
     @State private var errorText: String?
+    /// A pin, an unpin or an archive the gateway refused, said in an alert: the list's red line
+    /// was cleared by the next refresh, which a list of scheduled runs does every few minutes, and
+    /// all a tester saw was the row going back (#406).
+    @State private var actionFailure: ActionFailure?
+    /// The gateway keeps chats' pins (`PinSupport`): Pin is offered only then.
+    @State private var pinsKept = true
     @State private var ownPath = NavigationPath()
     private var path: Binding<NavigationPath> {
         if let detailPath { return detailPath }
@@ -247,8 +253,10 @@ struct ChatListView: View {
             .toolbar {
                 if selecting {
                     // Select mode outlives a page switch now that the Mac keeps this page mounted;
-                    // its Done and actions stand in the bar only while the page is on show.
-                    if pageShown {
+                    // its Done and actions stand in the bar only while the page is on show. Under
+                    // the morph bar they are the bar's own (`AppModel.chatsSelect`): here they sat
+                    // under its capsules, out of reach (#408).
+                    if pageShown, !MorphTopBar.active(model) {
                     ToolbarItem(placement: .topBarLeading) { Button("Done") { endSelecting() }.accessibilityIdentifier("chats.select.done") }
                     ToolbarItemGroup(placement: .topBarTrailing) { selectionActions }
                     }
@@ -303,6 +311,11 @@ struct ChatListView: View {
                 case .newBot: showNewBot = true
                 case .manageProjects: showProjects = true
                 case .selectChats: withAnimation(selectMotion) { selecting = true }
+                // Select's controls in the morph bar (#408).
+                case .selectDone: endSelecting()
+                case .selectMove: movingSelection = true
+                case .selectArchive: let list = picked; endSelecting(); Task { await archive(list) }
+                case .selectDelete: pendingDeleteMany = true
                 }
             }
             .onChange(of: model.newChatSheetRequest) { _, r in
@@ -313,7 +326,7 @@ struct ChatListView: View {
             // The mic circle beside it: a fresh chat, straight into voice mode (#237).
             .onChange(of: model.voiceChatRequest?.id) { _, id in if id != nil, let r = model.voiceChatRequest { openVoiceChat(r) } }
             .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime).sheetFrame().withAppModel() } }
-            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame().withAppModel() }
+            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView(inSheet: true).toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame().withAppModel() }
             .sheet(isPresented: $movingSelection) {
                 if let runtime {
                     MoveToProjectSheet(sessions: picked, runtime: runtime) { endSelecting() }.sheetFrame(.compact).withAppModel()
@@ -359,7 +372,10 @@ struct ChatListView: View {
             .onChange(of: runtime?.socketState) { _, s in if case .open? = s { Task { await load() } } }
             .onReceive(NotificationCenter.default.publisher(for: .hermesSessionsChanged)) { _ in Task { await load() } }
             .onChange(of: model.pendingRoute) { _, r in
-                guard let r, r != lastRouted else { return }
+                // A route is pushed once while it waits; once a chat has taken it (back to nil) it is forgotten, so the
+                // same one again opens its chat again: the same "Messaged X" notice after Back did nothing (#448).
+                guard let r else { lastRouted = nil; return }
+                guard r != lastRouted else { return }
                 lastRouted = r
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
@@ -375,6 +391,10 @@ struct ChatListView: View {
                 Button("Delete", role: .destructive) { let list = picked; endSelecting(); Task { await delete(list) } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This removes the sessions and their transcripts from the gateway.") }
+            // A modifier of its own: one more alert inline put this chain past the type checker.
+            .modifier(ActionFailureAlert(failure: $actionFailure))
+            // Select mode's state for the morph bar (#408), a modifier of its own for the same reason.
+            .modifier(ChatsSelectPublisher(state: selectBarState))
             .alert("Delete chat?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let s = pendingDelete { Task { await delete(s) } } }
                 Button("Cancel", role: .cancel) {}
@@ -555,6 +575,7 @@ struct ChatListView: View {
         case .open: return "checkmark.circle.fill"
         case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
         case .authRejected, .failed: return "xmark.octagon.fill"
+        case .unreachable: return "exclamationmark.triangle.fill"
         case .idle: return "circle"
         }
     }
@@ -785,6 +806,15 @@ struct ChatListView: View {
     /// column; not recorded). The Mac never had the cut.
     private var selectMotion: Animation? { MorphTopBar.cutsPages && !model.wideLayout ? nil : .snappy }
 
+    /// What the morph bar shows while selecting (#408): nil when not selecting, the page is not on
+    /// show, or the bar is not over the list (a wide window, the Mac: the toolbar has them).
+    private var selectBarState: AppModel.ChatsSelect? {
+        guard selecting, pageShown, MorphTopBar.active(model) else { return nil }
+        return AppModel.ChatsSelect(title: selection.isEmpty ? "Select Chats" : "\(selection.count) Selected",
+                                    canAct: !selection.isEmpty,
+                                    canMove: runtime?.projects.available == true && runtime?.projects.canMove == true)
+    }
+
     @ViewBuilder private var selectionActions: some View {
         if let runtime, runtime.projects.available == true, runtime.projects.canMove {
             Button { movingSelection = true } label: { Label("Move to Project", systemImage: "folder") }
@@ -798,12 +828,18 @@ struct ChatListView: View {
 
     private func archive(_ list: [StoredSession]) async {
         guard let runtime else { return }
+        var failed: [(StoredSession, Error)] = []
         for s in list where s.archived != true {
             var body: [String: JSONValue] = ["archived": .bool(true)]
             if s.pinned == true { body["pinned"] = .bool(false) }
             if let p = s.profile ?? runtime.selectedProfile, !p.isEmpty { body["profile"] = .string(p) }
             do { let _: JSONValue? = try await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body)) }
-            catch { errorText = "Could not archive \u{201C}\(s.displayTitle)\u{201D}: \(error.localizedDescription)" }
+            catch { failed.append((s, error)) }
+        }
+        // One alert for the batch, not one per chat (and not a red line the reload below clears).
+        if let (first, error) = failed.first {
+            actionFailure = ActionFailure(title: failed.count == 1 ? "Could not archive \u{201C}\(first.displayTitle)\u{201D}" : "Could not archive \(failed.count) chats",
+                                          message: PinSupport.reason(error))
         }
         await load()
     }
@@ -888,6 +924,7 @@ struct ChatListView: View {
                 let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: listed)
                 all = r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
             }
+            pinsKept = PinSupport.kept(rows: all, connection: runtime.connection.id)
             // Chats open in the app that the gateway does not list yet: a new chat gets its
             // stored row on the first prompt and the row fills in as the turn flushes, so a chat
             // started moments ago (or one still running) could vanish from the list on the way
@@ -1084,9 +1121,15 @@ struct ChatListView: View {
                     SessionPreview(session: s, runtime: runtime, profile: prefs.allBots ? s.profile : nil).withAppModel()
                 }
                 #endif
+                // In Select mode a long press or a swipe does nothing: the row's menu and swipes are
+                // the list's, and opened while selecting they acted on the one row (a tester read the
+                // selection as not taking, #408).
                 .contextMenu {
+                    if !selecting {
                     Button { open(route) } label: { Label("Open", systemImage: "bubble.left") }
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
+                    if pinsKept {
+                        Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
+                    }
                     Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     if runtime.projects.available == true, runtime.projects.canMove {
                         Menu {
@@ -1096,17 +1139,23 @@ struct ChatListView: View {
                     Button { withAnimation(selectMotion) { selecting = true; selection = [s.id] } } label: { Label("Select", systemImage: "checkmark.circle") }
                     Divider()
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
+                    }
                 } preview: {
                     SessionPreview(session: s, runtime: runtime, profile: prefs.allBots ? s.profile : nil).withAppModel()
                 }
                 // Delete alone on the trailing edge; Archive lives with Pin on the leading edge so
                 // the two are never a thumb-width apart.
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
+                    if !selecting { Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") } }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
+                    // No Pin where the gateway does not keep pins: it went back as soon as it was made (#406).
+                    if !selecting, pinsKept {
+                        Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))], afterClose: true) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }.tint(.yellow)
+                    }
+                    if !selecting {
                     Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
+                    }
                 }
     }
 
@@ -1143,18 +1192,20 @@ struct ChatListView: View {
                     if aiSummaries, let events = roomLogs[room.roomId] { summarizer.refreshRoom(room, events: events) }
                 }
                 .contextMenu {
+                    if !selecting {
                     Button { open(RoomRoute(room: room, initialText: nil)) } label: { Label("Open", systemImage: "bubble.left") }
                     Button { setArchived(room, !archived) } label: { Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     Divider()
                     Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") }
+                    }
                 } preview: {
                     RoomPreview(room: room, runtime: runtime).withAppModel()
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") }
+                    if !selecting { Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") } }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button { setArchived(room, !archived) } label: { Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange)
+                    if !selecting { Button { setArchived(room, !archived) } label: { Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox") }.tint(.orange) }
                 }
     }
 
@@ -1246,10 +1297,81 @@ struct ChatListView: View {
             withAnimation(.snappy) {
                 if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i].pinned = was.pinned; sessions[i].archived = was.archived }
             }
-            errorText = "Could not update the chat: \(error.localizedDescription)"
+            if pinned != nil, archived == nil, PinSupport.isOldGatewayRefusal(error) {
+                PinSupport.noteRefused(runtime.connection.id)
+                pinsKept = false
+                actionFailure = ActionFailure(title: "Pinning is not available", message: PinSupport.tooOld)
+            } else {
+                let title = archived != nil ? "Could not archive the chat" : pinned == false ? "Could not unpin the chat" : pinned != nil ? "Could not pin the chat" : "Could not update the chat"
+                actionFailure = ActionFailure(title: title, message: PinSupport.reason(error))
+            }
             return
         }
         await load()
+    }
+}
+
+/// Whether a gateway keeps chats' pins (#406). Hermes from before it kept them (2026-07-24) sends
+/// rows without "pinned" and refuses a pin as having nothing to update; Pin is not offered there,
+/// as it went back as soon as it was made. Decided from the key, not its value: a row that says
+/// false is a gateway that keeps pins. A refusal is remembered per connection, until the first
+/// list of a later launch whose rows carry the key (the gateway's Hermes was updated).
+@MainActor
+enum PinSupport {
+    static let tooOld = "This gateway\u{2019}s Hermes is too old to pin chats. Update Hermes to pin."
+    private static let key = "vory.pins.refused"
+
+    static func refused(_ connection: UUID) -> Bool { (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(connection.uuidString) }
+    static func noteRefused(_ connection: UUID) {
+        var ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        ids.insert(connection.uuidString)
+        UserDefaults.standard.set(Array(ids), forKey: key)
+    }
+    private static func clear(_ connection: UUID) {
+        guard refused(connection) else { return }
+        UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: key) ?? []).filter { $0 != connection.uuidString }, forKey: key)
+    }
+
+    /// Connections listed since launch: the first list is a fresh connect.
+    private static var listedThisLaunch: Set<UUID> = []
+
+    /// From rows the gateway listed: kept when any carries "pinned" and no refusal stands; not
+    /// when none does. An empty list says nothing, and what was remembered stands.
+    static func kept(rows: [StoredSession], connection: UUID) -> Bool {
+        let fresh = listedThisLaunch.insert(connection).inserted
+        guard !rows.isEmpty else { return !refused(connection) }
+        let carries = rows.contains { $0.pinned != nil }
+        if carries, fresh { clear(connection) }
+        return carries && !refused(connection)
+    }
+
+    /// An older Hermes's answer to a PATCH with nothing it knows (a pin alone).
+    static func isOldGatewayRefusal(_ error: Error) -> Bool {
+        if let e = error as? HermesAPIError, case .http(400, let detail) = e { return detail.localizedCaseInsensitiveContains("nothing to update") }
+        return false
+    }
+
+    /// The gateway's reason in plain words, without the HTTP status.
+    static func reason(_ error: Error) -> String {
+        if let e = error as? HermesAPIError, case .http(_, let detail) = e, !detail.isEmpty { return detail }
+        return error.localizedDescription
+    }
+}
+
+/// A change to a chat the gateway refused, for the list's alert.
+struct ActionFailure: Equatable {
+    var title: String
+    var message: String
+}
+
+private struct ActionFailureAlert: ViewModifier {
+    @Binding var failure: ActionFailure?
+    func body(content: Content) -> some View {
+        content.alert(failure?.title ?? "", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(failure?.message ?? "")
+        }
     }
 }
 
@@ -1361,7 +1483,7 @@ struct SessionPreview: View {
         .task {
             defer { loaded = true }
             if let cached = runtime.flatMap({ TranscriptCache.load(connection: $0.connection.id, storedID: session.id) }), !cached.isEmpty {
-                messages = Array(cached.filter { $0.role == "user" || $0.role == "assistant" }.suffix(6)); return
+                messages = Array(cached.filter { ($0.role == "user" || $0.role == "assistant") && !($0.text ?? "").isEmpty }.suffix(6)); return
             }
             guard let runtime, let r: JSONValue = try? await runtime.api.get("/api/sessions/\(session.id)/messages",
                                                                              query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: "12")],
@@ -1559,6 +1681,7 @@ struct ChatListProfileItems: View {
         case .open: return "checkmark.circle.fill"
         case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
         case .authRejected, .failed: return "xmark.octagon.fill"
+        case .unreachable: return "exclamationmark.triangle.fill"
         case .idle: return "circle"
         }
     }
@@ -1568,4 +1691,15 @@ extension Notification.Name {
     /// The Mac's Chats › Refresh Chats (⌘R): the Chats list's own refresh, which also asks for
     /// the bots when their first answer failed.
     static let refreshChats = Notification.Name("vory.refreshChats")
+}
+
+/// Hands the list's Select mode to the morph bar, and takes it back when the list goes.
+private struct ChatsSelectPublisher: ViewModifier {
+    var state: AppModel.ChatsSelect?
+    @Environment(AppModel.self) private var model
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: state, initial: true) { _, s in if model.chatsSelect != s { model.chatsSelect = s } }
+            .onDisappear { model.chatsSelect = nil }
+    }
 }

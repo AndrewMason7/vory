@@ -144,6 +144,30 @@ enum TextPieces {
 
     /// At most `foldCap` characters of `text`, cut at a line break or a space, and how much was left out in bytes
     /// (counted without walking the rest: a reasoning of megabytes is drawn again on every update while it streams).
+    /// How many lines `text` has, and its first `cap` of them, in one pass over its bytes without splitting it. A
+    /// tool's output can be megabytes in tens of thousands of lines, and a code block split it into lines on every
+    /// redraw: a big card took most of a second to open or close (#421).
+    static func lines(_ text: String, cap: Int) -> (count: Int, head: Substring) {
+        var text = text
+        text.makeContiguousUTF8()
+        let (count, headBytes): (Int, Int?) = text.utf8.withContiguousStorageIfAvailable { buf in
+            guard let base = buf.baseAddress else { return (1, nil) }
+            var count = 1, headBytes: Int?
+            var p = UnsafeRawPointer(base)
+            let end = p + buf.count
+            while p < end, let hit = memchr(p, 0x0A, end - p) {
+                let nl = UnsafeRawPointer(hit)
+                // The newline after the cap-th line: the head is everything before it.
+                if count == cap { headBytes = nl - UnsafeRawPointer(base) }
+                count += 1
+                p = nl + 1
+            }
+            return (count, headBytes)
+        } ?? (1, nil)
+        guard let headBytes else { return (count, text[...]) }
+        return (count, text[..<text.utf8.index(text.utf8.startIndex, offsetBy: headBytes)])
+    }
+
     static func capped(_ text: String) -> (text: String, more: Int) {
         guard text.utf8.count > foldCap, let end = text.index(text.startIndex, offsetBy: foldCap, limitedBy: text.endIndex), end < text.endIndex else {
             return (text, 0)

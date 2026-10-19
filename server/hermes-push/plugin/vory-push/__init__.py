@@ -42,31 +42,49 @@ def _run() -> None:
 _lock_handle = None
 
 
+def _try_lock(handle) -> bool:
+    """One try at the relay's lock: True when this process now holds it. flock where there is
+    one; on Windows, which has no fcntl, the lock on the file's first byte (#403: without it both
+    the dashboard and the gateway ran a relay there, and every push arrived twice). With neither,
+    the relay runs regardless."""
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            try:
+                import msvcrt
+            except ImportError:
+                return True
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return True
+    except OSError:
+        return False
+
+
 def _claim_single_instance(hermes_push) -> bool:
     """Hermes loads plugins in more than one process (dashboard, gateway). Only one relay may run,
     or every push arrives twice. Others wait for the lock rather than giving up: during a gateway
     restart the old process can still hold it for a few seconds after the new one has started."""
     global _lock_handle
-    try:
-        import fcntl
-        import time
-    except ImportError:  # Windows: no advisory locks, run regardless
-        return True
+    import time
     path = hermes_push.status_path().with_name("relay.lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     _lock_handle = open(path, "w")
     waited = False
     while not _stop.is_set():
-        try:
-            fcntl.flock(_lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if _try_lock(_lock_handle):
             if waited:
                 log.info("vory-push relay lock acquired; starting")
             return True
-        except OSError:
-            if not waited:
-                log.info("vory-push relay running in another Hermes process; waiting for it to stop")
-                waited = True
-            time.sleep(5)
+        if not waited:
+            log.info("vory-push relay running in another Hermes process; waiting for it to stop")
+            waited = True
+        time.sleep(5)
     return False
 
 

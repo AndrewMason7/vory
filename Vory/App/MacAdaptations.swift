@@ -245,6 +245,11 @@ private struct MacPageSearchable: ViewModifier {
 /// page's. Always true where nothing sets it: the iPhone, sheets, the page on show.
 extension EnvironmentValues {
     @Entry var macPageShown: Bool = true
+    /// The tab this page is the root of (`tabRoot`): the phone's morph bar draws a root page's
+    /// own actions (its +, its options) in its trailing capsule, and nowhere else. A page pushed
+    /// from Settings, shown in a sheet, or on the Mac has nil, and keeps its own toolbar items
+    /// (#426: Settings › Projects said "Tap + to make one" with no + on the page).
+    @Entry var barTab: AppModel.AppTab? = nil
 }
 
 /// A menu item's label with a system symbol. On the iPhone it is `Label(title, systemImage:)`.

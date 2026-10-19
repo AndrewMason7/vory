@@ -113,7 +113,7 @@ struct HomeSettingsView: View {
             Section {
                 ForEach(layout.items) { item in
                     HStack(spacing: 12) {
-                        Image(systemName: item.card.symbol).foregroundStyle(.tint).frame(width: 24)
+                        Image(systemName: item.card.symbol).foregroundStyle(.tint).frame(width: 24).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.card.title)
                             Text(item.size == .compact ? item.card.sizeWords.compact : item.card.sizeWords.full).font(.caption).foregroundStyle(.secondary)
@@ -152,6 +152,7 @@ struct HomeSettingsView: View {
                                 Text(card.title)
                             }
                         }
+                        .accessibilityLabel("Add \(card.title)")
                         .tint(.primary)
                     }
                 }

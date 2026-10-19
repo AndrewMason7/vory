@@ -25,8 +25,9 @@ struct VoryApp: App {
         BotFace.motionEngine = UserDefaults.standard.object(forKey: "vory-motion-engine") == nil || UserDefaults.standard.bool(forKey: "vory-motion-engine")
         #if DEBUG
         BotAmbient.tickHook = { Perf.tick($0) }
-        // Which defaults keys change (every write re-runs the views that read defaults).
-        DefaultsWriteProbe.start()
+        // Which defaults keys change (every write re-runs the views that read defaults). It reads all
+        // the defaults on every write: `-vory-no-defaults-probe` leaves it off, for timings (#422).
+        if !ProcessInfo.processInfo.arguments.contains("-vory-no-defaults-probe") { DefaultsWriteProbe.start() }
         #endif
         _model = State(initialValue: AppModel.shared)
     }

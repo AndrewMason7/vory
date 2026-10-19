@@ -9,6 +9,8 @@ struct ConversationView: View {
     @State private var loadError: String?
     @State private var showContext = false
     @State private var showProfile = false
+    /// The whole model list, searchable (#401): "All Models…" in a model menu.
+    @State private var choosingModel = false
     /// Rename chat, from the header's menu or a long press on the title pill (#286).
     @State private var renaming = false
     /// A bot whose "@name" was tapped in the thread: its card opens (#302).
@@ -68,6 +70,13 @@ struct ConversationView: View {
                     .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
                     .toolbar(.hidden, for: .navigationBar)
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
+                    // "All Models…" from a model menu for this chat (#401); the bot card opens it itself while it is up.
+                    .onChange(of: model.modelChooser?.id) { _, _ in
+                        guard let r = model.modelChooser, r.chat === chat, !showProfile else { return }
+                        model.modelChooser = nil
+                        choosingModel = true
+                    }
+                    .sheet(isPresented: $choosingModel) { ModelChooserSheet(chat: chat).sheetFrame().withAppModel() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
@@ -249,7 +258,10 @@ struct ConversationView: View {
             // Stored chats return at once with the cached transcript and sync behind the header.
             // The chat keeps the bot it belongs to for as long as it is open, whatever is selected later.
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
-            else {
+            // A new chat once, when its page first opens. This runs again each time the page comes back into view (Back
+            // or a swipe from a Bot Chat opened over it): another new chat then took the place of the one written in,
+            // blank, which stayed only in the list (#450).
+            else if chat == nil {
                 let fresh = try await runtime.newChat(cwd: route.cwd)
                 // The compose sheet's model and reasoning level (#27), set before the chat shows
                 // and before its first message goes, so that message runs on them.
@@ -411,7 +423,7 @@ struct ConversationView: View {
     }
 
     #if os(macOS)
-    /// "unifi · grok-4.7 · Thinking…": the bot, its model, and the status while it works.
+    /// "ops · <model> · Thinking…": the bot, its model, and the status while it works.
     private func macSubtitle(_ chat: ChatSession) -> String {
         let bot = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
         let model = chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName

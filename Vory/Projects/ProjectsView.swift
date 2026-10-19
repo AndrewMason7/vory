@@ -5,7 +5,10 @@ import VoryCore
 /// selected bot. A project is a name over folders on the gateway; a chat is in a project when
 /// it works inside one of those folders, so a new chat started in a project begins there.
 struct ProjectsView: View {
+    /// Shown in Manage projects' sheet (Chats › Filters), not pushed: it keeps its own +.
+    var inSheet = false
     @Environment(AppModel.self) private var model
+    @Environment(\.barTab) private var barTab
     @State private var showCreate = false
     @State private var renaming: Project?
     @State private var newName = ""
@@ -13,6 +16,13 @@ struct ProjectsView: View {
     @State private var error: String?
 
     @State private var searchText = ""
+
+    /// The Projects tab's root under the phone's morph bar, which draws the + (and asks for it
+    /// by `pageRequest`). Pushed from Settings or in Manage projects' sheet, the page has its own.
+    private var barDrawsPlus: Bool { MorphTopBar.active(model) && barTab == .projects }
+    /// Pushed (Settings › Projects) under the morph bar: the bar draws the + beside its Back, in
+    /// the one morph as the page comes in (#435).
+    private var pushedUnderBar: Bool { MorphTopBar.active(model) && barTab != .projects && !inSheet }
 
     var body: some View {
         SettingsList {
@@ -46,7 +56,7 @@ struct ProjectsView: View {
         .pageToolbar {
             ToolbarItem(placement: .primaryAction) {
                 #if os(iOS)
-                if MorphTopBar.active(model) { EmptyView() } else {
+                if barDrawsPlus || pushedUnderBar { EmptyView() } else {
                 Button { showCreate = true } label: { Label("New project", systemImage: "plus") }
                     .disabled(model.runtime?.projects.available != true)
                 }
@@ -56,6 +66,9 @@ struct ProjectsView: View {
                 #endif
             }
         }
+        .morphPageActions([MorphPageAction(id: "projects.new", symbol: "plus", label: "New project",
+                                           enabled: model.runtime?.projects.available == true) { showCreate = true }],
+                          on: pushedUnderBar)
         .sheet(isPresented: $showCreate) { if let rt = model.runtime { NewProjectSheet(runtime: rt).sheetFrame().withAppModel() } }
         .alert("Rename project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -75,7 +88,7 @@ struct ProjectsView: View {
         .task { await model.runtime?.projects.refresh() }
         .reloadable { await model.runtime?.projects.refresh() }
         .onChange(of: model.pageRequest) { _, r in
-            guard let r, r.kind == .projectsNew else { return }
+            guard barDrawsPlus, let r, r.kind == .projectsNew else { return }
             model.pageRequest = nil; showCreate = true
         }
     }

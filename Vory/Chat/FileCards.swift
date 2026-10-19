@@ -68,7 +68,7 @@ struct FileCard: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.15)).frame(width: 40, height: 40)
                     if fetching { ProgressView().controlSize(.small) }
-                    else { Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(Color.accentColor) }
+                    else { Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(Color.accentColor).accessibilityHidden(true) }
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ref.name).font(.subheadline.weight(.medium)).lineLimit(2).multilineTextAlignment(.leading)

@@ -78,11 +78,14 @@ struct ModelPickerMenu: View {
 }
 
 /// The menu items themselves, so they can be a top-level menu or a submenu of the chat's … menu.
+/// The person's favourite models for this gateway come first, then "All Models…" (the whole list, searchable:
+/// ModelChooserSheet), then each provider's featured models (#401).
 struct ModelMenuContent: View {
     @Bindable var chat: ChatSession
     @State private var options: ModelOptionsResult?
     @State private var loading = false
     @State private var error: String?
+    @State private var favourites = FavouriteModels.shared
 
     init(chat: ChatSession) {
         self.chat = chat
@@ -90,8 +93,21 @@ struct ModelMenuContent: View {
         _options = State(initialValue: chat.cachedModelOptions)
     }
 
+    /// The newest list fetched for this chat's bot (the model list's pull to refresh updates it too), else this menu's own.
+    private var shown: ModelOptionsResult? { chat.cachedModelOptions ?? options }
+
     var body: some View {
         Group {
+            let options = shown
+            let favs = favourites.list(chat.runtime.connection.id)
+            if !favs.isEmpty {
+                Section("Favourites") {
+                    ForEach(favs) { f in favouriteItem(f) }
+                }
+            }
+            // The menu closes as this is picked; the chat's page (or the bot card over it) opens the list.
+            Button { Perf.stamp("models: All Models… picked"); AppModel.shared.modelChooser = ModelChooserRequest(chat: chat) } label: { MenuLabel("All Models…", systemImage: "magnifyingglass") }
+                .accessibilityIdentifier("models.all")
             if let options {
                 ForEach(options.sortedProviders) { p in
                     Section(p.name + (p.authenticated == false ? " (no key)" : p.warning != nil ? " (needs setup)" : "")) {
@@ -120,12 +136,26 @@ struct ModelMenuContent: View {
             }
             Toggle("YOLO (skip approvals, this session)", isOn: Binding(get: { chat.info?.yolo ?? false }, set: { v in Task { try? await chat.setYolo(v) } }))
             Button { Task { await load(refresh: true) } } label: { MenuLabel("Refresh models", systemImage: "arrow.clockwise") }
+                .accessibilityIdentifier("models.refresh")
         }
         .task { if options == nil { await load(refresh: false) } }
     }
 
+    /// A favourite: its model, its provider under it, ticked when it is the chat's. One the gateway no longer offers
+    /// is shown, and cannot be picked, until it is removed in the list.
+    @ViewBuilder private func favouriteItem(_ f: FavouriteModel) -> some View {
+        let offered = shown?.offers(f) ?? true
+        let provider = shown?.providerName(f.provider) ?? f.provider
+        Button { select(provider: f.provider, model: f.model) } label: {
+            if chat.modelName == f.model && (chat.providerSlug ?? f.provider) == f.provider { MenuLabel(f.model, systemImage: "checkmark") } else { Text(f.model) }
+            Text(offered ? provider : "\(provider) · unavailable")
+        }
+        .disabled(!offered)
+        .accessibilityIdentifier("models.fav.\(f.id)")
+    }
+
     private var currentCapabilities: ModelCapabilities? {
-        options?.providers.first { $0.slug == chat.providerSlug }?.capabilities?[chat.modelName]
+        shown?.providers.first { $0.slug == chat.providerSlug }?.capabilities?[chat.modelName]
     }
 
     private func load(refresh: Bool) async {

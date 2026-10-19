@@ -12,6 +12,8 @@ struct SettingsHeaderSection: View {
             VStack(alignment: .leading, spacing: 12) {
                 Image(systemName: symbol).font(.system(size: 30, weight: .medium)).foregroundStyle(.white)
                     .frame(width: 60, height: 60).background(color.gradient, in: .rect(cornerRadius: 14))
+                    // The title under it says what the page is; the icon read its own name (#409).
+                    .accessibilityHidden(true)
                 Text(title).font(.title.weight(.bold))
                 Text(description).font(.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }

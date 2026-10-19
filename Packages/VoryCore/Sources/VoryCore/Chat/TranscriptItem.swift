@@ -250,23 +250,36 @@ public struct TranscriptItem: Hashable, Sendable, Identifiable {
     /// Filled in on `message.complete` for the trailing assistant bubble of a turn.
     public var stats: TurnStats?
 
+    /// A step that only thought before it called a tool: its reasoning and no words. It stays in
+    /// the thread as a folded Reasoning card (#424: it went when the next step began), and it is
+    /// never a reply: nothing that reads, counts, speaks or copies replies takes it.
+    public var isThinkingOnly: Bool {
+        if case .assistant(let t, let r, false) = kind { return t.isEmpty && !(r ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return false
+    }
+
     /// A whole history, in order. Unlike row by row, an assistant row with no text can be told
     /// apart: an answer a model put entirely in its reasoning (the gateway promotes it to the
-    /// reply but stores the content empty) shows as the reply, while thinking before a tool call
-    /// or a turn still running stays out. `running`: the chat's turn is still going.
-    /// `settled`: replies this device already showed as finished (normalized), so a turn started
-    /// right after on another device does not take back the answer before it.
+    /// reply but stores the content empty) shows as the reply, and thinking before a tool call
+    /// is that step's Reasoning card alone (`isThinkingOnly`), as it was while the turn ran. The
+    /// thinking of a turn still running, on its last row, stays out: the live reply shows it.
+    /// `running`: the chat's turn is still going. `settled`: replies this device already showed
+    /// as finished (normalized), so a turn started right after on another device does not take
+    /// back the answer before it.
     public static func fromHistory(_ messages: [TranscriptMessage], running: Bool = false, settled: Set<String> = []) -> [TranscriptItem] {
         var out: [TranscriptItem] = []
         for (i, m) in messages.enumerated() {
             if let item = fromHistory(m, index: i) { out.append(item); continue }
-            guard isEmptyAssistant(m),
-                  let answer = promotedAnswer(m, next: messages[(i + 1)...].first { $0.displayKind != "hidden" }, isLast: i == messages.count - 1, running: running, settled: settled)
-            else { continue }
+            guard isEmptyAssistant(m) else { continue }
+            let next = messages[(i + 1)...].first { $0.displayKind != "hidden" }
             let id = "h-\(m.rowId ?? i)-\(i)"
             let ts = m.timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
-            let thinking = m.reasoning.flatMap { StreamAssembler.normalized($0) == StreamAssembler.normalized(answer) ? nil : $0 }
-            out.append(TranscriptItem(id: id, kind: .assistant(text: answer, reasoning: thinking, streaming: false), timestamp: ts, rowID: m.rowId))
+            if let answer = promotedAnswer(m, next: next, isLast: i == messages.count - 1, running: running, settled: settled) {
+                let thinking = m.reasoning.flatMap { StreamAssembler.normalized($0) == StreamAssembler.normalized(answer) ? nil : $0 }
+                out.append(TranscriptItem(id: id, kind: .assistant(text: answer, reasoning: thinking, streaming: false), timestamp: ts, rowID: m.rowId))
+            } else if let r = m.reasoning, !r.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, next != nil || m.hasToolCalls || !running {
+                out.append(TranscriptItem(id: id, kind: .assistant(text: "", reasoning: r, streaming: false), timestamp: ts, rowID: m.rowId))
+            }
         }
         return out
     }

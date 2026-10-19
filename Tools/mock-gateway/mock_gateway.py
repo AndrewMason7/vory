@@ -150,6 +150,38 @@ def digest_history(rounds: int, end: float) -> list[dict]:
     return out
 
 
+def coding_history(rounds: int, end: float) -> list[dict]:
+    """A long coding chat (MOCK_CODING, #439): `rounds` rounds of a request, steps that only think before each tool
+    call (their reasoning, empty words, as the gateway stores them), tool rows with real output (a source file read
+    whole, a build log, a test run) and a reply with a code block, oldest first, ending at `end`. About ten rows a
+    round, like a working day's coding chat. Generic file and project names only."""
+    files = ["Sources/App/ThreadView.swift", "Sources/App/RowModel.swift", "Sources/Core/Session.swift",
+             "Sources/Core/Socket.swift", "Tests/AppTests/RowModelTests.swift"]
+    out, rid = [], 1
+    for r in range(rounds):
+        t0 = end - (rounds - r) * 1200
+        f = files[r % len(files)]
+        out.append({"role": "user", "text": f"Can you tidy up {f} and make sure the tests still pass?", "timestamp": t0, "row_id": rid}); rid += 1
+        steps = [("read file", f, "\n".join(f"{n + 1:4d}  " + ("    func layout(_ rows: [Row]) -> [CGRect] {" if n % 17 == 0 else
+                                                              "        let height = row.estimatedHeight(for: width)" if n % 5 == 0 else
+                                                              f"        // step {n}: keep the rows in order and measure each one once") for n in range(80 + (r % 4) * 40))),
+                 ("terminal", "xcodebuild build -scheme App", "\n".join(f"CompileSwift normal arm64 Sources/App/File{n:02d}.swift" for n in range(40)) + "\n** BUILD SUCCEEDED **"),
+                 ("terminal", "xcodebuild test -scheme App", "\n".join(f"Test Case 'RowModelTests.test{n:02d}' passed ({0.01 * n:.3f} seconds)." for n in range(30)) + "\nExecuted 30 tests, with 0 failures")]
+        for k, (name, ctx, output) in enumerate(steps[: 2 + r % 2]):
+            thought = (f"Step {k + 1} of round {r + 1}: before touching {f} I want to see how the rows are measured now, "
+                       "because the last change estimated heights twice and the list jumped. ") * (2 + r % 3)
+            out.append({"role": "assistant", "text": "", "reasoning": thought, "timestamp": t0 + 10 + k * 20, "row_id": rid}); rid += 1
+            out.append({"role": "tool", "name": name, "context": ctx, "text": output, "timestamp": t0 + 15 + k * 20})
+        body = (f"Done. {f} is tidier and the tests pass.\n\n### What changed\n\n"
+                f"- The row heights are measured once and kept\n- Two helpers merged into one\n- {3 + r % 5} comments brought up to date\n\n"
+                f"```swift\nfunc layout(_ rows: [Row], width: CGFloat) -> [CGRect] {{\n    var y: CGFloat = 0\n    return rows.map {{ row in\n"
+                f"        let h = row.height(for: width)\n        defer {{ y += h }}\n        return CGRect(x: 0, y: y, width: width, height: h)\n    }}\n}}\n```\n\n"
+                f"Say the word if you want the same done to the next file.")
+        out.append({"role": "assistant", "text": body, "reasoning": f"Round {r + 1} is done; summarise what changed and show the new layout function.",
+                    "timestamp": t0 + 90, "row_id": rid}); rid += 1
+    return out
+
+
 DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper and pull the answers together."""
 
 DELEGATE_PART_2 = """Both are back. The nginx side has one stale block, `staging.example`, pointing at an
@@ -625,8 +657,10 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             return 422, {"detail": [{"loc": ["query", "limit"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}]}
         # The mock lists every chat under every bot (the demo data is small), but each row says
         # whose store it is in, as the real gateway's rows do.
-        return 200, {"sessions": [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS],
-                     "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
+        rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS]
+        if NO_PINS:
+            rows = [{k: v for k, v in r.items() if k != "pinned"} for r in rows]
+        return 200, {"sessions": rows, "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
@@ -676,19 +710,7 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         return 200, {"name": "gateway-restart", "running": running, "exit_code": None if running else 0, "pid": 4243,
                      "lines": ["=== hermes gateway restart ===", "stopping gateway (pid 4242)", "starting gateway"] + ([] if running else ["gateway up (pid 4243)"])}
     if base == "/api/model/options":
-        return 200, {"model": MODEL, "provider": PROVIDER, "providers": [
-            {"slug": "claude-subscription-directsdk-experimental", "name": "Claude subscription", "authenticated": False,
-             "warning": "Needs the Claude Code CLI installed and signed in on the gateway machine.",
-             "featured_models": ["claude-subscription/claude-opus-4.6"], "models": ["claude-subscription/claude-opus-4.6"]},
-            {"slug": "anthropic", "name": "Anthropic", "authenticated": True, "is_current": True,
-             "featured_models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
-             "models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
-             "capabilities": {MODEL: {"fast": True, "reasoning": True, "can_disable_reasoning": True}}},
-            {"slug": "openai", "name": "OpenAI", "authenticated": False,
-             "featured_models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"],
-             "models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"]},
-            {"slug": "nous", "name": "Nous Research", "authenticated": True, "free_tier": True,
-             "featured_models": ["nous/hermes-4-70b"], "models": ["nous/hermes-4-70b"]}]}
+        return 200, model_options()
     if base == "/api/model/auxiliary":
         return 200, {"main": {"provider": PROVIDER, "model": MODEL}, "tasks": [
             {"task": "titles", "provider": "auto", "model": "", "base_url": "", "local_endpoint": False},
@@ -926,6 +948,10 @@ KANBAN_BOARDS = [
     {"slug": "homelab", "name": "Homelab", "description": "The house", "icon": "", "color": "", "default_workdir": None, "project_id": None,
      "created_at": KANBAN_NOW - 800000, "archived": False, "default_workspace_kind": "scratch", "project_name": "Homelab"},
 ]
+# MOCK_ONE_BOARD=1: the Default board alone, as a gateway with one board has (#435: the Board pushed from Settings
+# then has no picker and keeps no bar of its own, so the morph bar draws its options and New Task).
+if os.environ.get("MOCK_ONE_BOARD"):
+    KANBAN_BOARDS = KANBAN_BOARDS[:1]
 KANBAN_COMMENTS = {
     "k-101": [{"id": 1, "task_id": "k-101", "author": "sam", "body": "Keep today's export running while you do it.", "created_at": KANBAN_NOW - 7000},
               {"id": 2, "task_id": "k-101", "author": "work", "body": "Will do; the index build takes about a minute.", "created_at": KANBAN_NOW - 700}],
@@ -1218,6 +1244,11 @@ NEUTRAL_MODELS = "--neutral-models" in sys.argv
 # A gateway without the PDF tools: every PDF is refused the way the real one refuses them (a
 # tester's "attachments seem to be broken").
 NO_PDF_TOOLS = "--no-pdf-tools" in sys.argv
+# A gateway from before Hermes kept a pin (2026-07-24): its chat rows carry no "pinned", and a
+# PATCH with nothing it knows is refused (#406).
+NO_PINS = "--no-pins" in sys.argv
+# Rows that say "pinned" but a pin refused all the same, for the app's refusal path (#406).
+REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
 NEUTRAL_NAMES = [
     ("claude-subscription/claude-opus-4.6", "local/assistant"),
     ("claude-subscription-directsdk-experimental", "local-assistant"),
@@ -1413,8 +1444,136 @@ PROFILES_DELAY = [0.0]
 PROFILES_FAIL = [0]
 
 
+# Test only (#401): a long model list (--extra-models N, across two providers that list hundreds, as OpenRouter and
+# Together do) and models the gateway stops offering (GET /mock/drop-model?model=…, or ?clear=1), for a favourite that
+# is no longer there.
+EXTRA_MODELS = [0]
+DROPPED_MODELS: set = set()
+
+
+def model_options() -> dict:
+    providers = [
+        {"slug": "claude-subscription-directsdk-experimental", "name": "Claude subscription", "authenticated": False,
+         "warning": "Needs the Claude Code CLI installed and signed in on the gateway machine.",
+         "featured_models": ["claude-subscription/claude-opus-4.6"], "models": ["claude-subscription/claude-opus-4.6"]},
+        {"slug": "anthropic", "name": "Anthropic", "authenticated": True, "is_current": True,
+         "featured_models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
+         "models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
+         "capabilities": {MODEL: {"fast": True, "reasoning": True, "can_disable_reasoning": True}}},
+        {"slug": "openai", "name": "OpenAI", "authenticated": False,
+         "featured_models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"],
+         "models": ["openai/gpt-5.1", "openai/gpt-5.1-mini"]},
+        {"slug": "nous", "name": "Nous Research", "authenticated": True, "free_tier": True,
+         "featured_models": ["nous/hermes-4-70b"], "models": ["nous/hermes-4-70b"]}]
+    n = EXTRA_MODELS[0]
+    if n > 0:
+        vendors = ["acme", "borealis", "cobalt", "delta", "ember", "falcon", "garnet", "harbor", "indigo", "juniper"]
+        big = [f"{vendors[i % len(vendors)]}/model-{i:04d}" for i in range(n)]
+        split = n * 3 // 5
+        providers.append({"slug": "openrouter", "name": "OpenRouter", "authenticated": True,
+                          "featured_models": big[:6], "models": big[:split]})
+        providers.append({"slug": "together", "name": "Together", "authenticated": True,
+                          "featured_models": big[split:split + 4], "models": big[split:]})
+    if DROPPED_MODELS:
+        for pr in providers:
+            pr["models"] = [m for m in pr["models"] if m not in DROPPED_MODELS]
+            pr["featured_models"] = [m for m in pr["featured_models"] if m not in DROPPED_MODELS]
+    return {"model": MODEL, "provider": PROVIDER, "providers": providers}
+
+
+# Test only (#423): what Cloudflare in front of the gateway can do to the app, switched at run time with
+# GET /mock/fault?mode=MODE[&status=N][&count=N]. Every mode but "none" first drops the open sockets, so the app meets it
+# on its next attempt.
+#   access          every request is redirected (302) to Cloudflare Access's sign-in page, served here as HTML
+#   origin          every request gets Cloudflare's "origin unreachable" page (status N, default 523)
+#   ws-origin       only the WebSocket upgrade gets that page; REST works
+#   ticket-expired  the next N upgrades (default 1) are closed with 4401 "ticket expired", then all is well
+#   stall           nothing answers: REST and upgrades hang, open sockets go quiet (pings unanswered)
+#   slow-resume     session.resume answers N seconds late (default 4); nothing else changes and no socket is dropped
+#                   (#449: a chat's history slow to come, its stored rows shown meanwhile)
+#   none            back to normal
+FAULT = {"mode": "none", "status": 523, "count": 0}
+
+
+def _cloudflare_page(status: int, title: str, text: str) -> Response:
+    body = (f"<!DOCTYPE html><html><head><title>{title}</title></head><body><h1>{title}</h1><p>{text}</p>"
+            "<p>Cloudflare Ray ID: mock</p></body></html>").encode()
+    reason = {302: "Found", 200: "OK"}.get(status, "Origin Error")
+    return Response(status, reason, Headers([("Content-Type", "text/html; charset=UTF-8"), ("Content-Length", str(len(body))),
+                                            ("Server", "cloudflare"), ("CF-RAY", "mock-ray")]), body)
+
+
+def _drop_sockets() -> int:
+    dropped = 0
+    for gw in list(GATEWAYS):
+        try:
+            gw.ws.transport.abort()
+            dropped += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return dropped
+
+
+async def _fault(request) -> Response | None:
+    """The answer a fault gives to this request instead of the gateway's, or None to go on as normal."""
+    path = request.path
+    base = path.split("?")[0]
+    mode = FAULT["mode"]
+    if mode == "none" or base.startswith("/mock/"):
+        return None
+    host = request.headers.get("Host", "127.0.0.1")
+    if mode == "access":
+        if base.startswith("/cdn-cgi/access/"):
+            return _cloudflare_page(200, "Sign in &middot; Cloudflare Access", "Get a login code emailed to you.")
+        target = f"http://{host}/cdn-cgi/access/login/{host.split(':')[0]}?kid=mock&redirect_url={base}"
+        resp = _cloudflare_page(302, "Found", "Redirecting to Cloudflare Access.")
+        resp.headers["Location"] = target
+        return resp
+    if mode == "origin" or (mode == "ws-origin" and base == "/api/ws"):
+        return _cloudflare_page(FAULT["status"], f"Error {FAULT['status']}", "Origin is unreachable.")
+    if mode == "stall":
+        await asyncio.sleep(600)
+    return None
+
+
 async def process_request(connection, request):
     base = request.path.split("?")[0]
+    if base == "/mock/drop-model":
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        if q.get("clear"):
+            DROPPED_MODELS.clear()
+        elif q.get("model"):
+            DROPPED_MODELS.add(unquote(q["model"]))
+        print(f"[mock] models no longer offered: {sorted(DROPPED_MODELS)}", flush=True)
+        body = json.dumps({"dropped": sorted(DROPPED_MODELS)}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/mock/fault":
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        FAULT["mode"] = q.get("mode", "none") or "none"
+        FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
+        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] == "ticket-expired" else 0)
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume") else 0
+        print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
+        body = json.dumps({**FAULT, "dropped": dropped}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/mock/touch":
+        # Test only (#423): a chat changed on the gateway while the app is away (GET /mock/touch?title=…&preview=…),
+        # for a return to show it without being asked.
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        title, preview = unquote(q.get("title", "")).replace("+", " "), unquote(q.get("preview", "")).replace("+", " ")
+        touched = 0
+        for row in STORED_SESSIONS:
+            if title and title.lower() in (row.get("title") or "").lower():
+                row["preview"] = preview
+                row["last_active"] = time.time()
+                touched += 1
+        print(f"[mock] touched {touched} chat(s) titled {title!r}", flush=True)
+        body = json.dumps({"touched": touched}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    faulted = await _fault(request)
+    if faulted is not None:
+        print(f"[mock] fault {FAULT['mode']}: {request.path.split('?')[0]} -> {faulted.status_code}", flush=True)
+        return faulted
     if base == "/mock/profiles-fail":
         count = request.path.partition("count=")[2].split("&")[0]
         PROFILES_FAIL[0] = int(count) if count.isdigit() else 1
@@ -1501,11 +1660,15 @@ def _process_request(connection, request):
         # after its own change agrees with it (a pin used to be put back by that reload).
         sid = base.split("/")[3]
         row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
-        if row and isinstance(body_json, dict):
-            for key in ("pinned", "archived", "title"):
-                if key in body_json:
-                    row[key] = body_json[key]
-        result = (200, {"ok": True, "title": row["title"] if row else ""})
+        known = ("archived", "title") if REFUSE_PINS else ("pinned", "archived", "title")
+        if REFUSE_PINS and isinstance(body_json, dict) and not any(k in body_json for k in known):
+            result = (400, {"detail": "Nothing to update; provide 'title' and/or 'archived'."})
+        else:
+            if row and isinstance(body_json, dict):
+                for key in known:
+                    if key in body_json:
+                        row[key] = body_json[key]
+            result = (200, {"ok": True, "title": row["title"] if row else ""})
     elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
         # Held while the task "runs": answered later, without holding up anything else.
         async def held() -> Response:
@@ -1898,6 +2061,8 @@ class Gateway:
                               for k in range(MARATHON_LINES))
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.04,
                                                       "summary": f"{(i * 37) % 11} errors", "result_text": lines})
+            # When each step went out, for a UI test that measures how far behind the app is (#421, 28).
+            print(f"[mock] marathon step {i + 1} sent {time.time():.2f}", flush=True)
             if i % 25 == 24:
                 await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
         sections = []
@@ -1915,6 +2080,7 @@ class Gateway:
         self.store_turn(s, prompt, layout)
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": "".join(parts), "status": "complete", "usage": usage(s.output_tokens, steps + 1)})
+        print(f"[mock] marathon ended {time.time():.2f}", flush=True)
 
     def file_reasoning_turn(self, s: Session, prompt: str, steps: list[dict]) -> None:
         """Files a finished turn as the gateway stores it: the prompt, then each step's row as
@@ -1929,7 +2095,9 @@ class Gateway:
         """One piece of text too big to draw in one go (#371 candidate 3, test only), streamed in
         large chunks (`huge link 6`: one paragraph of that many KB with a link in it): `huge reasoning 100` a single-paragraph reasoning of that many KB, then a
         short answer; `huge code 2000` a reply with a code block of that many lines; `huge tool
-        60000` a tool call with that many characters of output, then a short answer."""
+        60000` a tool call with that many characters of output, then a short answer; `huge blob 2000000` a tool
+        call whose output is one line of minified JSON of that many characters (#421: no line breaks for a line
+        cap to stop at, as a tool that prints a whole API response gives)."""
         words = prompt.strip().lower().split()
         kind = words[1] if len(words) > 1 else "reasoning"
         m = re.search(r"\d+", prompt)
@@ -1969,14 +2137,35 @@ class Gateway:
             s.inflight = None
             await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
             return
+        if kind == "blob":
+            size = max(1000, min(12_000_000, n or 60000))
+            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            cmd = "curl -s https://api.example.com/v1/exports?all=1"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
+            recs, total, k = [], 2, 0
+            while total < size:
+                r = json.dumps({"id": k, "shard": f"shard-{k % 97:03d}", "status": "ok", "ms": k % 90 + 3,
+                                "checksum": f"{k * 7919 % 1000003:07x}"}, separators=(",", ":"))
+                recs.append(r)
+                total += len(r) + 1
+                k += 1
+            out = ("[" + ",".join(recs) + "]")[:size]
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.3,
+                                                      "summary": f"{len(out)} characters", "result_text": out})
+            await chunks(answer, "message.delta")
+            self.store_turn(s, prompt, [1, answer])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": answer, "status": "complete", "usage": usage(s.output_tokens, 2)})
+            return
         if kind == "tool":
-            size = max(1000, min(2_000_000, n or 60000))
+            size = max(1000, min(12_000_000, n or 60000))
             tool_id = f"t-{uuid.uuid4().hex[:8]}"
             cmd = "cat /var/log/app/export.log"
             await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
-            out, k = [], 0
-            while sum(len(x) + 1 for x in out) < size:
+            out, k, total = [], 0, 0
+            while total < size:   # a running total: summed again each line, 10 MB never finished
                 out.append(f"{k + 1:05d}  shard-{k % 97:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms")
+                total += len(out[-1]) + 1
                 k += 1
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.3,
                                                       "summary": f"{k} lines", "result_text": "\n".join(out)[:size]})
@@ -1998,6 +2187,35 @@ class Gateway:
             {"role": "assistant", "content": answer, "finish_reason": "stop", "reasoning": reasoning, "reasoning_content": reasoning}])
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": answer, "usage": usage(s.output_tokens, 1), "status": "complete", "reasoning": reasoning})
+
+    async def _reasoning_steps_turn(self, s: Session, prompt: str) -> None:
+        """A model that thinks before each tool call and says nothing between them (#424, #421): `steps 6` gives
+        that many steps of streamed reasoning, then a tool call, then a short answer. Filed as the gateway stores
+        it: each step an assistant row with empty content, its reasoning and its tool call, then the tool's row."""
+        m = re.search(r"\d+", prompt)
+        n = max(1, min(40, int(m.group()) if m else 6))
+        await self.event("message.start", s.sid)
+        steps: list[dict] = []
+        for i in range(n):
+            thought = (f"Step {i + 1}: the export's shard {i + 1:02d} is next. I'll read its log before touching anything, "
+                       "because the last run retried twice and I want to know why before I change the schedule. ") * 3
+            await self.stream_words(s, thought, delay=0.02, kind="reasoning.delta")
+            tool_id = f"call_{uuid.uuid4().hex[:8]}"
+            cmd = f"tail -n 20 /var/log/app/shard-{i + 1:02d}.log"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd, "args": {"command": cmd}})
+            await asyncio.sleep(0.6)
+            out = "\n".join(f"shard-{i + 1:02d} INFO request {k} served in {k % 90 + 3} ms" for k in range(20))
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.6,
+                                                      "summary": "20 lines", "result_text": out})
+            steps.append({"role": "assistant", "content": "", "finish_reason": "tool_calls", "reasoning": thought, "reasoning_content": thought,
+                          "tool_calls": [{"id": tool_id, "type": "function", "function": {"name": "terminal", "arguments": json.dumps({"command": cmd})}}]})
+            steps.append({"role": "tool", "content": out, "tool_call_id": tool_id, "tool_name": "terminal"})
+        answer = f"Done: all {n} shards read, no errors since the last run."
+        await self.stream_words(s, answer, delay=0.02)
+        steps.append({"role": "assistant", "content": answer, "finish_reason": "stop"})
+        self.file_reasoning_turn(s, prompt, steps)
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": answer, "usage": usage(s.output_tokens, n + 1), "status": "complete"})
 
     async def _thinking_turn(self, s: Session, prompt: str) -> None:
         """A model that thinks before it answers: its thinking as reasoning.delta (the real
@@ -2080,8 +2298,11 @@ class Gateway:
         await self.echo_reasoning(s, TOOLS_INTRO)
         layout: list = [TOOLS_INTRO]
         said = TOOLS_INTRO
+        # "same ids" in the prompt: every call has the same id, as from a provider that numbers
+        # its calls per response ("call_0" each time) and a gateway that passes the id through.
+        same_ids = "same ids" in prompt.lower()
         for i, (name, context, summary, result, between) in enumerate(TOOLS_STEPS):
-            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            tool_id = "call_0" if same_ids else f"t-{uuid.uuid4().hex[:8]}"
             await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": name, "context": context, "args": {"command": context}})
             await asyncio.sleep(0.25 + (i % 3) * 0.2)
             await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": name, "duration_s": 0.4 + i * 0.1,
@@ -2137,6 +2358,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("huge"):
             await self._huge_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("steps"):
+            await self._reasoning_steps_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)
@@ -2324,6 +2548,8 @@ class Gateway:
     # -- dispatch -----------------------------------------------------------------------------
 
     async def handle(self, msg: dict) -> dict | None:
+        if FAULT["mode"] == "stall":
+            return None  # a socket gone quiet (#423's fault switch): nothing answered, pings included
         # A response to one of OUR requests (approval / clarify / ...).
         if ("result" in msg or "error" in msg) and isinstance(msg.get("id"), str):
             fut = self.pending.get(msg["id"]) or next((l.pending[msg["id"]] for l in LIVE.values() if msg["id"] in l.pending), None)
@@ -2427,6 +2653,8 @@ class Gateway:
             return ok({"session_id": sid, "stored_session_id": stored, "message_count": 0,
                        "messages": [], "info": session_info(s.title, False, profile)})
         if method in ("session.resume", "session.activate"):
+            if method == "session.resume" and FAULT["mode"] == "slow-resume":
+                await asyncio.sleep(FAULT["count"] or 4)
             stored = p.get("session_id", "")
             if method == "session.resume":
                 RESUMES.append({"session_id": stored, "profile": p.get("profile") or "", "at": time.time()})
@@ -2450,6 +2678,11 @@ class Gateway:
                         {"role": "user", "text": "Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.", "timestamp": row["last_active"] - 20, "row_id": 3},
                         {"role": "assistant", "text": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.", "timestamp": row["last_active"], "row_id": 4},
                     ]
+                    # MOCK_CODING=n: a long Bot Chat too (#449: a long one was thrown to its top as it opened), half as many
+                    # rounds of the coding chat before the two messages.
+                    coding = int(os.environ.get("MOCK_CODING", "0") or 0)
+                    if coding > 0:
+                        live.history = coding_history(coding // 2, row["last_active"]) + live.history
                 elif row and row["id"] == "20260921_093355_d4e5f6":
                     # The export chat: a background job reported in while nobody was looking (the
                     # gateway puts that in the user's seat), and a cut tool preview.
@@ -2460,6 +2693,17 @@ class Gateway:
                         {"role": "user", "text": "[IMPORTANT: Background process proc_bb0091529c2c completed normally (exit code 0).\nCommand: cd /srv/app/_meta && python3 convert_to_mp4.py 2>&1 | tee convert_run.log\nOutput:\n...(first 1910 characters cut)\nremux 39/40 ok\nverify 39/40 ok]", "timestamp": row["last_active"] - 30, "row_id": 4},
                         {"role": "assistant", "text": REPLY_PART_3, "timestamp": row["last_active"], "row_id": 5},
                     ]
+                    # MOCK_WIDE_NOTE=1: the notice's output has lines with nowhere to break (#433, a tester's
+                    # chat drawn wider than the screen after one): a 300-character token, a long command, a URL.
+                    if os.environ.get("MOCK_WIDE_NOTE"):
+                        token = "sha256:" + ("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" * 5)[:293]
+                        live.history[3]["text"] = (
+                            "[IMPORTANT: Background process proc_5e1f0c2a9d71 completed normally (exit code 0).\n"
+                            "Command: cd ~/srv/stack/services/api-gateway && docker compose --project-name stack-api-gateway up -d --force-recreate "
+                            "> /tmp/stack-api-gateway-rotate-keys-up.log 2>&1; echo \"EXIT=$?\" >> /tmp/stack-api-gateway-rotate-keys-up.log\n"
+                            "Output:\n" + token + "\n"
+                            "https://registry.example.com/v2/stack/api-gateway/manifests/sha256-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08?platform=linux-arm64\n"
+                            "EXIT=0]")
                 elif row:
                     live.history = [
                         {"role": "user", "text": "The log host is at 94% disk. Can you take a look? [User attached image: upload_20261003_120000_1.png]",
@@ -2473,6 +2717,10 @@ class Gateway:
                     digest = int(os.environ.get("MOCK_DIGEST", "0") or 0)
                     if digest > 0:
                         live.history = digest_history(digest, row["last_active"])
+                    # MOCK_CODING=n: a long coding chat (#439): thinking steps, tool rows with output, code replies.
+                    coding = int(os.environ.get("MOCK_CODING", "0") or 0)
+                    if coding > 0:
+                        live.history = coding_history(coding, row["last_active"])
                     # MOCK_LONG=n: the same exchange n times over, for scroll-performance checks.
                     reps = int(os.environ.get("MOCK_LONG", "1") or 1)
                     if reps > 1:
@@ -2696,6 +2944,13 @@ async def ws_handler(ws):
         except Exception:
             pass
         return
+    if FAULT["mode"] == "ticket-expired" and FAULT["count"] > 0:
+        FAULT["count"] -= 1
+        print(f"[mock] fault ticket-expired: upgrade closed 4401 ({FAULT['count']} more)", flush=True)
+        if FAULT["count"] == 0:
+            FAULT["mode"] = "none"
+        await ws.close(4401, "ticket expired")
+        return
     gw = Gateway(ws)
     GATEWAYS.add(gw)
     await gw.send({"jsonrpc": "2.0", "method": "event", "params": {
@@ -2744,12 +2999,16 @@ async def main() -> None:
     ap.add_argument("--voice-live", action="store_true", help="GPT-Live status answers available")
     ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
     ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
+    ap.add_argument("--refuse-pins", action="store_true", help="rows say \"pinned\", but a PATCH of only a pin is refused as an old gateway does")
+    ap.add_argument("--no-pins", action="store_true", help="no pins, as a gateway from before Hermes kept them: rows without \"pinned\", a PATCH of only a pin refused")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
+    ap.add_argument("--extra-models", type=int, default=0, metavar="N", help="N more models across two big providers (a long model list, #401)")
     ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
     args = ap.parse_args()
     PROFILES_DELAY[0] = args.profiles_delay
+    EXTRA_MODELS[0] = args.extra_models
     titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
     def extra_session(i: int, profile: str) -> dict:
         return {"id": f"2026100{i % 9}_1200{i % 100:02d}_{profile[:6]}{i:04x}", "title": titles[i % len(titles)],

@@ -28,6 +28,10 @@ public enum TranscriptCache {
             let ts = item.timestamp.timeIntervalSince1970
             switch item.kind {
             case .user(let t, _): return TranscriptMessage(role: "user", text: t, timestamp: ts, rowId: item.rowID)
+            // A step that only thought keeps its card, marked as asking for tools: reloaded, its
+            // reasoning is never taken for the turn's answer (`TranscriptItem.promotedAnswer`).
+            case .assistant(let t, let r, _) where item.isThinkingOnly:
+                return TranscriptMessage(role: "assistant", text: t, timestamp: ts, rowId: item.rowID, reasoning: r, finishReason: "tool_calls", hasToolCalls: true)
             case .assistant(let t, let r, _): return t.isEmpty ? nil : TranscriptMessage(role: "assistant", text: t, timestamp: ts, rowId: item.rowID, reasoning: r)
             case .tool(let a): return TranscriptMessage(role: "tool", text: a.resultText, timestamp: ts, rowId: item.rowID, name: a.name, context: a.context)
             case .system(let t, _): return TranscriptMessage(role: "system", text: t, timestamp: ts, rowId: item.rowID)

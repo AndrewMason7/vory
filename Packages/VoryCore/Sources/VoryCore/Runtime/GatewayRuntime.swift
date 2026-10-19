@@ -31,7 +31,14 @@ public final class GatewayRuntime {
     /// their text without being redrawn, and are drawn once when it comes back.
     public var isAway = false {
         didSet {
+            if isAway, !oldValue { awaySince = Date() }
             guard oldValue, !isAway else { return }
+            // Away long enough for the network under the REST session to have changed (#423): its connections are
+            // made afresh before anything is asked of them.
+            if let since = awaySince, Date().timeIntervalSince(since) >= Self.awayResetAfter {
+                Task { [api] in await api.resetSession() }
+            }
+            awaySince = nil
             // The chats' views catch up once, when the app says (`scheduleCatchUp`); they stay
             // held until then, so a live change meanwhile does not have them catch up early.
             for chat in registry.all { chat.beginCatchUp() }
@@ -53,6 +60,10 @@ public final class GatewayRuntime {
             }
         }
     }
+    /// When the app went out of sight, and how long it must have been away for the REST session to be replaced.
+    private var awaySince: Date?
+    static let awayResetAfter: TimeInterval = 60
+
     /// When the chats' views catch up after a return: at once when not set (the Mac's wake, the
     /// tests). The phone runs it just after the return's first frame, out of the scene update,
     /// whose stretch on the main thread it lengthened by drawing the turn that ended away (#371).
@@ -152,7 +163,11 @@ public final class GatewayRuntime {
                 guard let self else { return nil }
                 return await self.answer(serverRequest: req)
             },
-            onReconnected: { [weak self] in await self?.didReconnect() })
+            onReconnected: { [weak self] in await self?.didReconnect() },
+            onFirstConnected: { [weak self] in await self?.didConnectFirst() })
+        // An attempt that got no answer from the ticket's REST call twice in a row, or a network change while
+        // waiting: the REST session's connections are made afresh, as quitting the app did (#423).
+        Task { [socket, api] in await socket?.setTroubleHandler { _ in await api.resetSession() } }
         Task { await api.setRefresher { [weak self] in
             guard let self else { throw HermesAPIError.sessionExpired }
             return try await self.refreshSigner()
@@ -344,6 +359,8 @@ public final class GatewayRuntime {
     }
 
     public func reconnectNow() async {
+        // Everything made afresh, the REST session's connections too: a Reconnect is what quitting the app did (#423).
+        await api.resetSession()
         await socket.disconnect()
         if socketEnabled { await socket.connect() }
     }
@@ -368,8 +385,31 @@ public final class GatewayRuntime {
         await advertiseCapabilities()
         // The bots, if the first load went out before the route was up (#305).
         if profiles.isEmpty { lastError = nil; await loadProfiles() }
-        for chat in registry.all { await chat.reattachAfterReconnect() }
+        for chat in registry.all {
+            if !attachIfFailed(chat) { await chat.reattachAfterReconnect() }
+        }
         await probeCodeSkew()
+    }
+
+    /// The socket's first open: there is nothing to re-attach, except a chat opened before it
+    /// whose attach failed waiting for it (#422: a cold launch restores the chat that was open,
+    /// and a gateway unreachable then, whose refused connects fail a waiting attach at once, or
+    /// slower than the attach's 20 s wait, left it showing its cached rows with no live attach,
+    /// every send refused, until it was closed and opened again).
+    private func didConnectFirst() async {
+        for chat in registry.all { _ = attachIfFailed(chat) }
+    }
+
+    /// A connection is up: a chat whose attach failed is attached as it was opened, which clears
+    /// the failure (re-attached as the others are on a reconnect, it stayed failed and every send
+    /// was refused); one still attaching is left to finish, and tried again only if that fails.
+    /// Whether the chat was seen to here (else it is attached, and a reconnect re-attaches it).
+    private func attachIfFailed(_ chat: ChatSession) -> Bool {
+        if chat.isResuming {
+            Task { await chat.awaitResume(); chat.retryFailedAttach() }
+            return true
+        }
+        return chat.retryFailedAttach()
     }
 
     /// One cheap GET; only the 503 skew refusal sets the flag, every other outcome clears it.

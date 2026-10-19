@@ -24,10 +24,62 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     case .bots: (nil, .plus("New bot"))
     case .files: (.filesHome, .filesActions)
     case .projects: (nil, .plus("New project"))
-    case .cron: (nil, .plus("Add"))
     case .kanban: (nil, .boardActions)
     case .sessions: (nil, .sessionsOptions)
     default: (nil, nil)
+    }
+}
+
+/// A pushed page's own control, drawn by the bar in its trailing capsule as the page comes in (#435): it
+/// arrives in the one morph with the Back circle, where the page's own bar item came in by UIKit's
+/// cross-fade a beat after the slide (Matt on 27: "a second animation"). A button, or a menu of buttons.
+struct MorphPageAction: Identifiable {
+    struct Item { var label: String; var symbol: String; var action: () -> Void }
+    /// Its accessibility identifier.
+    var id: String
+    var symbol: String
+    var label: String
+    var enabled = true
+    /// A menu's items; none for a plain button.
+    var menu: [Item] = []
+    var action: () -> Void = {}
+    /// What the bar redraws on: the controls and whether they are on.
+    var signature: String { "\(id)|\(enabled)|\(menu.map(\.label).joined(separator: ","))" }
+}
+
+extension View {
+    /// The page's own controls for the morph bar while the page is up on its tab (#435); `on` where the
+    /// bar draws them (a page pushed under it), and the page keeps its own bar items everywhere else.
+    func morphPageActions(_ actions: [MorphPageAction], on: Bool) -> some View {
+        modifier(MorphPageActions(actions: actions, on: on))
+    }
+}
+
+private struct MorphPageActions: ViewModifier {
+    @Environment(AppModel.self) private var model
+    var actions: [MorphPageAction]
+    var on: Bool
+    @State private var token = UUID()
+    @State private var tab: AppModel.AppTab?
+    private func declare() {
+        let state = MorphState.shared
+        if on {
+            let tab = self.tab ?? model.selectedTab
+            self.tab = tab
+            state.pageActions[tab] = .init(token: token, actions: actions)
+        } else if let tab, state.pageActions[tab]?.token == token {
+            state.pageActions[tab] = nil
+        }
+    }
+    func body(content: Content) -> some View {
+        content
+            // At the push's start (the page's appearance), so the bar morphs the controls in with its Back.
+            .onAppear { declare() }
+            .onChange(of: on) { _, _ in declare() }
+            .onChange(of: actions.map(\.signature)) { _, _ in declare() }
+            .onDisappear {
+                if let tab, MorphState.shared.pageActions[tab]?.token == token { MorphState.shared.pageActions[tab] = nil }
+            }
     }
 }
 
@@ -73,6 +125,10 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// (Matt on 1.5 (18): "the formatting is off in the add a gateway"). Kept by the tabs' root
     /// probes; the bar's own state under it is left as it was, so it comes back as it went.
     var ownBarTabs: Set<AppModel.AppTab> = []
+    /// The controls of the page in front on each tab, declared by a page pushed under the bar
+    /// (`morphPageActions`); its token keeps a page that left from taking away the next one's.
+    struct PageActions { var token: UUID; var actions: [MorphPageAction] }
+    var pageActions: [AppModel.AppTab: PageActions] = [:]
     /// A judgement call made while Matt was out: `-vory-ownbar-off` puts the bar's Back over
     /// those pages again, as in (18) and (19).
     static let ownBarOff = ProcessInfo.processInfo.arguments.contains("-vory-ownbar-off")
@@ -94,6 +150,16 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     static let follows = !ProcessInfo.processInfo.arguments.contains("-vory-morph-timed")
 
     func push(_ c: ChatSession) {
+        // The chat under a chat being swiped away comes into view as the swipe starts: it takes the bar once the finger
+        // lets go and the swipe goes through. Taken at once, a swipe called off left it over the chat still on top,
+        // whose Back then went to it (#448).
+        if chat != nil, chat !== c, let tc = chatsNav?.transitionCoordinator, tc.isInteractive, chatBelow {
+            tc.notifyWhenInteractionChanges { [weak self] ctx in
+                guard let self, !ctx.isCancelled, self.chat !== c else { return }
+                self.push(c)
+            }
+            return
+        }
         generation += 1
         // The chat came to a page already in (it was opening): its controls form from the Back.
         if opening, followed == nil, t <= 0 {
@@ -174,8 +240,22 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
             t = awayHere ? 0 : 1
         }
     }
+    /// A chat is under the one going back: a Bot Chat opened from a "Messaged X" notice sits over the chat it came
+    /// from. The swipe back from it ends on that chat, not on the list, so the bar stays a chat's and the chat
+    /// underneath takes it as it comes in (`push`, from the chat in front changing), as Back does. Followed as a pop to
+    /// the list, the bar headed for the list's look and settled there, its chat gone, over the chat still up: no
+    /// Back, no pill, no ⋯ (#448). The Chats stack says it, in two ways for two moments, and neither does alone: while
+    /// a pop runs, where it is going, from the transition itself (the stack's list then already reads as if the pop
+    /// had happened, which a swipe called off undoes); with none running, what the stack holds (a flick that has
+    /// already popped, a pan that never did), where there is no transition to ask.
+    private var chatBelow: Bool {
+        guard chat != nil, let nav = chatsNav else { return false }
+        if let to = nav.transitionCoordinator?.viewController(forKey: .to) { return to !== nav.viewControllers.first }
+        return nav.viewControllers.count > 1
+    }
     func scrub(_ fraction: CGFloat) {
         guard away, chat != nil || opening || rootPopInFlight else { return }
+        if chatBelow { return }
         if !scrubbing { generation += 1; endFollow() }
         scrubbing = true
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = fraction >= 0.5 ? 1 : 0 } }
@@ -185,6 +265,12 @@ func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     /// left of the transition.
     func release(_ fraction: CGFloat, over duration: Double) {
         guard away, chat != nil || opening || rootPopInFlight else { return }
+        // Back to the chat underneath (or a swipe from the one on top called off): a chat's bar either way (#448).
+        if chatBelow {
+            scrubbing = false
+            if t != 0 { generation += 1; withAnimation(.spring(duration: 0.2, bounce: 0)) { t = 0 } }
+            return
+        }
         scrubbing = false
         // With the page: the bar finishing ahead of the slide made the list's controls land
         // before the list (Matt, 2026-10-12: "the nav bar reappears weirdly").
@@ -482,7 +568,7 @@ struct MorphTopBar: View {
         // So does it over a page that keeps its own bar (a form with its Cancel and Save).
         // A chat's page whose chat is not there yet is away, with its Back (`opening`).
         let pushedAway = (model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil && !state.opening) || state.ownBarTabs.contains(model.selectedTab)
-        let awayHas = state.chat != nil ? true : (state.pushedTab != nil || state.opening ? slot == .mid : pageHas)
+        let awayHas = state.chat != nil ? true : (state.pushedTab != nil || state.opening ? slot == .mid || (slot == .trail && pushedActions != nil) : pageHas)
         let present = !pushedAway && (shownTarget < 0.5 ? awayHas : pageHas)
         // Going away (a page pushed on another tab), a slot the away state does not have goes at
         // once, at the push's start: its glass cannot fade inside the container, and shrinking
@@ -514,6 +600,7 @@ struct MorphTopBar: View {
                 if shown < 1 {
                     if let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                     else if let tab = state.pushedTab ?? (state.opening ? .chats : nil), slot == .mid { pageBack(tab).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
+                    else if slot == .trail, let acts = pushedActions { pageActionButtons(acts).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                 }
                 // Keyed by tab, so a tab switch cross-fades one page's control into the next's (at
                 // a root page only; going away or back the opacity here does it).
@@ -527,6 +614,7 @@ struct MorphTopBar: View {
             .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown))
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
+            .animation(.snappy(duration: 0.22), value: selecting)
             .animation(goesAtOnce ? nil : .snappy(duration: 0.22), value: present)
         }
     }
@@ -612,10 +700,21 @@ struct MorphTopBar: View {
         }
     }
 
+    /// The Chats list's Select mode, while it is the page on show (#408).
+    private var selecting: AppModel.ChatsSelect? { model.selectedTab == .chats ? model.chatsSelect : nil }
+
     @ViewBuilder private func listContent(_ slot: MorphSlot) -> some View {
         let chrome = tabChrome(model.selectedTab)
         switch slot {
         case .lead:
+            if selecting != nil {
+                // Select mode's Done, where the bot's circle sits (#408).
+                Button { model.chatListRequest = .init(.selectDone) } label: {
+                    Text("Done").font(.body.weight(.semibold)).padding(.horizontal, 16).frame(height: 44).contentShape(.capsule)
+                }
+                .buttonStyle(MorphPressStyle(kind: .icon)).foregroundStyle(.tint)
+                .accessibilityIdentifier("chats.select.done")
+            } else {
             switch chrome.lead {
             case .botMenu:
                 Menu { ChatListProfileItems() } label: {
@@ -630,13 +729,22 @@ struct MorphTopBar: View {
                 circleButton("house", label: "Home", id: "files.home") { model.pageRequest = .init(.filesHome) }
             case nil: EmptyView()
             }
+            }
         case .mid:
             HStack(spacing: 0) {
-                Text(model.selectedTab.title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
+                Text(selecting?.title ?? model.selectedTab.title).font(.headline).fixedSize().accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("morph.title")
                 PullRefreshWheel(fromBelow: model.pullStates[model.selectedTab])
             }
         case .trail:
+            if let sel = selecting {
+                // The selection's actions, where the list's sit; none until a chat is picked.
+                trailButtons((sel.canMove ? [("folder", "Move to Project", "chats.select.move", { model.chatListRequest = .init(.selectMove) })] : [])
+                             + [("archivebox", "Archive", "chats.select.archive", { model.chatListRequest = .init(.selectArchive) }),
+                                ("trash", "Delete", "chats.select.delete", { model.chatListRequest = .init(.selectDelete) })])
+                    // The bar's button style does not dim a disabled button: done here.
+                    .disabled(!sel.canAct).opacity(sel.canAct ? 1 : 0.35)
+            } else {
             switch chrome.trail {
             case .chatActions: liveActions
             case .plus(let label):
@@ -659,17 +767,17 @@ struct MorphTopBar: View {
                 .accessibilityShowsLargeContentViewer { Label("Options", systemImage: "gearshape") }
             case nil: EmptyView()
             }
+            }
         }
     }
 
     private func pageRequestID(for tab: AppModel.AppTab) -> String {
-        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; case .cron: "tasks.add"; default: "\(tab.rawValue).plus" }
+        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; default: "\(tab.rawValue).plus" }
     }
     private func plusRequest(for tab: AppModel.AppTab) {
         switch tab {
         case .bots: model.pageRequest = .init(.botsNewBot)
         case .projects: model.pageRequest = .init(.projectsNew)
-        case .cron: model.pageRequest = .init(.tasksAdd)
         default: break
         }
     }
@@ -694,6 +802,36 @@ struct MorphTopBar: View {
                     .accessibilityAction { item.action() }
                     .accessibilityShowsLargeContentViewer { Label(item.label, systemImage: item.symbol) }
                     .accessibilityIdentifier(item.id)
+            }
+        }
+        .font(.body.weight(.medium)).foregroundStyle(.tint)
+        .padding(.horizontal, 16).frame(height: 44)
+    }
+
+    /// A pushed page's own controls, live, with the footprint `trailIcons` is measured with (#435).
+    private func pageActionButtons(_ acts: [MorphPageAction]) -> some View {
+        HStack(spacing: 18) {
+            ForEach(acts) { a in
+                if a.menu.isEmpty {
+                    Button(action: a.action) { Image(systemName: a.symbol).contentShape(.rect) }
+                        .buttonStyle(MorphPressStyle(kind: .icon))
+                        .accessibilityElement(children: .ignore).accessibilityLabel(a.label).accessibilityAddTraits(.isButton)
+                        .accessibilityAction { if a.enabled { a.action() } }
+                        .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
+                        .accessibilityIdentifier(a.id)
+                        // The bar's button style does not dim a disabled button: done here.
+                        .disabled(!a.enabled).opacity(a.enabled ? 1 : 0.35)
+                } else {
+                    Menu {
+                        ForEach(Array(a.menu.enumerated()), id: \.offset) { _, item in
+                            Button { item.action() } label: { Label(item.label, systemImage: item.symbol) }
+                        }
+                    } label: { Image(systemName: a.symbol).contentShape(.rect) }
+                    .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                    .accessibilityLabel(a.label).accessibilityIdentifier(a.id)
+                    .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
+                    .disabled(!a.enabled).opacity(a.enabled ? 1 : 0.35)
+                }
             }
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
@@ -741,18 +879,24 @@ struct MorphTopBar: View {
         // headings like bot and settings they should all be on the exact same spot"; centred in a
         // row of 44 pt circles, Bots' sat 4 pt below Settings' bare one).
         return HStack(spacing: 10) {
-            if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
+            if let _ = selecting {
+                Text("Done").font(.body.weight(.semibold)).padding(.horizontal, 16).frame(height: 44).hidden()
+                    .measured(.lead, into: $listFrames, last: $lastListFrames)
+            } else if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
             // The title alone: the pull's wheel widens the seen capsule itself (CapsuleFrame), so
             // a pull never changes what is measured here. Hidden, not only unseen: at opacity 0 under
             // accessibilityHidden it stayed in the tree as a second title, a "Settings" text over a
             // pushed page's Back.
-            Text(model.selectedTab.title).font(.headline).fixedSize().hidden()
+            Text(selecting?.title ?? model.selectedTab.title).font(.headline).fixedSize().hidden()
             // A set height, not the text's measured one: measured afresh on each tab switch it
             // came out a few points taller for a moment and the capsule breathed (Matt,
             // 2026-10-12: "the height of the bubble from bot to settings seems to change").
             .padding(.horizontal, 12).frame(height: titleHeight)
             .measured(.mid, into: $listFrames, last: $lastListFrames)
             Spacer(minLength: 0)
+            if let sel = selecting {
+                trailIcons((sel.canMove ? ["folder"] : []) + ["archivebox", "trash"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
+            } else {
             switch chrome.trail {
             case .chatActions: actions.measured(.trail, into: $listFrames, last: $lastListFrames)
             case .plus: trailIcons(["plus"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
@@ -761,16 +905,24 @@ struct MorphTopBar: View {
             case .sessionsOptions: trailIcons(["gearshape"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
             case nil: EmptyView()
             }
+            }
         }
         .frame(minHeight: 44)
     }
 
-    /// A pushed page's one control: a Back circle where the chat's Back sits, on the root
-    /// row (no face to clear).
+    /// The controls the page in front declared, when a page is pushed on this tab (#435).
+    private var pushedActions: [MorphPageAction]? {
+        guard let tab = state.pushedTab, let acts = state.pageActions[tab]?.actions, !acts.isEmpty else { return nil }
+        return acts
+    }
+
+    /// A pushed page's controls: a Back circle where the chat's Back sits, on the root row (no
+    /// face to clear), and the page's own controls at the trailing end, if it declared any.
     private var pushedLayout: some View {
         HStack(spacing: 12) {
             Color.clear.frame(width: 44, height: 44).measured(.mid, into: $pageFrames)
             Spacer(minLength: 0)
+            if let acts = pushedActions { trailIcons(acts.map(\.symbol), label: "").measured(.trail, into: $pageFrames) }
         }
     }
 
@@ -983,5 +1135,18 @@ enum MorphTopBar {
 @MainActor final class MorphState {
     static let shared = MorphState()
     var chat: ChatSession? { nil }
+}
+/// A page's own control for the phone's morph bar; the Mac keeps its toolbar.
+struct MorphPageAction: Identifiable {
+    struct Item { var label: String; var symbol: String; var action: () -> Void }
+    var id: String
+    var symbol: String
+    var label: String
+    var enabled = true
+    var menu: [Item] = []
+    var action: () -> Void = {}
+}
+extension View {
+    func morphPageActions(_ actions: [MorphPageAction], on: Bool) -> some View { self }
 }
 #endif

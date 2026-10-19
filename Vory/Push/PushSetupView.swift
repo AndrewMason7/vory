@@ -470,7 +470,7 @@ struct PushSetupView: View {
 
     private func overviewRow(_ title: String, symbol: String, ok: Bool, primary: String, secondary: String, fullValue: String? = nil) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol).font(.body).foregroundStyle(.secondary).frame(width: 24)
+            Image(systemName: symbol).font(.body).foregroundStyle(.secondary).frame(width: 24).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline.weight(.medium))
                 Text(secondary).font(.caption).foregroundStyle(.secondary)
@@ -921,6 +921,13 @@ struct CompanionStatusRows: View {
             if let t = setup.heartbeat?.transport, !t.isEmpty {
                 Text("Connected via \(t)").font(.footnote).foregroundStyle(.secondary)
             }
+            // A Hermes too old for client.capabilities: the companion runs, but an approval raised
+            // while the phone is in the background is withdrawn instead of waiting (#400).
+            if setup.heartbeat?.serverRequests == false {
+                Text("This gateway's Hermes is too old to hold an approval for the phone while it is in the background. Update Hermes so approvals wait for you.")
+                    .font(.footnote).foregroundStyle(.orange)
+                    .accessibilityIdentifier("push.companion.oldHermes")
+            }
             if let e = setup.companionCheckError { Text(e).font(.footnote).foregroundStyle(.red) }
             if showInstall, upToDate, setup.needsRestart, !setup.updating {
                 Text(setup.runningOlderCode ? "The gateway process is still running the previous companion code. Restart it to load what is on disk."
@@ -973,7 +980,7 @@ struct CompanionStatusRows: View {
     /// Icon and text that share a first line, whatever the text wraps to.
     private func statusLabel(_ text: String, systemImage: String, color: Color) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: systemImage).frame(width: 20)
+            Image(systemName: systemImage).frame(width: 20).accessibilityHidden(true)
             Text(text)
         }
         .foregroundStyle(color)
@@ -1645,8 +1652,11 @@ final class PushSetupModel {
         var lastLaOk: Bool?
         var lastLaResponse: String?
         var lastLaAt: Double?
+        /// Whether the gateway took client.capabilities: false on a Hermes too old for it (#400).
+        var serverRequests: Bool?
         enum CodingKeys: String, CodingKey {
             case version, scriptSha256 = "script_sha256", profile, updatedAt = "updated_at", connected, transport, attached, devices, error
+            case serverRequests = "server_requests"
             case lastTestNonce = "last_test_nonce", lastTestDevices = "last_test_devices", lastTestDetail = "last_test_detail"
             case lastLaEvent = "last_la_event", lastLaOk = "last_la_ok", lastLaResponse = "last_la_response", lastLaAt = "last_la_at"
         }

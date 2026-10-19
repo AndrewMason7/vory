@@ -48,32 +48,100 @@ enum SessionCache {
 /// A bot avatar rendered to a UIImage, for places SwiftUI cannot draw a view — menu item icons.
 enum BotAvatarImage {
     @MainActor private static let cache = NSCache<NSString, UIImage>()
-    /// `make`, memoised by look: the thread draws one of these beside every reply, and a live
+    /// The faces kept across the background: a bot's own (`cached(profile:)`) and a fixed look's that asks to be
+    /// kept (`cached(spec:keep:)`), each by its place (profile or spec, size, appearance, blink) with the look it
+    /// was drawn for. A dictionary, not the NSCache: an NSCache empties itself as the app goes to the background,
+    /// just before the system draws the app-switcher snapshot, so every leave drew every face again inside the
+    /// snapshot, the off-screen tabs' menus included (#422). A place is drawn again only when its bot's look
+    /// changes (`look(for:)`); a few bots' faces at a few sizes, a few MB at most. Emptied on memory pressure,
+    /// to be drawn again as they are next asked for.
+    @MainActor private(set) static var kept: [String: (look: String, image: UIImage)] = [:]
+    /// Each place's other appearance, drawn once at idle after the first (`drawTwins`): the snapshot draws the
+    /// app under both, and a face it finds missing is drawn inside it.
+    @MainActor private static var twins: [() -> Void] = []
+    @MainActor private static var twinsQueued = false
+    @MainActor private static let pressure: DispatchSourceMemoryPressure = {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { MainActor.assumeIsolated { kept.removeAll() } }
+        source.activate()
+        return source
+    }()
+
+    /// `make`, memoised by place and look: the thread draws one of these beside every reply, and a live
     /// bot view per row (glass, timeline) is what made a long thread stutter while scrolling.
     /// `closed`: the same face mid-blink, for a list row's blink by picture swap.
     @MainActor static func cached(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light, closed: Bool = false) -> UIImage {
-        let key = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(closed ? "shut" : "open")" as NSString
-        if let hit = cache.object(forKey: key) { return hit }
+        face(profile: profile, size: size, scheme: scheme, closed: closed, twin: true)
+    }
+
+    @MainActor private static func face(profile: String, size: CGFloat, scheme: ColorScheme, closed: Bool, twin: Bool) -> UIImage {
+        let place = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")"
+        let look = look(for: profile)
+        if let hit = kept[place], hit.look == look { return hit.image }
         BotFace.stillBlink = closed ? 1 : 0
         let img = make(profile: profile, size: size, scheme: scheme)
         BotFace.stillBlink = 0
-        cache.setObject(img, forKey: key)
+        keep(img, at: place, look: look)
+        if twin {
+            queueTwin { _ = face(profile: profile, size: size, scheme: scheme == .dark ? .light : .dark, closed: closed, twin: false) }
+        }
         return img
     }
 
+    /// What a bot's face is drawn from: its choice (with the all-bots glass setting), its colour, and its photo.
+    @MainActor static func look(for profile: String) -> String {
+        "\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(BotAvatarStore.photoGeneration)"
+    }
+
     /// A look that is not a bot's own (the Look tab's shape and eye tiles, the Companion card's
-    /// bot): memoised by its spec. `closed`: mid-blink, for the blink by picture swap.
-    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool = false) -> UIImage {
-        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")" as NSString
-        if let hit = cache.object(forKey: key) { return hit }
+    /// bot): memoised by its spec. `closed`: mid-blink, for the blink by picture swap. `keep`: kept across the
+    /// background with its other appearance drawn at idle, as a bot's own face is (the Companion card, on the
+    /// Settings tab, is in the switcher snapshot); the Look tab's tiles (eighteen per colour, on a pushed page)
+    /// stay in the NSCache.
+    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool = false, keep keeps: Bool = false) -> UIImage {
+        specFace(spec: spec, size: size, scheme: scheme, closed: closed, keep: keeps, twin: keeps)
+    }
+
+    @MainActor private static func specFace(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool, keep keeps: Bool, twin: Bool) -> UIImage {
+        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")"
+        if keeps, let hit = kept[key] { return hit.image }
+        if !keeps, let hit = cache.object(forKey: key as NSString) { return hit }
         BotFace.stillBlink = closed ? 1 : 0
         let r = ImageRenderer(content: BotFaceView(spec: spec, size: size, active: false, drawn: true).environment(\.colorScheme, scheme))
         r.scale = 3
         r.isOpaque = false
         let img = (r.uiImage ?? UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in }).withRenderingMode(.alwaysOriginal)
         BotFace.stillBlink = 0
-        cache.setObject(img, forKey: key)
+        if keeps {
+            keep(img, at: key, look: "")
+            if twin {
+                queueTwin { _ = specFace(spec: spec, size: size, scheme: scheme == .dark ? .light : .dark, closed: closed, keep: true, twin: false) }
+            }
+        } else {
+            cache.setObject(img, forKey: key as NSString)
+        }
         return img
+    }
+
+    @MainActor private static func keep(_ image: UIImage, at place: String, look: String) {
+        _ = pressure
+        kept[place] = (look, image)
+    }
+
+    /// Draws the queued twins about a second after the first is queued, one per turn of the main actor, so a
+    /// screen of new faces never draws its other appearance in one go.
+    @MainActor private static func queueTwin(_ draw: @escaping @MainActor () -> Void) {
+        twins.append(draw)
+        guard !twinsQueued else { return }
+        twinsQueued = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            while !twins.isEmpty {
+                twins.removeFirst()()
+                await Task.yield()
+            }
+            twinsQueued = false
+        }
     }
 
     @MainActor static func make(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light) -> UIImage {
@@ -115,21 +183,99 @@ struct JumpToBottomButton: View {
 /// Text you can select by range, with the handles and the Copy/Look Up menu UIKit gives: SwiftUI's
 /// own selectable text offers Copy and Share for the whole thing and nothing in between (a
 /// tester: "the select text window doesn't work").
-#if os(macOS)
-/// On the Mac an AppKit text view too, as on the iPhone: SwiftUI's selectable `Text` drew the whole text as one
-/// picture, and a long output past the graphics card's largest texture was an empty box (#361). The text view lays
-/// out and draws only what is on screen, and selects by range as before.
+///
+/// A text one text view cannot hold safely (`fitsOneView`) is drawn as #361's pieces in a lazy stack instead
+/// (`PiecedText`, #421).
 struct SelectableText: View {
     var text: String
     var monospaced = false
     /// What VoiceOver calls the text (the sheet's title).
     var label = "Text"
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
-        SelectableTextView(text: text, monospaced: monospaced, label: label)
-            .frame(minWidth: 420, minHeight: 320)
+        Group {
+            if Self.fitsOneView(text, TextPieces.Limits.for(typeSize)) {
+                SelectableTextView(text: text, monospaced: monospaced, label: label)
+            } else {
+                PiecedText(text: text, monospaced: monospaced, label: label)
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 420, minHeight: 320)
+        #endif
+    }
+
+    /// Whether one text view can hold `text`. It lays a paragraph out as one block: a tool's output on one line of
+    /// 2 MB (minified JSON) held the main thread for 4 s and drew blank, past the graphics card's largest texture,
+    /// and a whole of megabytes made the view's accessibility tree too big to read (#421). A paragraph of twice a
+    /// piece's characters is well under the limit here (a piece is worked out for a 150 pt column, a sheet is
+    /// 300 pt or wider), so an ordinary reply keeps the text view and its selection across paragraphs. Counted in
+    /// UTF-8 bytes, which are never fewer than the characters.
+    static func fitsOneView(_ text: String, _ limits: TextPieces.Limits) -> Bool {
+        let bytes = text.utf8.count
+        if bytes > 100_000 { return false }
+        let longest = 2 * limits.chars
+        if bytes <= longest { return true }
+        var run = 0
+        for b in text.utf8 {
+            if b == 0x0A { run = 0 } else { run += 1; if run > longest { return false } }
+        }
+        return true
     }
 }
 
+/// A whole text too big for one text view, as #361's pieces (`TextPieces.strings`) in a lazy stack: only the pieces
+/// near the screen are laid out, drawn and in the accessibility tree, each its own element in reading order, and
+/// none past the graphics card's largest texture. The cut runs off the main thread (a 10 MB output is many seconds
+/// of it). A piece selects on its own; Copy and Share carry the whole text.
+struct PiecedText: View {
+    var text: String
+    var monospaced: Bool
+    var label: String
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var pieces: [String]?
+
+    /// What the cut reads: a new text, or the text size's limits.
+    private struct Cut: Hashable { var bytes: Int; var head: String; var tail: String; var limits: TextPieces.Limits; var code: Bool }
+
+    var body: some View {
+        let limits = TextPieces.Limits.for(typeSize)
+        ScrollView {
+            if let pieces {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(pieces.indices, id: \.self) { i in
+                        Text(pieces[i])
+                            .font(monospaced ? .system(.footnote, design: .monospaced) : .body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .modifier(PieceProbe.Measure())
+                    }
+                }
+                .padding(12)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier("sheet.pieces")
+                if PieceProbe.shared.on {
+                    Text(PieceProbe.shared.summary).font(.system(size: 8)).accessibilityIdentifier("debug.pieces.sheet")
+                }
+            } else {
+                Label("Laying out \(ByteCountFormatter.string(fromByteCount: Int64(text.utf8.count), countStyle: .file))…", systemImage: "text.alignleft")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+            }
+        }
+        .task(id: Cut(bytes: text.utf8.count, head: String(text.prefix(64)), tail: String(text.suffix(64)), limits: limits, code: monospaced)) {
+            let whole = text, code = monospaced
+            pieces = await Task.detached(priority: .userInitiated) { TextPieces.strings(whole, code: code, limits) }.value
+        }
+    }
+}
+
+#if os(macOS)
+/// On the Mac an AppKit text view too, as on the iPhone: SwiftUI's selectable `Text` drew the whole text as one
+/// picture, and a long output past the graphics card's largest texture was an empty box (#361). The text view lays
+/// out and draws only what is on screen (but a paragraph whole: `fitsOneView`), and selects by range as before.
 private struct SelectableTextView: NSViewRepresentable {
     var text: String
     var monospaced: Bool
@@ -158,11 +304,10 @@ private struct SelectableTextView: NSViewRepresentable {
     }
 }
 #else
-struct SelectableText: UIViewRepresentable {
+private struct SelectableTextView: UIViewRepresentable {
     var text: String
-    var monospaced = false
-    /// What VoiceOver calls the text (the sheet's title).
-    var label = "Text"
+    var monospaced: Bool
+    var label: String
     func makeUIView(context: Context) -> UITextView {
         let v = UITextView()
         v.isEditable = false

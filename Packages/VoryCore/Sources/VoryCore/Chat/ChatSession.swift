@@ -114,13 +114,23 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     @ObservationIgnored private var _items: [TranscriptItem] = []
     public var items: [TranscriptItem] {
         get { access(keyPath: \.items); return _items }
-        set { setTracked(\.items, \._items, newValue) }
+        set { if setTracked(\.items, \._items, newValue) { bumpItemsRevision() } }
         _modify {
             access(keyPath: \.items)
             let told = willModify(\.items)
-            defer { didModify(\.items, told) }
+            defer { bumpItemsRevision(); didModify(\.items, told) }
             yield &_items
         }
+    }
+    /// Changes with every change to `items`, quiet or told, to a value no chat has held before: what a thread keeps its
+    /// rows by (#439). An equal array set leaves it (it tells nobody either); a change in place always moves it. Moved
+    /// after the write, so whatever reads both together never pairs a new value with the old items. Not observed
+    /// itself: a view reads `items` for that.
+    @ObservationIgnored public private(set) var itemsRevision = 0
+    private static var lastItemsRevision = 0
+    private func bumpItemsRevision() {
+        Self.lastItemsRevision &+= 1
+        itemsRevision = Self.lastItemsRevision
     }
     @ObservationIgnored private var _usage: Usage?
     public var usage: Usage? {
@@ -368,11 +378,13 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         for tell in owed.values { tell() }
     }
 
-    /// The macro's setter (an equal value tells nobody), with the quiet branch.
-    private func setTracked<Member: Equatable>(_ keyPath: KeyPath<ChatSession, Member>, _ store: ReferenceWritableKeyPath<ChatSession, Member>, _ newValue: Member) {
-        guard shouldNotifyObservers(self[keyPath: store], newValue) else { self[keyPath: store] = newValue; return }
-        guard !viewsQuiet else { self[keyPath: store] = newValue; oweChange(keyPath); return }
+    /// The macro's setter (an equal value tells nobody), with the quiet branch: whether the value changed.
+    @discardableResult
+    private func setTracked<Member: Equatable>(_ keyPath: KeyPath<ChatSession, Member>, _ store: ReferenceWritableKeyPath<ChatSession, Member>, _ newValue: Member) -> Bool {
+        guard shouldNotifyObservers(self[keyPath: store], newValue) else { self[keyPath: store] = newValue; return false }
+        guard !viewsQuiet else { self[keyPath: store] = newValue; oweChange(keyPath); return true }
         withMutation(keyPath: keyPath) { self[keyPath: store] = newValue }
+        return true
     }
 
     /// The macro's `_modify` (always tells), with the quiet branch: whether it told.
@@ -526,16 +538,32 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             stale = true
             if !(error is CancellationError), !error.localizedDescription.contains("CancellationError") {
                 let why = error.localizedDescription
-                if why.localizedCaseInsensitiveContains("not found") {
-                    // A one-off run (a scheduled task, say) the gateway never kept, or one it
-                    // dropped on restart: say so instead of quoting the error.
-                    banner = "The gateway no longer has this chat. It may have been a one-off run, or the gateway restarted without it. Start a new chat to carry on."
+                if Self.isGone(why) {
+                    banner = Self.goneBanner
                 } else {
                     banner = "Reconnected, but the chat could not be re-attached: \(why)"
                 }
                 bannerIsReconnect = true
             }
         }
+    }
+
+    /// A one-off run (a scheduled task, say) the gateway never kept, one it dropped on restart,
+    /// or a chat deleted elsewhere: said so instead of quoting the error.
+    static let goneBanner = "The gateway no longer has this chat. It may have been a one-off run, or the gateway restarted without it. Start a new chat to carry on."
+    /// The gateway's answer for a chat it does not have ("session not found", 4007).
+    static func isGone(_ why: String) -> Bool { why.localizedCaseInsensitiveContains("not found") }
+
+    /// The last attach failed because the gateway has no such chat: a connection that comes up
+    /// later cannot attach it, so it is not tried again on its own (a reopen still tries).
+    private var attachGone = false
+
+    /// Attaches again a chat whose attach failed, as it was opened (`beginResume`); a chat
+    /// attached, attaching, or one the gateway does not have is left alone. Whether it did.
+    @discardableResult public func retryFailedAttach() -> Bool {
+        guard resumeError != nil, !isResuming, !attachGone, !storedID.isEmpty else { return false }
+        beginResume()
+        return true
     }
 
     // MARK: Instant open
@@ -559,8 +587,17 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         resumeTask = Task { [weak self] in
             guard let self else { return }
             if needsPrefetch { Task { [weak self] in await self?.prefetchFromREST() } }
-            do { try await resume(); resumeError = nil }
-            catch { resumeError = error.localizedDescription }
+            do {
+                try await resume(); resumeError = nil; attachGone = false
+                if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
+            } catch {
+                let why = error.localizedDescription
+                resumeError = why
+                // A chat the gateway does not have opened with its cached rows: they read as the
+                // chat, and a send was the first sign it is gone (#422).
+                attachGone = Self.isGone(why)
+                if attachGone { banner = Self.goneBanner; bannerIsReconnect = true }
+            }
             isResuming = false
         }
     }
@@ -600,6 +637,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         func said(_ item: TranscriptItem) -> String? {
             switch item.kind {
             case .user(let t, _): return "u" + t.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A step that only thought goes by its reasoning's start (by its empty words every such
+            // step said the same); the start only, as a step's reasoning can run to megabytes.
+            case .assistant(_, let r, false) where item.isThinkingOnly: return "r" + StreamAssembler.normalized(String((r ?? "").prefix(600))).prefix(300)
             case .assistant(let t, _, let streaming): return streaming ? nil : "a" + t.trimmingCharacters(in: .whitespacesAndNewlines)
             case .tool(let act): return "t" + act.name
             default: return nil
@@ -760,7 +800,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             let turnStart = r["turn_started_at"]?.doubleValue ?? 0
             let turnAt: Int = {
                 if turnStart > 0, let i = items.firstIndex(where: { $0.timestamp.timeIntervalSince1970 >= turnStart - 1 }) { return i }
-                if let la = items.lastIndex(where: { if case .assistant = $0.kind { return true }; return false }) { return la + 1 }
+                if let la = items.lastIndex(where: { if case .assistant = $0.kind { return !$0.isThinkingOnly }; return false }) { return la + 1 }
                 return items.count
             }()
             // The prompt is already among the messages only when the last user row is this
@@ -783,7 +823,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             } else if streaming || !partial.isEmpty {
                 // The partial may already be in `messages` as the last assistant row (a flushed
                 // prefix): the streaming bubble takes that row's place instead of repeating it.
-                if let idx = items.indices.last(where: { if case .assistant = items[$0].kind { return true }; return false }),
+                if let idx = items.indices.last(where: { if case .assistant = items[$0].kind { return !items[$0].isThinkingOnly }; return false }),
                    idx > turnAt, case .assistant(let t, _, _) = items[idx].kind, !t.isEmpty, partial.hasPrefix(t) || t.hasPrefix(partial) {
                     items.remove(at: idx)
                 }
@@ -1823,7 +1863,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private func sealStreamingForTool() {
         guard let id = streamingItemID, let idx = items.lastIndex(where: { $0.id == id }) else { return }
         sealedTurnText += assembler.text
-        if assembler.text.isEmpty { items.remove(at: idx) } else {
+        // A step that only thought keeps its row, the Reasoning card alone (`isThinkingOnly`):
+        // taken out here, a step's reasoning went the moment its tool began (#424).
+        if assembler.text.isEmpty && assembler.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { items.remove(at: idx) } else {
             items[idx].kind = .assistant(text: assembler.text, reasoning: assembler.reasoning.isEmpty ? nil : assembler.reasoning, streaming: false)
         }
         streamingItemID = nil
@@ -1865,7 +1907,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             items.append(TranscriptItem(id: UUID().uuidString, kind: .assistant(text: tail, reasoning: nil, streaming: false)))
             result = items.count - 1
         }
-        if result == nil { result = items.lastIndex { if case .assistant = $0.kind { return true }; return false } }
+        if result == nil { result = items.lastIndex { if case .assistant = $0.kind { return !$0.isThinkingOnly }; return false } }
         streamingItemID = nil
         sealedTurnText = ""
         assembler.reset()

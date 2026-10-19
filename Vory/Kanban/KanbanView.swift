@@ -13,6 +13,7 @@ struct KanbanView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.barTab) private var barTab
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
     @State private var showNew = false
     @State private var detailTask: KanbanTask?
@@ -24,6 +25,12 @@ struct KanbanView: View {
     private var store: KanbanStore? { model.runtime?.kanban }
     private var column: KanbanStatus { KanbanStatus(rawValue: columnRaw) ?? .ready }
     private var active: Bool { embedded ? appeared : model.selectedTab == .kanban }
+    /// The Board tab's root under the phone's morph bar, which draws New Task.
+    private var barDrawsNew: Bool { MorphTopBar.active(model) && barTab == .kanban }
+    /// Pushed from Settings › Board with one board: its own bar goes to the morph bar's Back, and the
+    /// bar draws its options and New Task beside it, in the one morph as the page comes in (#435).
+    /// With several boards the page keeps its own bar (its board picker), and its items with it.
+    private var pushedUnderBar: Bool { MorphTopBar.active(model) && barTab != .kanban && !(embedded && (store?.boards.count ?? 0) > 1) }
 
     var body: some View {
         Group {
@@ -46,9 +53,16 @@ struct KanbanView: View {
         .task(id: active) { await follow() }
         .reloadable { await store?.refresh() }
         .onChange(of: model.pageRequest) { _, r in
-            guard let r, r.kind == .boardNew else { return }
+            guard barDrawsNew, let r, r.kind == .boardNew else { return }
             model.pageRequest = nil; showNew = true
         }
+        .morphPageActions([
+            MorphPageAction(id: "board.options", symbol: "ellipsis.circle", label: "Board options", menu: [
+                .init(label: "Nudge Dispatcher", symbol: "hare") { Task { await store?.nudge() } },
+                .init(label: "Refresh", symbol: "arrow.clockwise") { Task { await store?.refresh() } },
+            ]),
+            MorphPageAction(id: "board.new", symbol: "plus", label: "New Task", enabled: store?.isPresent == true) { showNew = true },
+        ], on: pushedUnderBar)
         .sheet(item: $detailTask) { t in
             KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
         }
@@ -169,7 +183,7 @@ struct KanbanView: View {
                 let n = board.count(s)
                 Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: s.symbol).font(.caption2)
+                        Image(systemName: s.symbol).font(.caption2).accessibilityHidden(true)
                         Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
                         if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
                     }
@@ -201,11 +215,15 @@ struct KanbanView: View {
             }
         }
         ToolbarItemGroup(placement: .primaryAction) {
+            if !pushedUnderBar {
             Menu {
                 Button { Task { await store?.nudge() } } label: { Label("Nudge Dispatcher", systemImage: "hare") }
                 Button { Task { await store?.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             } label: { Label("Board options", systemImage: "ellipsis.circle") }
-            if !MorphTopBar.active(model) {
+            }
+            // The Board tab's root under the morph bar: the bar draws New Task. Pushed from
+            // Settings › Board the bar draws it too, beside its Back (#426, #435).
+            if !barDrawsNew && !pushedUnderBar {
             Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
                 .disabled(store?.isPresent != true)
             }

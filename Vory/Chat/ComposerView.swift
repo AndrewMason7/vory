@@ -572,6 +572,11 @@ struct ComposerView: View {
                 contextRing
                 trailingControl.layoutPriority(1)
             }
+            // The controls stop growing at XXXL, as the top bar's do and the system's bars: at the
+            // accessibility sizes the +, the ring's number and the chip still ran past the card,
+            // and Send was cut by its edge, a tap on what showed of it sending nothing (#396). A
+            // long press shows each control large instead. The words above keep their full size.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         }
         .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
         // Plain glass, not interactive: an interactive shape answers touches itself, and on the
@@ -687,6 +692,9 @@ struct ComposerView: View {
         .onHover { chipHovered = $0 }
         #endif
         .accessibilityIdentifier("composer.modelChip")
+        .accessibilityShowsLargeContentViewer {
+            Label("\(chat.modelName.isEmpty ? "Model" : Self.shortModel(chat.modelName)) · \(ReasoningEffort.name(of: chat.reasoningEffort ?? "medium"))", systemImage: "cpu")
+        }
         .accessibilityLabel("Model \(chat.modelName.isEmpty ? "not set" : chat.modelName), reasoning \(ReasoningEffort.name(of: chat.reasoningEffort ?? "medium"))")
     }
 
@@ -724,6 +732,9 @@ struct ComposerView: View {
                 }
                 .fixedSize()
                 .padding(.trailing, 4)
+                // The row's height to tap, as the + beside it (36 pt): the ring and its number alone were a
+                // 16 pt strip (the audit's "hit area is too small").
+                .frame(minHeight: 36)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -732,6 +743,7 @@ struct ComposerView: View {
             // typing, and nothing of it moves with the + panel or the keyboard.
             .transaction { $0.animation = nil }
             .accessibilityLabel("Context \(pct) percent used")
+            .accessibilityShowsLargeContentViewer { Label("Context \(pct)%", systemImage: "circle.dashed") }
             .accessibilityIdentifier("composer.context")
             .sheet(isPresented: $showContextSheet) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
         }
@@ -760,6 +772,7 @@ struct ComposerView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Stop")
+            .accessibilityShowsLargeContentViewer { Label("Stop", systemImage: "stop.fill") }
         } else if text.isEmpty && chat.staged.isEmpty && !HandsFreeSession.shared.isActive {
             // Dictation steps aside while voice mode has the microphone (its recorder reset the
             // audio session under the engine).
@@ -775,6 +788,7 @@ struct ComposerView: View {
             .buttonStyle(.plain)
             .disabled(disabled)
             .accessibilityLabel(chat.isRunning ? "Queue message" : "Send")
+            .accessibilityShowsLargeContentViewer { Label(chat.isRunning ? "Queue message" : "Send", systemImage: "arrow.up") }
             .accessibilityIdentifier("composer.send")
         }
     }
@@ -796,12 +810,16 @@ struct ComposerView: View {
             Image(systemName: "plus").font(.body.weight(.semibold))
                 .rotationEffect(.degrees(showAttach ? 45 : 0))
                 .frame(width: 36, height: 36)
+                // The whole circle takes the tap and is the control's frame: on iOS 26 the button was its 14 pt glyph
+                // (the audit's "hit area is too small" on 26.5), and a tap near the circle's edge missed.
+                .contentShape(.circle)
                 .glassEffect(.regular.interactive(), in: .circle)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { attachButtonFrame = $0 }
-            .accessibilityIdentifier(newMessage != nil ? "newchat.attach" : "composer.attach")
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(newMessage != nil ? "newchat.attach" : "composer.attach")
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
+        .accessibilityShowsLargeContentViewer { Label(showAttach ? "Close attach panel" : "Attach", systemImage: "plus") }
     }
 
     #if os(iOS)
