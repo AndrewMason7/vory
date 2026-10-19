@@ -161,13 +161,29 @@ final class Crash421UITests: XCTestCase {
         if mode.hasPrefix("quiet") {
             // The control: no read of the app's tree and no tap while the turn streams (each read makes the app build
             // its whole accessibility tree), then one read every 10 s for the turn's end. The perf log says the rest.
-            pause(55)
-            let shownBy = Date().addingTimeInterval(240)
+            // "quiet-open" first opens up to three cards and leaves them open: whether open cards alone, with nothing
+            // reading the tree, are enough to make the app fall behind (28).
+            var opened = 0
+            if mode == "quiet-open" {
+                let seen = cardsOnScreen()
+                for c in seen.cards.filter({ headerPoint($0.frame, dockTop: seen.dockTop) != nil }).suffix(3) {
+                    if let p = headerPoint(c.frame, dockTop: seen.dockTop) { timedTap(p, "open \(opened + 1)"); opened += 1; pause(0.4) }
+                }
+                // One read before the quiet part: an open card's label carries its "Output" heading and lines.
+                pause(1)
+                let check = cardsOnScreen()
+                mark("quiet-open: \(opened) cards tapped, \(check.cards.filter { $0.label.contains("Output") }.count) open in the tree")
+            }
+            pause(opened > 0 ? 50 : 55)
+            // Up to two minutes more: an app that livelocks never shows the end and climbs in memory (the Mac saw 4 GB).
+            let shownBy = Date().addingTimeInterval(120)
             var seen = cardsOnScreen()
             mark("quiet: first read, app at step \(seen.step)")
             while !seen.ended, Date() < shownBy { pause(10); seen = cardsOnScreen(); mark("waiting: app at step \(seen.step)") }
             mark(seen.ended ? "TURN-SHOWN-ENDED" : "TURN-NOT-SHOWN-ENDED at step \(seen.step)")
-            alive("the quiet control")
+            if mode == "quiet-open" { mark("quiet-open: \(seen.cards.filter { $0.label.contains("Output") }.count) cards open at the end") }
+            if seen.ended { alive("the quiet control") } else { mark("QUIET-STUCK: ending the app rather than waiting it out") }
+            app.terminate()
             return
         }
         let end = Date().addingTimeInterval(50)
