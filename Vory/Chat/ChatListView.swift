@@ -326,7 +326,7 @@ struct ChatListView: View {
             // The mic circle beside it: a fresh chat, straight into voice mode (#237).
             .onChange(of: model.voiceChatRequest?.id) { _, id in if id != nil, let r = model.voiceChatRequest { openVoiceChat(r) } }
             .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime).sheetFrame().withAppModel() } }
-            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame().withAppModel() }
+            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView(inSheet: true).toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame().withAppModel() }
             .sheet(isPresented: $movingSelection) {
                 if let runtime {
                     MoveToProjectSheet(sessions: picked, runtime: runtime) { endSelecting() }.sheetFrame(.compact).withAppModel()

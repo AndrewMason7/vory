@@ -27,6 +27,10 @@ struct KanbanView: View {
     private var active: Bool { embedded ? appeared : model.selectedTab == .kanban }
     /// The Board tab's root under the phone's morph bar, which draws New Task.
     private var barDrawsNew: Bool { MorphTopBar.active(model) && barTab == .kanban }
+    /// Pushed from Settings › Board with one board: its own bar goes to the morph bar's Back, and the
+    /// bar draws its options and New Task beside it, in the one morph as the page comes in (#435).
+    /// With several boards the page keeps its own bar (its board picker), and its items with it.
+    private var pushedUnderBar: Bool { MorphTopBar.active(model) && barTab != .kanban && !(embedded && (store?.boards.count ?? 0) > 1) }
 
     var body: some View {
         Group {
@@ -52,6 +56,13 @@ struct KanbanView: View {
             guard barDrawsNew, let r, r.kind == .boardNew else { return }
             model.pageRequest = nil; showNew = true
         }
+        .morphPageActions([
+            MorphPageAction(id: "board.options", symbol: "ellipsis.circle", label: "Board options", menu: [
+                .init(label: "Nudge Dispatcher", symbol: "hare") { Task { await store?.nudge() } },
+                .init(label: "Refresh", symbol: "arrow.clockwise") { Task { await store?.refresh() } },
+            ]),
+            MorphPageAction(id: "board.new", symbol: "plus", label: "New Task", enabled: store?.isPresent == true) { showNew = true },
+        ], on: pushedUnderBar)
         .sheet(item: $detailTask) { t in
             KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
         }
@@ -204,13 +215,15 @@ struct KanbanView: View {
             }
         }
         ToolbarItemGroup(placement: .primaryAction) {
+            if !pushedUnderBar {
             Menu {
                 Button { Task { await store?.nudge() } } label: { Label("Nudge Dispatcher", systemImage: "hare") }
                 Button { Task { await store?.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             } label: { Label("Board options", systemImage: "ellipsis.circle") }
+            }
             // The Board tab's root under the morph bar: the bar draws New Task. Pushed from
-            // Settings › Board the page has its own (#426).
-            if !barDrawsNew {
+            // Settings › Board the bar draws it too, beside its Back (#426, #435).
+            if !barDrawsNew && !pushedUnderBar {
             Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
                 .disabled(store?.isPresent != true)
             }
