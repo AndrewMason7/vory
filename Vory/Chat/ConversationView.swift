@@ -258,7 +258,10 @@ struct ConversationView: View {
             // Stored chats return at once with the cached transcript and sync behind the header.
             // The chat keeps the bot it belongs to for as long as it is open, whatever is selected later.
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
-            else {
+            // A new chat once, when its page first opens. This runs again each time the page comes back into view (Back
+            // or a swipe from a Bot Chat opened over it): another new chat then took the place of the one written in,
+            // blank, which stayed only in the list (#450).
+            else if chat == nil {
                 let fresh = try await runtime.newChat(cwd: route.cwd)
                 // The compose sheet's model and reasoning level (#27), set before the chat shows
                 // and before its first message goes, so that message runs on them.

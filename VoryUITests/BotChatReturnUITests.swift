@@ -120,4 +120,20 @@ final class BotChatReturnUITests: XCTestCase {
         XCTAssertTrue(pill.exists && !pill.label.contains("Bot Chat"), "Back did not leave the Bot Chat")
         XCTAssertFalse(app.buttons["chats.newBot"].exists, "Back went past the chat to the list")
     }
+
+    /// Back in a chat that began as a new chat: it is still that chat, its messages there. Each time the page came back
+    /// into view it made another new chat, blank, in its place (#450).
+    func testBackToANewChatKeepsItsMessages() throws {
+        _ = try chatWithANotice()
+        XCTAssertTrue(sent.exists, "the message sent is not in the chat")
+        XCTAssertTrue(openBotChat("tap"), "the notice did not open the Bot Chat")
+        back.tap()
+        sleep(2)
+        bar("after Back")
+        shot("newchat-after-back")
+        for _ in 0..<6 where !sent.exists { app.swipeDown(velocity: .slow) }
+        XCTAssertTrue(sent.exists, "back in the chat, the message sent is gone: a blank chat took its place")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Say something to")).firstMatch.exists,
+                       "back in the chat, it is a blank new chat")
+    }
 }
