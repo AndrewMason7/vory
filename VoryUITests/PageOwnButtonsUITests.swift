@@ -200,4 +200,26 @@ final class PageOwnButtonsUITests: XCTestCase {
         }
         app.buttons["Done"].firstMatch.tap()
     }
+
+    /// #435 with one board (the mock's MOCK_ONE_BOARD=1, named "one-board" in HERMES_E2E_ARGS): the Board pushed from
+    /// Settings has no picker and no bar of its own, so the morph bar draws its options and New Task beside its Back.
+    func testTheBoardWithOneBoardHasItsControlsInTheBar() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        guard (ProcessInfo.processInfo.environment["HERMES_E2E_ARGS"] ?? "").contains("one-board") else { throw XCTSkip("the mock is not in its one-board mode") }
+        launch(url: url, token: token, tab: "settings")
+        if wide { throw XCTSkip("the morph bar is the phone's") }
+        openSettingsRow("kanban")
+        let newTask = any("board.new"), options = any("board.options")
+        XCTAssertTrue(newTask.waitForExistence(timeout: 10) && newTask.isHittable, "no New Task in the bar")
+        XCTAssertTrue(options.exists && options.isHittable, "no Board options in the bar")
+        shot("435-iphone-settings-board-one")
+        try checkBar("board.new", "New Task", page: "Board, one board")
+        XCTAssertLessThan(options.frame.midX, newTask.frame.midX, "Board options comes after New Task")
+        newTask.tap()
+        XCTAssertTrue(app.navigationBars["New Task"].waitForExistence(timeout: 5), "New Task did not open its sheet")
+        app.buttons["Cancel"].firstMatch.tap(); pause(1)
+        options.tap()
+        XCTAssertTrue(app.buttons["Refresh"].waitForExistence(timeout: 5), "Board options has no Refresh")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).tap(); pause(1)
+    }
 }

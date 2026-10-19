@@ -916,6 +916,10 @@ KANBAN_BOARDS = [
     {"slug": "homelab", "name": "Homelab", "description": "The house", "icon": "", "color": "", "default_workdir": None, "project_id": None,
      "created_at": KANBAN_NOW - 800000, "archived": False, "default_workspace_kind": "scratch", "project_name": "Homelab"},
 ]
+# MOCK_ONE_BOARD=1: the Default board alone, as a gateway with one board has (#435: the Board pushed from Settings
+# then has no picker and keeps no bar of its own, so the morph bar draws its options and New Task).
+if os.environ.get("MOCK_ONE_BOARD"):
+    KANBAN_BOARDS = KANBAN_BOARDS[:1]
 KANBAN_COMMENTS = {
     "k-101": [{"id": 1, "task_id": "k-101", "author": "sam", "body": "Keep today's export running while you do it.", "created_at": KANBAN_NOW - 7000},
               {"id": 2, "task_id": "k-101", "author": "work", "body": "Will do; the index build takes about a minute.", "created_at": KANBAN_NOW - 700}],
