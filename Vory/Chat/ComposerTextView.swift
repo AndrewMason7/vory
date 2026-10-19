@@ -447,6 +447,8 @@ struct ComposerTextView: UIViewRepresentable {
         v.returnKeyType = returnSends ? .send : .default
         v.enablesReturnKeyAutomatically = returnSends
         v.accessibilityIdentifier = accessibilityID
+        // What VoiceOver calls the field: its placeholder is a hint, not its name (the audit's "no description").
+        v.accessibilityLabel = "Message"
         v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         v.setContentHuggingPriority(.defaultLow, for: .horizontal)
         v.placeholderLabel.text = placeholder

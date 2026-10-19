@@ -732,6 +732,9 @@ struct ComposerView: View {
                 }
                 .fixedSize()
                 .padding(.trailing, 4)
+                // The row's height to tap, as the + beside it (36 pt): the ring and its number alone were a
+                // 16 pt strip (the audit's "hit area is too small").
+                .frame(minHeight: 36)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
