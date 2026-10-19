@@ -164,15 +164,29 @@ final class Crash421UITests: XCTestCase {
             // "quiet-open" first opens up to three cards and leaves them open: whether open cards alone, with nothing
             // reading the tree, are enough to make the app fall behind (28).
             var opened = 0
+            var openedKeys: [String] = []
+            /// Each opened card's height now, found by its shard ("gone" when its row is not in the tree).
+            func heights(_ keys: [String], in cards: [(label: String, frame: CGRect)]) -> String {
+                keys.map { k in cards.first { $0.label.contains(k) }.map { "\(k) \(Int($0.frame.height)) pt" } ?? "\(k) gone" }.joined(separator: ", ")
+            }
             if mode == "quiet-open" {
+                // Off the end first, so the cards hold still while they are opened (at the end the stream moves them
+                // between the copy and the tap). Each is opened by its header and checked by its height: about 106 pt
+                // closed, several hundred open.
+                app.swipeDown(velocity: .slow)
+                pause(1.2)
                 let seen = cardsOnScreen()
-                for c in seen.cards.filter({ headerPoint($0.frame, dockTop: seen.dockTop) != nil }).suffix(3) {
-                    if let p = headerPoint(c.frame, dockTop: seen.dockTop) { timedTap(p, "open \(opened + 1)"); opened += 1; pause(0.4) }
+                for c in seen.cards.filter({ headerPoint($0.frame, dockTop: seen.dockTop) != nil }).prefix(3) {
+                    let key = c.label.firstMatch(of: /shard-\d+/).map { String($0.output) } ?? c.label
+                    // The card itself, found by its shard and tapped as an element (a tap by coordinate on a marathon
+                    // card's header did not open it): three lookups in all, before the quiet part.
+                    let card = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'terminal' AND label CONTAINS %@", key)).firstMatch
+                    if card.exists { timedTap(card, "open \(opened + 1)"); opened += 1; openedKeys.append(key); pause(0.8) }
                 }
-                // One read before the quiet part: an open card's label carries its "Output" heading and lines.
                 pause(1)
+                shot("quiet-open-after-taps")
                 let check = cardsOnScreen()
-                mark("quiet-open: \(opened) cards tapped, \(check.cards.filter { $0.label.contains("Output") }.count) open in the tree")
+                mark("quiet-open: \(opened) cards tapped, \(check.cards.filter { $0.frame.height > 200 }.count) open in the tree (taller than 200 pt); heights at open \(heights(openedKeys, in: check.cards))")
             }
             pause(opened > 0 ? 50 : 55)
             // Up to two minutes more: an app that livelocks never shows the end and climbs in memory (the Mac saw 4 GB).
@@ -181,7 +195,7 @@ final class Crash421UITests: XCTestCase {
             mark("quiet: first read, app at step \(seen.step)")
             while !seen.ended, Date() < shownBy { pause(10); seen = cardsOnScreen(); mark("waiting: app at step \(seen.step)") }
             mark(seen.ended ? "TURN-SHOWN-ENDED" : "TURN-NOT-SHOWN-ENDED at step \(seen.step)")
-            if mode == "quiet-open" { mark("quiet-open: \(seen.cards.filter { $0.label.contains("Output") }.count) cards open at the end") }
+            if mode == "quiet-open" { mark("quiet-open: \(seen.cards.filter { $0.frame.height > 200 }.count) cards open at the end; heights at the end \(heights(openedKeys, in: seen.cards))") }
             if seen.ended { alive("the quiet control") } else { mark("QUIET-STUCK: ending the app rather than waiting it out") }
             app.terminate()
             return
