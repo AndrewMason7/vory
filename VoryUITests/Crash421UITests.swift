@@ -83,14 +83,16 @@ final class Crash421UITests: XCTestCase {
     /// The thread's tool cards and the top of the dock, read from one copy of the tree: a card found there cannot
     /// leave between the find and the tap, as rows do when the lazy stack takes them during a stream, and an element
     /// bound by index then pointed at another card or at none (27's gate). `key` keeps the cards whose label has it.
-    private func cardsOnScreen(_ key: String? = nil) -> (cards: [(label: String, frame: CGRect)], dockTop: CGFloat, ended: Bool, step: Int) {
-        guard let snap = try? app.snapshot() else { return ([], 0, false, 0) }
+    private func cardsOnScreen(_ key: String? = nil) -> (cards: [(label: String, frame: CGRect)], dockTop: CGFloat, ended: Bool, step: Int, jump: CGRect?) {
+        guard let snap = try? app.snapshot() else { return ([], 0, false, 0, nil) }
         var cards: [(String, CGRect)] = []
         var dockTop = snap.frame.maxY - 140
         var ended = false
         var step = 0
+        var jump: CGRect?
         func walk(_ s: XCUIElementSnapshot) {
             if s.identifier == "chat.dock" { dockTop = s.frame.minY }
+            if s.elementType == .button, s.label == "Jump to latest", s.frame.width > 0 { jump = s.frame }
             if s.elementType == .button, s.label.localizedCaseInsensitiveContains("terminal"), key.map({ s.label.contains($0) }) ?? true {
                 cards.append((s.label, s.frame))
             }
@@ -100,7 +102,14 @@ final class Crash421UITests: XCTestCase {
             for c in s.children { walk(c) }
         }
         walk(snap)
-        return (cards, dockTop, ended, step)
+        return (cards, dockTop, ended, step, jump)
+    }
+
+    /// `followTheEnd` from a copy already taken, with no query of its own: the jump arrow tapped where the copy saw it.
+    private func followTheEnd(from seen: (cards: [(label: String, frame: CGRect)], dockTop: CGFloat, ended: Bool, step: Int, jump: CGRect?)) {
+        guard let j = seen.jump else { return }
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: j.midX, dy: j.midY)).tap()
+        pause(0.6)
     }
 
     /// A card's header row, where a tap only folds or unfolds it (the middle of an open card is its output, its
@@ -137,7 +146,9 @@ final class Crash421UITests: XCTestCase {
     func testToolCardsOpenedAndClosedWhileALongTurnStreams() throws {
         // HERMES_E2E_421_MODE: "gate" (the default) leaves every third card open, swipes fast every fifth step and goes
         // back to the end whenever no card is in reach (an open card, revealed, can fill the screen), so the cycles add
-        // up. For comparing builds (28): "found" is the same without the return to the end; "end" brings the reader
+        // up; it copies the app's tree every step. "light" does the same with a copy at most every 4 s and no other
+        // query, so the test's own reads do not load the app (28). For comparing builds: "found" is "gate" without the
+        // return to the end; "end" brings the reader
         // back to the end after every tap, with no fast swipes, every third card still left open; "closed" closes every
         // card again and keeps the reader up the thread. Each step marks the newest step the app shows, against the
         // mock's log of when it sent each one; after the loop, when the app shows the turn's end.
@@ -145,21 +156,41 @@ final class Crash421UITests: XCTestCase {
         try launch()
         send("marathon 90", started: "of 90: checking shard")
         followTheEnd()
-        if mode == "closed" { app.swipeDown(velocity: .slow); pause(1) }
+        if mode == "closed" || mode == "quiet-away" { app.swipeDown(velocity: .slow); pause(1) }
         mark("MODE \(mode)")
+        if mode.hasPrefix("quiet") {
+            // The control: no read of the app's tree and no tap while the turn streams (each read makes the app build
+            // its whole accessibility tree), then one read every 10 s for the turn's end. The perf log says the rest.
+            pause(55)
+            let shownBy = Date().addingTimeInterval(240)
+            var seen = cardsOnScreen()
+            mark("quiet: first read, app at step \(seen.step)")
+            while !seen.ended, Date() < shownBy { pause(10); seen = cardsOnScreen(); mark("waiting: app at step \(seen.step)") }
+            mark(seen.ended ? "TURN-SHOWN-ENDED" : "TURN-NOT-SHOWN-ENDED at step \(seen.step)")
+            alive("the quiet control")
+            return
+        }
         let end = Date().addingTimeInterval(50)
         var i = 0
         // Cycles (a card opened, and closed unless it is a third one) while the turn was still streaming: a floor, so
         // a slow copy of the tree cannot quietly turn this into a weak test.
         var whileStreaming = 0
+        // "light" copies the tree at most every 4 s: each copy makes the app build its whole accessibility tree, and
+        // copying it every step was enough to saturate the app on a long turn (the no-reads control: without the
+        // copies it kept up). One open and close per copy; the close reuses the point.
+        let readEvery: TimeInterval = mode == "light" ? 4 : 0
+        var lastRead = Date.distantPast
         while Date() < end {
             i += 1
+            let wait = readEvery - Date().timeIntervalSince(lastRead)
+            if wait > 0 { pause(wait) }
             let t0 = Date()
+            lastRead = t0
             let seen = cardsOnScreen()
             let inRange = seen.cards.filter { headerPoint($0.frame, dockTop: seen.dockTop) != nil }
             mark(String(format: "step %d: %d cards, %d in reach, copy %.2f s, app at step %d%@", i, seen.cards.count, inRange.count, Date().timeIntervalSince(t0), seen.step, seen.ended ? ", turn ended" : ""))
             guard let card = inRange.last, let open = headerPoint(card.frame, dockTop: seen.dockTop) else {
-                if mode == "gate" { followTheEnd() }
+                if mode == "light" { followTheEnd(from: seen) } else if mode == "gate" { followTheEnd() }
                 pause(0.5); continue
             }
             timedTap(open, "open \(i)")
@@ -169,16 +200,22 @@ final class Crash421UITests: XCTestCase {
             let key = card.label.firstMatch(of: /shard-\d+/).map { String($0.output) } ?? card.label
             var cycled = i % 3 == 0 && mode != "closed"
             if !cycled {
-                let again = cardsOnScreen(key)
-                if let c = again.cards.first, let close = headerPoint(c.frame, dockTop: again.dockTop) { timedTap(close, "close \(i)"); cycled = true }
+                if mode == "light" {
+                    // The same point: not a second copy of the tree.
+                    timedTap(open, "close \(i)"); cycled = true
+                } else {
+                    let again = cardsOnScreen(key)
+                    if let c = again.cards.first, let close = headerPoint(c.frame, dockTop: again.dockTop) { timedTap(close, "close \(i)"); cycled = true }
+                }
             }
             if cycled, !seen.ended { whileStreaming += 1 }
             if mode == "end" { followTheEnd() }
-            if mode == "found" || mode == "gate", i % 5 == 0 {
+            if mode == "found" || mode == "gate" || mode == "light", i % 5 == 0 {
                 app.swipeDown(velocity: .fast); pause(0.3); app.swipeUp(velocity: .fast)
-                // The list coasts after a fast swipe: frames read meanwhile are where the rows were.
+                // The list coasts after a fast swipe: frames read meanwhile are where the rows were. In "light" mode the
+                // next copy brings the thread back to its end if no card is in reach, without a query of its own.
                 pause(1.5)
-                followTheEnd()
+                if mode != "light" { followTheEnd() }
             }
             pause(0.2)
         }
@@ -186,7 +223,7 @@ final class Crash421UITests: XCTestCase {
         // When the app shows the turn's end (the mock's log says when it sent it), up to four minutes more.
         let shownBy = Date().addingTimeInterval(240)
         var last = cardsOnScreen()
-        while !last.ended, Date() < shownBy { pause(2); last = cardsOnScreen(); mark("waiting: app at step \(last.step)") }
+        while !last.ended, Date() < shownBy { pause(mode == "light" ? 5 : 2); last = cardsOnScreen(); mark("waiting: app at step \(last.step)") }
         mark(last.ended ? "TURN-SHOWN-ENDED" : "TURN-NOT-SHOWN-ENDED at step \(last.step)")
         XCTAssertGreaterThanOrEqual(whileStreaming, 4, "only \(whileStreaming) open and close cycles while the turn streamed")
         alive("tool cards while streaming")
