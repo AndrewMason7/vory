@@ -128,7 +128,10 @@ final class WatchModel {
         store.activeConnectionID = connection.id
         let rt = GatewayRuntime(connection: connection, store: store)
         rt.pushRegistrar = push
-        rt.cardNotifier = WatchCardNotifier()
+        let notifier = WatchCardNotifier()
+        // The chat open on screen has its feed's haptics (#387): the notifier buzzes for the others only.
+        notifier.feedOpen = { [weak self] id in self?.feeds[id]?.value != nil }
+        rt.cardNotifier = notifier
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
         // iPhone only opens no socket; the watch's HTTP goes by the route, the iPhone carrying
         // what its own connection cannot.
@@ -519,9 +522,16 @@ final class WatchPushRegistrar: PushRegistrationSyncing {
 /// so mirrored iPhone notifications show the same actions here.
 @MainActor
 final class WatchCardNotifier: CardNotifying {
+    /// Whether a chat is open on screen with its feed (`WatchChatFeed`), whose events are that chat's only haptics (#387).
+    var feedOpen: (String) -> Bool = { _ in false }
+
     func cardArrived(_ card: PendingCard, chat: ChatSession) {
-        // On screen already: a tap on the wrist, no banner over the card itself.
-        guard WKApplication.shared().applicationState != .active else { WKInterfaceDevice.current().play(.notification); return }
+        // On screen already: a tap on the wrist, no banner over the card itself; none for the open chat, whose feed
+        // announces the card.
+        guard WKApplication.shared().applicationState != .active else {
+            if !feedOpen(chat.storedID) { WKInterfaceDevice.current().play(.notification) }
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = "\(chat.profileName) · \(card.method == "approval" ? "approval needed" : "question")"
         content.subtitle = chat.title
@@ -545,7 +555,8 @@ final class WatchCardNotifier: CardNotifying {
 
     func turnFinished(chat: ChatSession, error: String?) {
         guard WKApplication.shared().applicationState != .active else {
-            WKInterfaceDevice.current().play(error?.isEmpty == false ? .failure : .success)
+            // The open chat's feed announces its reply or failure.
+            if !feedOpen(chat.storedID) { WKInterfaceDevice.current().play(error?.isEmpty == false ? .failure : .success) }
             return
         }
         let content = UNMutableNotificationContent()
