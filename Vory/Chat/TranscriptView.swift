@@ -1543,7 +1543,10 @@ struct InjectedNoteRow: View {
     /// The whole output on the Select Text sheet, under the note's title, when the note shows only its start.
     var onShowAll: ((_ title: String, _ text: String) -> Void)? = nil
     @State private var open = false
-    /// The pill's own width and the row's: the glass animates between the two.
+    /// The pill's own width and the row's: the glass animates between the two. The row's is the width the list
+    /// offers the note, measured on an empty view beside it, never on the note: measured on the note, a note
+    /// that came out wider than its row once kept that width as the width to lay its details out at, and the
+    /// whole chat stayed wider than the screen (#433, after a notice whose output had lines with nowhere to break).
     @State private var pillWidth: CGFloat = 0
     @State private var rowWidth: CGFloat = 0
     var body: some View {
@@ -1559,30 +1562,37 @@ struct InjectedNoteRow: View {
         }
         .foregroundStyle(.secondary)
         .padding(.horizontal, 10).padding(.vertical, 5)
-        .fixedSize()
+        // Its own width, wrapping only where the row is narrower than the title (the largest text sizes).
+        .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pillWidth = $0 }
-        VStack(spacing: 0) {
-            Button { withAnimation(.snappy(duration: 0.32)) { self.open.toggle() } } label: { title.contentShape(.rect) }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
-            // A background process's output can run to megabytes: its start, in pieces (#361).
-            let body = TextPieces.capped(note.body)
-            VStack(alignment: .leading, spacing: 4) {
-                LongText(body.text, code: true).font(.caption.monospaced()).textSelection(.enabled)
-                if body.more > 0 { MoreTextNote(more: body.more, action: onShowAll.map { f in { f(note.title, note.body) } }) }
+        // The offered width, from a sibling with nothing in it: the stack proposes it the same width as the note,
+        // and an empty view takes exactly that, whatever the note's own size (a background would get the note's).
+        ZStack(alignment: .top) {
+            Color.clear.frame(height: 0).frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+                .accessibilityHidden(true)
+            VStack(spacing: 0) {
+                Button { withAnimation(.snappy(duration: 0.32)) { self.open.toggle() } } label: { title.contentShape(.rect) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
+                // A background process's output can run to megabytes: its start, in pieces (#361).
+                let body = TextPieces.capped(note.body)
+                VStack(alignment: .leading, spacing: 4) {
+                    LongText(body.text, code: true).font(.caption.monospaced()).textSelection(.enabled)
+                    if body.more > 0 { MoreTextNote(more: body.more, action: onShowAll.map { f in { f(note.title, note.body) } }) }
+                }
+                    .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
+                    .frame(width: rowWidth > 0 ? rowWidth : nil, alignment: .leading)
+                    // Revealed by the glass, not faded or moved: it is already in place.
+                    .folded(open: open, keep: body.text.utf8.count <= 6_000)
             }
-                .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
-                .frame(width: max(rowWidth, pillWidth), alignment: .leading)
-                // Revealed by the glass, not faded or moved: it is already in place.
-                .folded(open: open, keep: body.text.utf8.count <= 6_000)
+            .frame(width: rowWidth > 0 && pillWidth > 0 ? (open ? rowWidth : min(pillWidth, rowWidth)) : nil)
+            .clipShape(.rect(cornerRadius: open ? 14 : 20))
+            // Plain glass, not interactive: the button inside takes the tap, and interactive glass
+            // on the wrapper hid that button from accessibility (and the UI test).
+            .glassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: pillWidth > 0 ? (open ? max(rowWidth, pillWidth) : pillWidth) : nil)
-        .clipShape(.rect(cornerRadius: open ? 14 : 20))
-        // Plain glass, not interactive: the button inside takes the tap, and interactive glass
-        // on the wrapper hid that button from accessibility (and the UI test).
-        .glassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
-        .frame(maxWidth: .infinity)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
         .padding(.vertical, 2)
     }
 }
