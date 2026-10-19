@@ -192,7 +192,7 @@ struct BotStill: View {
     @State private var shut = false
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
-        Image(uiImage: BotAvatarImage.cached(spec: spec, size: size, scheme: colorScheme, closed: shut))
+        Image(uiImage: BotAvatarImage.cached(spec: spec, size: size, scheme: colorScheme, closed: shut, keep: true))
             .resizable().frame(width: size, height: size)
             .accessibilityHidden(true)
             .modifier(StillBlink(shut: $shut, seed: (spec.shape + spec.eyes).utf8.reduce(0) { $0 &* 31 &+ Int($1) } & 0xFFFFF,

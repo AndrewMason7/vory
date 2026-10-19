@@ -48,32 +48,100 @@ enum SessionCache {
 /// A bot avatar rendered to a UIImage, for places SwiftUI cannot draw a view — menu item icons.
 enum BotAvatarImage {
     @MainActor private static let cache = NSCache<NSString, UIImage>()
-    /// `make`, memoised by look: the thread draws one of these beside every reply, and a live
+    /// The faces kept across the background: a bot's own (`cached(profile:)`) and a fixed look's that asks to be
+    /// kept (`cached(spec:keep:)`), each by its place (profile or spec, size, appearance, blink) with the look it
+    /// was drawn for. A dictionary, not the NSCache: an NSCache empties itself as the app goes to the background,
+    /// just before the system draws the app-switcher snapshot, so every leave drew every face again inside the
+    /// snapshot, the off-screen tabs' menus included (#422). A place is drawn again only when its bot's look
+    /// changes (`look(for:)`); a few bots' faces at a few sizes, a few MB at most. Emptied on memory pressure,
+    /// to be drawn again as they are next asked for.
+    @MainActor private(set) static var kept: [String: (look: String, image: UIImage)] = [:]
+    /// Each place's other appearance, drawn once at idle after the first (`drawTwins`): the snapshot draws the
+    /// app under both, and a face it finds missing is drawn inside it.
+    @MainActor private static var twins: [() -> Void] = []
+    @MainActor private static var twinsQueued = false
+    @MainActor private static let pressure: DispatchSourceMemoryPressure = {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { MainActor.assumeIsolated { kept.removeAll() } }
+        source.activate()
+        return source
+    }()
+
+    /// `make`, memoised by place and look: the thread draws one of these beside every reply, and a live
     /// bot view per row (glass, timeline) is what made a long thread stutter while scrolling.
     /// `closed`: the same face mid-blink, for a list row's blink by picture swap.
     @MainActor static func cached(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light, closed: Bool = false) -> UIImage {
-        let key = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(closed ? "shut" : "open")" as NSString
-        if let hit = cache.object(forKey: key) { return hit }
+        face(profile: profile, size: size, scheme: scheme, closed: closed, twin: true)
+    }
+
+    @MainActor private static func face(profile: String, size: CGFloat, scheme: ColorScheme, closed: Bool, twin: Bool) -> UIImage {
+        let place = "\(profile)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")"
+        let look = look(for: profile)
+        if let hit = kept[place], hit.look == look { return hit.image }
         BotFace.stillBlink = closed ? 1 : 0
         let img = make(profile: profile, size: size, scheme: scheme)
         BotFace.stillBlink = 0
-        cache.setObject(img, forKey: key)
+        keep(img, at: place, look: look)
+        if twin {
+            queueTwin { _ = face(profile: profile, size: size, scheme: scheme == .dark ? .light : .dark, closed: closed, twin: false) }
+        }
         return img
     }
 
+    /// What a bot's face is drawn from: its choice (with the all-bots glass setting), its colour, and its photo.
+    @MainActor static func look(for profile: String) -> String {
+        "\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(BotAvatarStore.photoGeneration)"
+    }
+
     /// A look that is not a bot's own (the Look tab's shape and eye tiles, the Companion card's
-    /// bot): memoised by its spec. `closed`: mid-blink, for the blink by picture swap.
-    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool = false) -> UIImage {
-        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")" as NSString
-        if let hit = cache.object(forKey: key) { return hit }
+    /// bot): memoised by its spec. `closed`: mid-blink, for the blink by picture swap. `keep`: kept across the
+    /// background with its other appearance drawn at idle, as a bot's own face is (the Companion card, on the
+    /// Settings tab, is in the switcher snapshot); the Look tab's tiles (eighteen per colour, on a pushed page)
+    /// stay in the NSCache.
+    @MainActor static func cached(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool = false, keep keeps: Bool = false) -> UIImage {
+        specFace(spec: spec, size: size, scheme: scheme, closed: closed, keep: keeps, twin: keeps)
+    }
+
+    @MainActor private static func specFace(spec: BotLookSpec, size: CGFloat, scheme: ColorScheme, closed: Bool, keep keeps: Bool, twin: Bool) -> UIImage {
+        let key = "spec|\(spec.shape)|\(spec.eyes)|\(spec.hex)|\(spec.finish)|\(size)|\(scheme == .dark ? "d" : "l")|\(closed ? "shut" : "open")"
+        if keeps, let hit = kept[key] { return hit.image }
+        if !keeps, let hit = cache.object(forKey: key as NSString) { return hit }
         BotFace.stillBlink = closed ? 1 : 0
         let r = ImageRenderer(content: BotFaceView(spec: spec, size: size, active: false, drawn: true).environment(\.colorScheme, scheme))
         r.scale = 3
         r.isOpaque = false
         let img = (r.uiImage ?? UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in }).withRenderingMode(.alwaysOriginal)
         BotFace.stillBlink = 0
-        cache.setObject(img, forKey: key)
+        if keeps {
+            keep(img, at: key, look: "")
+            if twin {
+                queueTwin { _ = specFace(spec: spec, size: size, scheme: scheme == .dark ? .light : .dark, closed: closed, keep: true, twin: false) }
+            }
+        } else {
+            cache.setObject(img, forKey: key as NSString)
+        }
         return img
+    }
+
+    @MainActor private static func keep(_ image: UIImage, at place: String, look: String) {
+        _ = pressure
+        kept[place] = (look, image)
+    }
+
+    /// Draws the queued twins about a second after the first is queued, one per turn of the main actor, so a
+    /// screen of new faces never draws its other appearance in one go.
+    @MainActor private static func queueTwin(_ draw: @escaping @MainActor () -> Void) {
+        twins.append(draw)
+        guard !twinsQueued else { return }
+        twinsQueued = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            while !twins.isEmpty {
+                twins.removeFirst()()
+                await Task.yield()
+            }
+            twinsQueued = false
+        }
     }
 
     @MainActor static func make(profile: String, size: CGFloat = 28, scheme: ColorScheme = .light) -> UIImage {
