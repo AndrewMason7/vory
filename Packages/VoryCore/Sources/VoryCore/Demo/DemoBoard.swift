@@ -82,11 +82,3 @@ extension DemoGateway {
         return (404, ["detail": "Not found"])
     }
 }
-
-/// What changes the demo's state (a message sent, an approval, a board move, an upload) comes in the next part
-/// of the port; until then the demo reads only.
-extension DemoGateway {
-    func liveRPC(_ method: String, _ p: [String: Any], profile: String) -> Result<Any, RPCError>? { nil }
-    func liveRoute(method: String, path: String, query: [String: String], payload: [String: Any], body: Data, contentType: String) -> (Int, Any)? { nil }
-    func boardWrite(method: String, sub: String, payload: [String: Any]) -> (Int, Any)? { nil }
-}

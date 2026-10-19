@@ -22,10 +22,10 @@ enum DemoContent {
     /// Four or five bots, each with a clear job. The first is the gateway's default bot.
     static let bots: [Bot] = [
         Bot(name: "default", display: "Sprout", title: "Research", skills: 14, shape: "drop", eyes: "classic", hex: "#30D158"),
-        Bot(name: "lab", display: "Gizmo", title: "Home server", skills: 11, shape: "hexagon", eyes: "round", hex: "#FF9F0A"),
-        Bot(name: "scribe", display: "Quill", title: "Writing", skills: 8, shape: "pill", eyes: "sleepy", hex: "#BF5AF2"),
-        Bot(name: "ops", display: "Beacon", title: "Alerts", skills: 12, shape: "triangle", eyes: "wide", hex: "#FFD60A"),
-        Bot(name: "studio", display: "Pixel", title: "Design", skills: 9, shape: "square", eyes: "curious", hex: "#0A84FF"),
+        Bot(name: "gizmo", display: "Gizmo", title: "Home server", skills: 11, shape: "hexagon", eyes: "round", hex: "#FF9F0A"),
+        Bot(name: "quill", display: "Quill", title: "Writing", skills: 8, shape: "pill", eyes: "sleepy", hex: "#BF5AF2"),
+        Bot(name: "beacon", display: "Beacon", title: "Alerts", skills: 12, shape: "triangle", eyes: "wide", hex: "#FFD60A"),
+        Bot(name: "pixel", display: "Pixel", title: "Design", skills: 9, shape: "square", eyes: "curious", hex: "#0A84FF"),
     ]
 
     static let model = "demo/assistant"
@@ -87,22 +87,22 @@ enum DemoContent {
         Chat(id: "20261014_081500_sprout", title: "Packing list for the lake weekend", bot: "default",
              preview: "Here's a list for two nights by the lake, sorted by bag.", source: "ios", cwd: "/home/demo/trip",
              pinned: true, started: 5_400, active: 4_900, rows: { packingRows }),
-        Chat(id: longChatID, title: "Morning checks on the home servers", bot: "ops",
+        Chat(id: longChatID, title: "Morning checks on the home servers", bot: "beacon",
              preview: "All services up on nas-01; two package updates are waiting.", source: "cron", cwd: "/home/demo/homelab",
              pinned: false, started: 25 * 900 + 600, active: 600, rows: { digestRows(rounds: 25) }),
-        Chat(id: "20261013_203000_gizmo0", title: "Why is the NAS slow tonight?", bot: "lab",
+        Chat(id: "20261013_203000_gizmo0", title: "Why is the NAS slow tonight?", bot: "gizmo",
              preview: "The nightly backup and a disk scrub started at the same time.", source: "ios", cwd: "/home/demo/homelab",
              pinned: false, started: 50_400, active: 49_200, rows: { nasRows }),
-        Chat(id: "20261013_160000_quill1", title: "Newsletter intro, take two", bot: "scribe",
+        Chat(id: "20261013_160000_quill1", title: "Newsletter intro, take two", bot: "quill",
              preview: "A warmer opening, and the three updates moved up front.", source: "ios", cwd: "/home/demo/writing",
              pinned: false, started: 66_000, active: 64_800, rows: { newsletterRows }),
         Chat(id: "20261012_190000_pixel1", title: "Compare three e-readers", bot: "default",
              preview: "The Inkwell 7 wins on battery, the Leaf Pro on the screen.", source: "ios", cwd: home,
              pinned: false, started: 140_000, active: 139_000, rows: { readerRows }),
-        Chat(id: "20261013_110000_pixel2", title: "Colours for the garden sign", bot: "studio",
+        Chat(id: "20261013_110000_pixel2", title: "Colours for the garden sign", bot: "pixel",
              preview: "Leaf green, warm white and a marigold accent, easy to read from the street.", source: "ios", cwd: home,
              pinned: false, started: 100_000, active: 99_300, rows: { signRows }),
-        Chat(id: botChatID, title: "Bot Chat", bot: "lab",
+        Chat(id: botChatID, title: "Bot Chat", bot: "gizmo",
              preview: "Sounds good. I'll let you know when the backup's done.", source: "cli", cwd: "/home/demo/homelab",
              pinned: false, started: 90_000, active: 3_600, rows: { botChatRows }),
         Chat(id: "20261011_090000_sprout", title: "Weekly budget check-in", bot: "default",
@@ -297,9 +297,9 @@ enum DemoContent {
     ] }
 
     static var botChatRows: [Row] { [
-        Row(role: "user", text: "Message from \u{1F916} Beacon (@ops): Heads up, there's a NAS firmware update waiting. I'd like to apply it tonight."),
+        Row(role: "user", text: "Message from \u{1F916} Beacon (@beacon): Heads up, there's a NAS firmware update waiting. I'd like to apply it tonight."),
         Row(role: "assistant", text: "Thanks. Tonight works, but only after the backup finishes, usually around 03:00.", at: 30),
-        Row(role: "user", text: "Message from \u{1F916} Beacon (@ops): Understood. I'll hold the update until the backup is done and check in the morning.", at: 86_000),
+        Row(role: "user", text: "Message from \u{1F916} Beacon (@beacon): Understood. I'll hold the update until the backup is done and check in the morning.", at: 86_000),
         Row(role: "assistant", text: "Sounds good. I'll let you know when the backup's done.", at: 86_400),
     ] }
 
@@ -322,45 +322,83 @@ enum DemoContent {
 
     // MARK: A new message's reply
 
-    /// The reply a new message gets, streamed at a believable pace: a first paragraph, two tool steps, then
-    /// the rest. `prompt` is echoed only as a topic, never quoted at length.
-    static func replyOpening(to prompt: String) -> String {
-        "Let me take a quick look before I answer."
+    /// A scripted turn: what a message gets back, streamed at a believable pace. The onboarding tour (#388) plays the
+    /// same turns, so the tour and "Try a demo" can't drift apart: change a turn here and both change.
+    struct Turn: Sendable {
+        struct Step: Sendable {
+            let name: String        // the tool, as the card names it
+            let context: String     // what it ran, shown on the card
+            let summary: String     // the card's one line once it's done
+            let output: String      // what opening the card shows
+            /// How long it reports it took ("Ran a command · du -sh * (0.4 s)"); nil for the demo's own pace.
+            var seconds: Double? = nil
+        }
+        /// The one thing a turn asks before it does it: the card's command and description, the words around it, and
+        /// the step it runs when approved.
+        struct Approval: Sendable {
+            let ask: String
+            let command: String
+            let description: String
+            let ran: Step
+            let done: String
+            let denied: String
+        }
+        let reasoning: String
+        let opening: String
+        let steps: [Step]
+        /// Asked once per demo (`DemoGateway.approvalDue`); with it, `done` or `denied` ends the turn instead of `closing`.
+        let approval: Approval?
+        let closing: String
     }
 
-    static let replySteps: [(name: String, context: String, summary: String, output: String)] = [
-        ("search files", "notes about this", "3 notes found", "notes/ideas.md\nnotes/todo.md\nnotes/2026-10.md\n"),
-        ("terminal", "date && uptime", "ok", "Tue Oct 14 10:02:11 UTC 2026\n up 12 days, 3 users, load average: 0.21, 0.30, 0.28\n"),
-    ]
+    /// Any message: a look at two things, then an answer.
+    static let everyday = Turn(
+        reasoning: "Thinking about what would help most here.",
+        opening: "Let me take a quick look before I answer.",
+        steps: [
+            .init(name: "search files", context: "notes about this", summary: "3 notes found", output: "notes/ideas.md\nnotes/todo.md\nnotes/2026-10.md\n"),
+            .init(name: "terminal", context: "date && uptime", summary: "ok", output: "Tue Oct 14 10:02:11 UTC 2026\n up 12 days, 3 users, load average: 0.21, 0.30, 0.28\n"),
+        ],
+        approval: nil,
+        closing: """
+            Here's what I found:
 
-    static let replyClosing = """
-        Here's what I found:
+            - Your notes mention this twice, both from this month
+            - Nothing on the calendar clashes with it
+            - The machine I checked is quiet, so now is a good time
 
-        - Your notes mention this twice, both from this month
-        - Nothing on the calendar clashes with it
-        - The machine I checked is quiet, so now is a good time
+            Want me to set a reminder, or draft the next step?
+            """)
 
-        Want me to set a reminder, or draft the next step?
-        """
-
-    /// The approval a reply asks for, once per demo, on the message that asks for a cleanup (or the second
-    /// message in a chat).
-    static let approvalCommand = "rm -r /home/demo/downloads/old-installers"
-    static let approvalDescription = "Delete 12 old installers in Downloads (3.1 GB)"
-    static let approvalAsk = "I found 12 old installers in your Downloads folder, 3.1 GB in all. I'd like to remove them:"
-    static let approvalDone = "Done, 3.1 GB freed. Your Downloads folder only has this month's files now."
-    static let approvalDenied = "Understood, I'll leave them where they are."
+    /// A message that asks what's taking the space, or to clean up (or a new chat's second message): it measures, then
+    /// asks once before it deletes anything. Onboarding's beats 3 and 4, Option A as Matt approved it
+    /// (ONBOARDING-COPY-DRAFT.md): the ready-made message is "What's taking up the most space on my server?".
+    static let cleanup = Turn(
+        reasoning: "Measure first, then ask before deleting anything.",
+        opening: "",
+        steps: [
+            .init(name: "terminal", context: "du -sh *", summary: "5 folders, 6.1 GB",
+                  output: "4.2G\tlogs\n1.1G\tbackups\n640M\tmedia\n120M\tapp\n12M\tconfig\n", seconds: 0.4),
+        ],
+        approval: .init(
+            ask: "Your logs folder is the big one, at 4.2 GB. Most of it is older than a month. Want me to clear out logs over 30 days old?",
+            command: "find ./logs -mtime +30 -delete",
+            description: "Delete the logs older than 30 days (3.1 GB)",
+            ran: .init(name: "terminal", context: "find ./logs -mtime +30 -delete", summary: "3.1 GB freed", output: "", seconds: 1.8),
+            done: "Done. I cleared 3.1 GB.",
+            denied: "Understood, I'll leave the logs alone."),
+        closing: "")
 
     // MARK: Group chat
 
     static let groupName = "Weekend projects"
-    static let groupMembers = ["lab", "scribe"]
+    static let groupMembers = ["gizmo", "quill"]
     static let groupLog: [(who: String, text: String, ago: Double)] = [
         ("user", "Can you two plan the shed shelves for Saturday?", 7_200),
-        ("lab", "I'll work out the measurements and a cut list from the shed's floor plan.", 7_180),
-        ("scribe", "And I'll write it up as a one-page plan with a shopping list.", 7_160),
-        ("lab", "Cut list: four 1.8 m uprights, eight 90 cm shelves, and a box of 50 mm screws.", 7_000),
-        ("scribe", "The plan is in your Files as shed-shelves.md. It's about a morning's work.", 6_900),
+        ("gizmo", "I'll work out the measurements and a cut list from the shed's floor plan.", 7_180),
+        ("quill", "And I'll write it up as a one-page plan with a shopping list.", 7_160),
+        ("gizmo", "Cut list: four 1.8 m uprights, eight 90 cm shelves, and a box of 50 mm screws.", 7_000),
+        ("quill", "The plan is in your Files as shed-shelves.md. It's about a morning's work.", 6_900),
     ]
 
     // MARK: Files
@@ -432,23 +470,23 @@ enum DemoContent {
     }
 
     static let tasks: [BoardTask] = [
-        BoardTask(id: "t-101", title: "Move the disk scrub to Sundays", status: "done", assignee: "lab", body: "It clashed with the nightly backup.",
+        BoardTask(id: "t-101", title: "Move the disk scrub to Sundays", status: "done", assignee: "gizmo", body: "It clashed with the nightly backup.",
              summary: "Scrub now runs at 06:00 on Sundays.", age: 50_000, priority: 1),
-        BoardTask(id: "t-102", title: "Apply the NAS firmware update", status: "blocked", assignee: "ops", body: "Wait until the backup is done.",
+        BoardTask(id: "t-102", title: "Apply the NAS firmware update", status: "blocked", assignee: "beacon", body: "Wait until the backup is done.",
              summary: "Waiting for the backup to finish.", age: 86_000, priority: 1),
-        BoardTask(id: "t-103", title: "Write October's newsletter", status: "review", assignee: "scribe", body: "Intro done; three updates to fill in.",
+        BoardTask(id: "t-103", title: "Write October's newsletter", status: "review", assignee: "quill", body: "Intro done; three updates to fill in.",
              summary: "Draft ready for a read.", age: 66_000, priority: 0),
-        BoardTask(id: "t-104", title: "Plan the shed shelves", status: "done", assignee: "lab", body: nil,
+        BoardTask(id: "t-104", title: "Plan the shed shelves", status: "done", assignee: "gizmo", body: nil,
              summary: "Cut list and shopping list in Files.", age: 7_000, priority: 0),
-        BoardTask(id: "t-105", title: "Renew the reverse proxy certificate", status: "todo", assignee: "ops", body: "Expires in three weeks.",
+        BoardTask(id: "t-105", title: "Renew the reverse proxy certificate", status: "todo", assignee: "beacon", body: "Expires in three weeks.",
              summary: nil, age: 30_000, priority: 2),
-        BoardTask(id: "t-106", title: "Mock up the garden sign", status: "ready", assignee: "studio", body: "Leaf green and marigold, name about 12 cm tall.",
+        BoardTask(id: "t-106", title: "Mock up the garden sign", status: "ready", assignee: "pixel", body: "Leaf green and marigold, name about 12 cm tall.",
              summary: nil, age: 20_000, priority: 0),
         BoardTask(id: "t-107", title: "Compare travel e-readers", status: "done", assignee: "default", body: nil,
              summary: "Inkwell 7 for travel.", age: 139_000, priority: 0),
         BoardTask(id: "t-108", title: "Sort the lake trip photos", status: "triage", assignee: nil, body: "After the weekend.",
              summary: nil, age: 1_800, priority: 0),
-        BoardTask(id: "t-109", title: "Back up the router config", status: "running", assignee: "ops", body: "Export the config and store it with the others.",
+        BoardTask(id: "t-109", title: "Back up the router config", status: "running", assignee: "beacon", body: "Export the config and store it with the others.",
              summary: "Exporting the config.", age: 900, priority: 0),
     ]
 
@@ -457,7 +495,7 @@ enum DemoContent {
     static let skills: [(name: String, description: String, category: String, usage: Int)] = [
         ("trip-planner", "Plan a trip day by day, with a packing list", "life", 6),
         ("newsletter", "Draft and tidy a newsletter", "writing", 11),
-        ("home-lab-check", "Check the home servers and write a digest", "ops", 25),
+        ("home-lab-check", "Check the home servers and write a digest", "beacon", 25),
         ("budget", "Compare spending with the plan", "life", 4),
         ("palette", "Suggest colours and type for a design", "design", 3),
     ]

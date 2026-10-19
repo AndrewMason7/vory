@@ -41,7 +41,7 @@ import Testing
             #expect(!c.items.isEmpty, "\(chat.title) opened empty")
             #expect(c.resumeError == nil, "\(chat.title): \(c.resumeError ?? "")")
         }
-        let long = try await rt.openChat(storedID: DemoContent.longChatID, title: nil, profile: "ops", waitForResume: true)
+        let long = try await rt.openChat(storedID: DemoContent.longChatID, title: nil, profile: "beacon", waitForResume: true)
         #expect(long.items.count > 150)
     }
 
@@ -101,7 +101,7 @@ import Testing
         // A file read as the pictures' fallback reads it (GatewayMediaAPI), and the long chat's context ring.
         let read: GatewayMediaAPI.DataURLReply = try await api.get("/api/files/read", query: [URLQueryItem(name: "path", value: "/home/demo/trip/packing.md")])
         #expect((read.data_url ?? read.dataUrl)?.hasPrefix("data:text/markdown;base64,") == true)
-        let long = try await rt.openChat(storedID: DemoContent.longChatID, title: nil, profile: "ops", waitForResume: true)
+        let long = try await rt.openChat(storedID: DemoContent.longChatID, title: nil, profile: "beacon", waitForResume: true)
         let context = try await long.contextBreakdown()
         #expect(!context.categories.isEmpty && context.contextMax > 0)
     }
@@ -119,6 +119,70 @@ import Testing
         #if DEBUG
         #expect(await gw.tripwire.isEmpty)
         #endif
+    }
+
+    /// A chat deleted, pinned and archived from the list stays so for the demo's life: the edits go as the app sends them
+    /// (`SessionMutation`, which finds no snapshot route on the demo and sends them plainly, #467) and the list read back
+    /// agrees, with nothing on the wire. Dropped instead, the app's own reload brought a deleted chat back and put a pin
+    /// back. A fresh demo starts from its seed again.
+    @Test func aChatsDeletePinAndArchiveStayForTheDemosLife() async throws {
+        let gw = DemoGateway(pace: .quick)
+        let store = ConnectionStore(defaults: UserDefaults(suiteName: "dev.vory.tests.demogw." + UUID().uuidString)!, connections: [])
+        let rt = GatewayRuntime(connection: .demo, store: store, transport: .demo(gw))
+        await rt.start()
+        defer { Task { await rt.stop() } }
+        func rows(_ g: DemoGateway) async throws -> [String: [String: Any]] {
+            let a = await g.rest(method: "GET", url: URL(string: "http://\(DemoGateway.host)/api/sessions?archived=include")!, body: Data(), contentType: "")
+            let list = try #require((try JSONSerialization.jsonObject(with: a.body) as? [String: Any])?["sessions"] as? [[String: Any]])
+            return Dictionary(uniqueKeysWithValues: list.compactMap { r in (r["id"] as? String).map { ($0, r) } })
+        }
+        let before = try await rows(gw)
+        let loose = DemoContent.chats.filter { !$0.pinned }
+        try #require(loose.count >= 2)
+        let gone = DemoContent.chats[0], pin = loose[0], box = loose[1]
+        try #require(gone.id != pin.id && gone.id != box.id)
+
+        try await SessionMutation.delete(rt.api, id: gone.id, profile: gone.bot)
+        try await SessionMutation.patch(rt.api, id: pin.id, profile: pin.bot, fields: ["pinned": .bool(true)])
+        try await SessionMutation.patch(rt.api, id: box.id, profile: box.bot, fields: ["archived": .bool(true)])
+        let after = try await rows(gw)
+        #expect(after[gone.id] == nil, "the deleted chat is listed again")
+        #expect(after.count == before.count - 1)
+        #expect(after[pin.id]?["pinned"] as? Bool == true, "the pin did not stay")
+        #expect(after[box.id]?["archived"] as? Bool == true, "the archive did not stay")
+        // Unpinned again; and a delete of the chat already gone counts as done, as a Hermes before the fence answers 404.
+        try await SessionMutation.patch(rt.api, id: pin.id, profile: pin.bot, fields: ["pinned": .bool(false)])
+        #expect(try await rows(gw)[pin.id]?["pinned"] as? Bool == false)
+        try await SessionMutation.delete(rt.api, id: gone.id, profile: gone.bot)
+        #if DEBUG
+        let trips = await gw.tripwire
+        #expect(trips.isEmpty, "the edits tripped \(trips)")
+        #endif
+
+        // A fresh demo: its seed, untouched.
+        let fresh = try await rows(DemoGateway(pace: .quick))
+        #expect(fresh.count == before.count && fresh[gone.id] != nil)
+        #expect(fresh[pin.id]?["pinned"] as? Bool == false && fresh[box.id]?["archived"] as? Bool == false)
+    }
+
+    /// The list leaves archived chats out unless asked for, as Hermes does (#474): `archived=only` lists them alone and
+    /// `archived=include` lists both, marked, so the app's Archived filter gets what it asks for.
+    @Test func theListHonoursArchivedAsHermesDoes() async throws {
+        let gw = DemoGateway(pace: .quick)
+        func ids(_ query: String) async throws -> Set<String> {
+            let a = await gw.rest(method: "GET", url: URL(string: "http://\(DemoGateway.host)/api/sessions\(query)")!, body: Data(), contentType: "")
+            let list = try #require((try JSONSerialization.jsonObject(with: a.body) as? [String: Any])?["sessions"] as? [[String: Any]])
+            return Set(list.compactMap { $0["id"] as? String })
+        }
+        let all = Set(DemoContent.chats.map(\.id))
+        let box = DemoContent.chats[1].id
+        let archive = try JSONSerialization.data(withJSONObject: ["archived": true])
+        #expect(await gw.rest(method: "PATCH", url: URL(string: "http://\(DemoGateway.host)/api/sessions/\(box)")!,
+                              body: archive, contentType: "application/json").status == 200)
+        #expect(try await ids("") == all.subtracting([box]), "archived listed by default")
+        #expect(try await ids("?archived=exclude") == all.subtracting([box]))
+        #expect(try await ids("?archived=only") == [box])
+        #expect(try await ids("?archived=include") == all)
     }
 
     /// The NAS chat's tool steps keep the names its history gives them, in order: #387's naming reads a row's own name
@@ -184,6 +248,8 @@ import Testing
         }
         #expect(await get("/api/status") == 200)
         #expect(await get("/api/plugins/kanban/board") == 200)
+        // The snapshot asked before a chat's delete, pin or archive: no such route, as on a Hermes before the fence (#467).
+        #expect(await get("/api/sessions/\(DemoContent.chats[0].id)/mutation-snapshot") == 404)
         #expect(await gw.tripwire.isEmpty)
         #expect(await get("/api/no-such-route") == 200)
         #expect(await get("/api/no-such-route") == 200)
@@ -246,10 +312,59 @@ import Testing
         var words: [String] = DemoContent.bots.flatMap { [$0.display, $0.title] }
         words += DemoContent.chats.flatMap { [$0.title, $0.preview] + $0.rows().map(\.text) + $0.rows().compactMap(\.reasoning) }
         words += DemoContent.files.compactMap(\.text) + DemoContent.tasks.map(\.title) + DemoContent.groupLog.map(\.text)
-        words += [DemoContent.replyClosing, DemoContent.approvalAsk, DemoContent.approvalDone, DemoContent.approvalDenied]
+        for turn in [DemoContent.everyday, DemoContent.cleanup] {
+            words += [turn.reasoning, turn.opening, turn.closing] + turn.steps.flatMap { [$0.context, $0.summary, $0.output] }
+            if let a = turn.approval { words += [a.ask, a.description, a.done, a.denied, a.ran.summary] }
+        }
         for w in words {
             #expect(!w.contains("\u{2014}"), "an em dash in: \(w.prefix(60))")
             #expect(!w.contains("http://") && !w.contains("https://"), "a link in: \(w.prefix(60))")
         }
+    }
+
+    /// Scheduled tasks in the demo (#428's + on Scheduled Tasks): none at first; a task made with the + is listed, and its
+    /// page's actions (pause, Run now, Save, delete) act on it in memory; a create without a schedule is refused as the
+    /// gateway refuses it (422).
+    @Test func scheduledTasksAreKeptForTheDemosLife() async throws {
+        let rt = runtime()
+        await rt.start()
+        defer { Task { await rt.stop() } }
+        let empty: JSONValue = try await rt.api.get("/api/cron/jobs")
+        #expect(empty["jobs"]?.arrayValue?.isEmpty == true)
+        let targets: JSONValue = try await rt.api.get("/api/cron/delivery-targets")
+        #expect(targets["targets"]?.arrayValue?.first?["id"]?.stringValue == "local")
+
+        let made: JSONValue = try await rt.api.send("POST", "/api/cron/jobs", profile: "gizmo", json: .object([
+            "name": .string("Morning check"), "schedule": .string("0 9 * * *"), "prompt": .string("Check last night's backups."),
+            "deliver": .string("local")]))
+        let id = try #require(made["job_id"]?.stringValue)
+        #expect(made["profile"]?.stringValue == "gizmo")
+        let listed: JSONValue = try await rt.api.get("/api/cron/jobs")
+        #expect(listed["jobs"]?.arrayValue?.map { $0["job_id"]?.stringValue } == [id])
+
+        do {
+            let _: JSONValue = try await rt.api.send("POST", "/api/cron/jobs", json: .object(["name": .string("No time given")]))
+            Issue.record("a task without a schedule was made")
+        } catch HermesAPIError.http(let status, _) {
+            #expect(status == 422)
+        }
+
+        let paused: JSONValue = try await rt.api.send("POST", "/api/cron/jobs/\(id)/pause", body: EmptyBody())
+        #expect(paused["enabled"]?.boolValue == false)
+        let ran: JSONValue = try await rt.api.send("POST", "/api/cron/jobs/\(id)/trigger", body: EmptyBody())
+        #expect(ran["last_status"]?.stringValue == "ok" && ran["last_run_at"]?.stringValue != nil)
+        let _: JSONValue = try await rt.api.send("PUT", "/api/cron/jobs/\(id)", json: .object(["updates": .object(["schedule": .string("30 8 * * 1")])]))
+        let one: JSONValue = try await rt.api.get("/api/cron/jobs/\(id)")
+        #expect(one["schedule"]?.stringValue == "30 8 * * 1")
+        let _: JSONValue = try await rt.api.send("DELETE", "/api/cron/jobs/\(id)", body: EmptyBody())
+        let after: JSONValue = try await rt.api.get("/api/cron/jobs")
+        #expect(after["jobs"]?.arrayValue?.isEmpty == true)
+
+        // A fresh demo has none (nothing outlives the demo it was made in).
+        let fresh = runtime()
+        await fresh.start()
+        defer { Task { await fresh.stop() } }
+        let none: JSONValue = try await fresh.api.get("/api/cron/jobs")
+        #expect(none["jobs"]?.arrayValue?.isEmpty == true)
     }
 }

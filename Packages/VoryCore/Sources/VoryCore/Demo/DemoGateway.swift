@@ -12,6 +12,10 @@ public actor DemoGateway {
     /// How fast a reply streams: as a real bot does, for reviewers and "Try a demo", or quicker for the tour.
     public enum Pace: Sendable { case real, quick }
     public let pace: Pace
+    /// The answers the demo's one approval offers, in the order the card shows them: all four for "Try a demo", only
+    /// Allow once and Deny for the onboarding tour's card (#388, Matt's pick), which passes `["once", "deny"]`.
+    public static let allApprovalChoices = ["once", "session", "always", "deny"]
+    public let approvalChoices: [String]
     /// When the demo started: the chats' times count back from here.
     let started: Double
     let version = "0.21.4"
@@ -57,6 +61,8 @@ public actor DemoGateway {
     var roomLogs: [String: [[String: Any]]] = [:]
     var board: [[String: Any]]
     var boardCursor = 100
+    /// Scheduled tasks made in the demo (`cronRoute`): none at first, gone when the demo ends.
+    var cronJobs: [[String: Any]] = []
     var uploads: [String: (mime: String, data: Data)] = [:]
     /// The app's sockets: the gateway's, and the board's events.
     var sockets: [ObjectIdentifier: DemoSocketPipe] = [:]
@@ -65,14 +71,17 @@ public actor DemoGateway {
     var waiting: [String: CheckedContinuation<String?, Never>] = [:]
     var sent = 0
     var rng = DemoRandom(seed: 392)
+    /// The demo asks for one approval, once (`approvalDue`).
+    var approvalAsked = false
     #if DEBUG
     /// What the demo answered without having it (`trip`), in the order it was first asked for.
     private(set) var tripwire: [String] = []
     #endif
     static let log = Logger(subsystem: "Vory", category: "demo")
 
-    public init(pace: Pace = .real, now: Date = Date()) {
+    public init(pace: Pace = .real, approvalChoices: [String] = DemoGateway.allApprovalChoices, now: Date = Date()) {
         self.pace = pace
+        self.approvalChoices = approvalChoices
         let t = now.timeIntervalSince1970
         started = t
         stored = DemoContent.chats.map {
@@ -247,7 +256,7 @@ extension DemoGateway {
         case "profiles.list":
             return .success(["profiles": DemoContent.bots.map { b -> [String: Any] in
                 var r: [String: Any] = ["name": b.name, "is_default": b.name == "default"]
-                if b.name == "lab" {
+                if b.name == "gizmo" {
                     r["canonical_session"] = ["id": DemoContent.botChatID, "resolved_id": DemoContent.botChatID, "title": "Bot Chat",
                                               "message_count": messageCount(DemoContent.botChatID)]
                 }
@@ -434,6 +443,7 @@ extension DemoGateway {
 
     func route(method: String, path: String, query: [String: String], payload: [String: Any], body: Data, contentType: String) -> (Int, Any) {
         if path.hasPrefix("/api/plugins/kanban") { return boardRoute(method: method, path: path, query: query, payload: payload) }
+        if path.hasPrefix("/api/cron/"), let answer = cronRoute(method: method, path: path, query: query, payload: payload) { return answer }
         if method != "GET", let answer = liveRoute(method: method, path: path, query: query, payload: payload, body: body, contentType: contentType) {
             return answer
         }
@@ -456,7 +466,14 @@ extension DemoGateway {
         case "/api/profiles/active":
             return (200, ["active": "default", "current": "default"])
         case "/api/sessions":
-            let rows = stored.filter { !$0.archived }.map(row)
+            // Archived chats as Hermes lists them (#474): left out unless asked for, `archived=only` for them alone,
+            // `archived=include` for both, marked.
+            let rows: [[String: Any]]
+            switch query["archived"] ?? "exclude" {
+            case "only": rows = stored.filter(\.archived).map(row)
+            case "include": rows = stored.map(row)
+            default: rows = stored.filter { !$0.archived }.map(row)
+            }
             return (200, ["sessions": rows, "total": rows.count, "limit": 100, "offset": 0])
         case "/api/sessions/search":
             let q = (query["q"] ?? "").lowercased()
@@ -464,7 +481,7 @@ extension DemoGateway {
         case "/api/sessions/stats":
             var by: [String: Int] = [:]
             for s in stored { by[s.source, default: 0] += 1 }
-            return (200, ["total": stored.count, "active_store": stored.count, "archived": 0,
+            return (200, ["total": stored.count, "active_store": stored.count, "archived": stored.filter(\.archived).count,
                           "messages": stored.reduce(0) { $0 + messageCount($1.id) }, "by_source": by])
         case "/api/model/options":
             return (200, ["model": DemoContent.model, "provider": DemoContent.provider, "providers": [
@@ -495,8 +512,6 @@ extension DemoGateway {
             ] as [[String: Any]])
         case "/api/mcp/servers":
             return (200, ["servers": []])
-        case "/api/cron/jobs":
-            return (200, ["jobs": [], "count": 0])
         case "/api/env":
             return (200, [:] as [String: Any])
         case "/api/messaging/platforms":
@@ -529,6 +544,9 @@ extension DemoGateway {
             let b = bot(parts[2])
             return (200, ["content": "# \(b?.display ?? parts[2])\n\nYou help with \(b?.title.lowercased() ?? "everyday things"). Be brief, ask before changing anything, and say what you changed.", "exists": true])
         }
+        // A chat's mutation snapshot, which the app asks for before a delete, pin or archive (#467): the demo answers as a
+        // Hermes from before the fence does, so the edit goes as it always went (taken by `liveRoute`) with no revision.
+        if parts.count == 4, parts[1] == "sessions", parts[3] == "mutation-snapshot" { return (404, ["detail": "Not Found"]) }
         // /api/sessions/<id> and /api/sessions/<id>/messages
         if parts.count >= 3, parts[1] == "sessions", let s = stored.first(where: { $0.id == parts[2] }) {
             if parts.count == 4, parts[3] == "messages" {
