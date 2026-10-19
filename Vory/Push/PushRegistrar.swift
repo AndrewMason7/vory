@@ -343,7 +343,7 @@ enum LocalNotifier {
         var approveOptions: UNNotificationActionOptions = [.authenticationRequired]
         var denyOptions: UNNotificationActionOptions = [.destructive, .authenticationRequired]
         if ApprovalConfirm.isOn { approveOptions.insert(.foreground); denyOptions.insert(.foreground) }
-        let approve = UNNotificationAction(identifier: approveOnceAction, title: "Approve once", options: approveOptions)
+        let approve = UNNotificationAction(identifier: approveOnceAction, title: "Allow once", options: approveOptions)
         let deny = UNNotificationAction(identifier: denyAction, title: "Deny", options: denyOptions)
         let approval = UNNotificationCategory(identifier: approvalCategory, actions: [approve, deny], intentIdentifiers: [], options: [])
         let clarify = UNNotificationCategory(identifier: clarifyCategory, actions: [], intentIdentifiers: [], options: [])

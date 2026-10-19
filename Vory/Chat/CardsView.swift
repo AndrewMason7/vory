@@ -50,8 +50,8 @@ struct ApprovalCardView: View {
             // What each answer covers, so "Always" is never a surprise: it is a rule on this
             // bot's gateway profile, not the one command, and it lives on until revoked.
             Text(scopeLine).font(.caption2).foregroundStyle(.secondary)
-            // Four choices do not fit on one line at iPhone width, and a wrapped "Ses-sion" looks
-            // broken, so fall back to a 2x2 grid when the row cannot fit.
+            // Four choices do not fit on one line at iPhone width, and a wrapped name looks broken, so fall back to
+            // a 2x2 grid when the row cannot fit.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { choiceButtons }
                 Grid(horizontalSpacing: 8, verticalSpacing: 8) {
@@ -83,14 +83,16 @@ struct ApprovalCardView: View {
 
     private var scopeLine: String {
         let who = botName.isEmpty ? "this bot" : botName
-        var parts = ["Once: this command only."]
-        if approval.offeredChoices.contains("session") { parts.append("Session: \(approval.alwaysScope) in this chat.") }
-        if approval.offeredChoices.contains("always") { parts.append("Always: \(approval.alwaysScope) for \(who), every chat, until revoked in Settings › Approvals.") }
+        var parts = ["Allow once: this command only."]
+        if approval.offeredChoices.contains("session") { parts.append("Allow for this chat: \(approval.alwaysScope) in this chat.") }
+        if approval.offeredChoices.contains("always") { parts.append("Always allow: \(approval.alwaysScope) for \(who), every chat, until revoked in Settings › Approvals.") }
         return parts.joined(separator: " ")
     }
 
+    /// One set of names everywhere (judgement call #36): "session" was a word for strangers to puzzle over, and in Vory a
+    /// session is a chat. "Always allow…" asks first (the alert above).
     private func label(_ c: String) -> String {
-        switch c { case "once": return "Once"; case "session": return "Session"; case "always": return "Always"; case "deny": return "Deny"; default: return c.capitalized }
+        switch c { case "once": return "Allow once"; case "session": return "Allow for this chat"; case "always": return "Always allow…"; case "deny": return "Deny"; default: return c.capitalized }
     }
 }
 

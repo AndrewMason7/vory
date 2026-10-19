@@ -573,7 +573,7 @@ final class HandsFreeSession {
                 // The model says it in its own words; nothing is ever answered by voice.
                 state.cardsPending = cards
                 if cards, let card = chat.cards.first {
-                    live?.send(text: "System note: an approval is needed on the screen before the bot can go on: \(Self.summary(of: card)). Tell the user briefly to approve it on their screen; the answer comes after.")
+                    live?.send(text: "System note: an approval is needed on the screen before the bot can go on: \(Self.summary(of: card)). Tell the user briefly to allow or deny it on their screen; the answer comes after.")
                     setLivePhase(.needsApproval)
                 } else if state.phase == .needsApproval {
                     setLivePhase(liveIdlePhase)

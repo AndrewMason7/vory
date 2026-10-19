@@ -54,7 +54,7 @@ struct ConversationView: View {
     @State private var sentInitial = false
     @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
-    private var confirmTitle: String { confirming?.choice == "deny" ? "Deny this action?" : "Approve this action?" }
+    private var confirmTitle: String { confirming?.choice == "deny" ? "Deny this action?" : "Allow this action?" }
     /// Read where the bot's name shows, so a name saved on its card (#315) redraws the pill.
     @AppStorage(BotNames.storageKey) private var namesRaw = ""
     private func botLabel(_ chat: ChatSession) -> String { _ = namesRaw; return chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
@@ -394,7 +394,7 @@ struct ConversationView: View {
     }
     @ViewBuilder private func confirmButtons(chat: ChatSession) -> some View {
         let deny = confirming?.choice == "deny"
-        Button(deny ? "Deny" : "Approve once", role: deny ? .destructive : nil) {
+        Button(deny ? "Deny" : "Allow once", role: deny ? .destructive : nil) {
             if let c = confirming, let card = chat.approvalCard(named: [c.cardID]) {
                 Task { await chat.respond(card: card, result: ["choice": .string(c.choice)]) }
             }

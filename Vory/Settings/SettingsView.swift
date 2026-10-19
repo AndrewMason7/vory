@@ -458,7 +458,7 @@ struct SecurityView: View {
                 }
                 .onChange(of: confirmMode) { _, _ in LocalNotifier.registerCategories() }
             } header: { Text("Approvals") } footer: {
-                Text("Approve or Deny on \(DeviceWords.isMac ? "a notification" : "the Live Activity or a notification") opens the chat and, for the actions that matter, asks once more before it counts. Risky actions are writes, deletes and spends: a command that removes or changes files, pushes or deploys, installs, escalates, sends or pays for something, plus anything the smart guardian flagged. Reads and lookups apply at once, so the second question stays rare enough to mean something. The card's own buttons in the chat never ask twice.")
+                Text("Allow once or Deny on \(DeviceWords.isMac ? "a notification" : "the Live Activity or a notification") opens the chat and, for the actions that matter, asks once more before it counts. Risky actions are writes, deletes and spends: a command that removes or changes files, pushes or deploys, installs, escalates, sends or pays for something, plus anything the smart guardian flagged. Reads and lookups apply at once, so the second question stays rare enough to mean something. The card's own buttons in the chat never ask twice.")
             }
         }
     }

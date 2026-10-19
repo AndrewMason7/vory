@@ -850,7 +850,7 @@ struct CompanionView: View {
             Button("Uninstall", role: .destructive) { Task { resetting = true; if let rt { await setup.uninstall(runtime: rt, model: model) }; resetting = false } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The plugin is disabled, its service is stopped and its files are deleted from the gateway (a bot runs the removal — approve it in the chat that opens). \(DeviceWords.CompanionBrings) stop until it is installed again.")
+            Text("The plugin is disabled, its service is stopped and its files are deleted from the gateway (a bot runs the removal — allow it in the chat that opens). \(DeviceWords.CompanionBrings) stop until it is installed again.")
         }
         .task {
             guard let rt else { return }

@@ -1,7 +1,7 @@
 import XCTest
 
 /// The approval card is the one way to answer an approval (1.5 (26)): its buttons are exactly the
-/// choices the gateway offers, in that order for VoiceOver; "Always" asks first and Cancel there
+/// choices the gateway offers, in that order for VoiceOver; "Always allow…" asks first and Cancel there
 /// sends nothing; a long press on the card opens no menu (until 26 the card had one listing all
 /// four choices, Always without a question, which never opened inside the dock's glass anyway).
 /// The mock's default turn ends at an approval offering all four; with "once or deny" in the
@@ -13,7 +13,7 @@ import XCTest
 @MainActor
 final class ApprovalCardUITests: XCTestCase {
     private var app: XCUIApplication!
-    private let names = ["Once", "Session", "Always", "Deny"]
+    private let names = ["Allow once", "Allow for this chat", "Always allow…", "Deny"]
 
     private func shot(_ name: String) {
         let s = XCUIScreen.main.screenshot()
@@ -69,7 +69,7 @@ final class ApprovalCardUITests: XCTestCase {
         composer.tap()
         composer.typeText(prompt)
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 5), "no send").tap()
-        let card = app.buttons["Once"].firstMatch.waitForExistence(timeout: 90)
+        let card = app.buttons["Allow once"].firstMatch.waitForExistence(timeout: 90)
         if !card { shot("approval-card-missing") }
         XCTAssertTrue(card, "no approval card")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
@@ -100,18 +100,21 @@ final class ApprovalCardUITests: XCTestCase {
         // A long press on the card opens nothing and answers nothing.
         let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Approval needed'")).firstMatch
         XCTAssertTrue(title.exists, "no card title to hold")
+        let menuNames = ["Allow once", "Allow for this chat", "Always allow…", "Allow for this session", "Always allow"]
+        let heldBefore = menuNames.map { app.buttons.matching(NSPredicate(format: "label == %@", $0)).count }
         title.press(forDuration: 1.0)
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         shot("approval-card-held")
-        for item in ["Allow once", "Allow for this session", "Always allow", "Always allow…"] {
-            XCTAssertFalse(app.buttons[item].firstMatch.exists, "a long press opened a menu with \"\(item)\"")
+        // The card's own buttons carry the same names now (judgement call #36), so a menu shows as more of them.
+        for (item, count) in zip(menuNames, heldBefore) {
+            XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", item)).count, count, "a long press opened a menu with \"\(item)\"")
         }
         XCTAssertEqual(cardChoices(), names, "the long press changed the card")
 
-        // "Always" asks first, saying what it covers; Cancel sends nothing, the card still waits.
-        app.buttons["Always"].firstMatch.tap()
+        // "Always allow…" asks first, saying what it covers; Cancel sends nothing, the card still waits.
+        app.buttons["Always allow…"].firstMatch.tap()
         let confirm = app.alerts.firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Always did not ask first")
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Always allow… did not ask first")
         XCTAssertTrue(confirm.label.hasPrefix("Always allow"), "the confirmation reads \(confirm.label)")
         shot("approval-always-confirm")
         confirm.buttons["Cancel"].tap()
@@ -129,7 +132,7 @@ final class ApprovalCardUITests: XCTestCase {
         app.terminate()
         try launch(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
         try openChat()
-        XCTAssertTrue(app.buttons["Once"].firstMatch.waitForExistence(timeout: 30), "no waiting card at the largest text size")
+        XCTAssertTrue(app.buttons["Allow once"].firstMatch.waitForExistence(timeout: 30), "no waiting card at the largest text size")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         XCTAssertEqual(cardChoices(), names, "the card's choices at the largest text size")
         for n in names { XCTAssertTrue(app.buttons[n].firstMatch.isHittable, "\"\(n)\" is not on screen at the largest text size") }
@@ -137,12 +140,12 @@ final class ApprovalCardUITests: XCTestCase {
     }
 
     func testTheCardShowsOnlyWhatTheGatewayOffers() throws {
-        // The mock offers only Once and Deny for this prompt.
+        // The mock offers only Allow once and Deny for this prompt.
         try approvalOnScreen("Clean up the old logs, once or deny")
-        XCTAssertEqual(cardChoices(), ["Once", "Deny"], "the card offers other choices than the gateway")
-        let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Once:'")).firstMatch
+        XCTAssertEqual(cardChoices(), ["Allow once", "Deny"], "the card offers other choices than the gateway")
+        let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Allow once:'")).firstMatch
         XCTAssertTrue(note.exists, "no line saying what the choices mean")
-        XCTAssertFalse(note.label.contains("Session:") || note.label.contains("Always:"), "the card explains choices it does not offer: \(note.label)")
+        XCTAssertFalse(note.label.contains("Allow for this chat:") || note.label.contains("Always allow:"), "the card explains choices it does not offer: \(note.label)")
         shot("approval-card-once-or-deny")
     }
 }

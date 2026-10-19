@@ -100,7 +100,7 @@ struct HandsFreeView: View {
                 if state.phase == .thinking, let goal = ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine {
                     Text(goal).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.center)
                 } else if state.phase == .needsApproval {
-                    Text("Approve on screen. The loop waits.").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Allow or deny on screen. The loop waits.").font(.subheadline).foregroundStyle(.secondary)
                 } else if state.phase == .paused {
                     Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 } else if let note = state.note {

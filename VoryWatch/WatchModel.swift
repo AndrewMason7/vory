@@ -575,7 +575,7 @@ enum WatchNotifier {
     }
 
     static func registerCategories() {
-        let approve = UNNotificationAction(identifier: approveOnceAction, title: "Approve once", options: [])
+        let approve = UNNotificationAction(identifier: approveOnceAction, title: "Allow once", options: [])
         let deny = UNNotificationAction(identifier: denyAction, title: "Deny", options: [.destructive])
         let reply = UNTextInputNotificationAction(identifier: replyAction, title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Message")
         UNUserNotificationCenter.current().setNotificationCategories([

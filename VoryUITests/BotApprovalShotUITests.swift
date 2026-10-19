@@ -92,7 +92,7 @@ final class BotApprovalShotUITests: XCTestCase {
             hideKeyboard()
             settle(1)
             shot("motion-\(scheme)-3-approval")
-            let once = app.buttons.matching(NSPredicate(format: "label == 'Once'")).firstMatch
+            let once = app.buttons.matching(NSPredicate(format: "label == 'Allow once'")).firstMatch
             XCTAssertTrue(once.waitForExistence(timeout: 5), "no Once button")
             once.tap()
             XCTAssertTrue(text("filesystem is back").firstMatch.waitForExistence(timeout: 60), "the turn did not finish")

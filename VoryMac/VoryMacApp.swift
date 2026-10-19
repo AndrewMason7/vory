@@ -159,7 +159,7 @@ struct VoryMacApp: App {
                 Button("Stop") { if let c = frontChat { Task { await c.stop() } } }
                     .keyboardShortcut(".", modifiers: .command)
                     .disabled(frontChat?.isRunning != true)
-                Button("Approve Once") { answerApproval("once") }
+                Button("Allow Once") { answerApproval("once") }
                     .keyboardShortcut("y", modifiers: [.command, .shift])
                     .disabled(pendingApproval == nil)
                 Button("Deny") { answerApproval("deny") }

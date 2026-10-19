@@ -438,7 +438,9 @@ struct ApprovalButtons: View {
     var body: some View {
         VStack(spacing: 6) {
             Link(destination: url("once")) {
-                Text("Approve").font(.caption.weight(.semibold)).foregroundStyle(.black)
+                // One line, a little smaller rather than cut or wrapped: at the largest text sizes "Allow once" is about
+                // 116 pt wide in its capsule, beside the island's sensor (#36).
+                Text("Allow once").font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8).foregroundStyle(.black)
                     .padding(.horizontal, 12).padding(.vertical, 6).frame(minWidth: 76)
                     .background(Color.yellow, in: .capsule)
             }
