@@ -45,6 +45,7 @@ enum BotColors {
     }
 
     static func hex(for profile: String, overrides: [String: String]? = nil) -> String {
+        if let h = DemoLooks.color(for: profile) { return h }
         if let h = (overrides ?? stored())[profile], !h.isEmpty { return h }
         return defaultHex(for: profile)
     }
@@ -57,6 +58,7 @@ enum BotColors {
     }
 
     @MainActor static func set(_ color: Color, for profile: String) {
+        if DemoLooks.keep(color: color.hexString, for: profile) { return }
         var map = stored()
         map[profile] = color.hexString
         save(map)
@@ -105,6 +107,10 @@ struct BotAvatar: View {
     }
     private var choice: BotAvatarChoice {
         if let override { return override }
+        // The demo's bots wear the demo's looks while it runs (`DemoLooks`), as `BotAvatarStore.choice` has them: read
+        // from the stored map here, a live face (working, large, drawn, or just tapped) took the stored body in the
+        // demo's colour, and a bot changed shape as it started work.
+        if let demo = DemoLooks.avatar(for: profile) { return BotAvatarChoice(raw: BotAvatarStore.effective(demo, glassAll: glassAll)) }
         let m = BotLookMaps.map(avatarsRaw)
         return BotAvatarChoice(raw: BotAvatarStore.effective(m[profile] ?? "", glassAll: glassAll))
     }

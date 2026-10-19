@@ -335,6 +335,30 @@ final class AppModel {
 
     var hasConnections: Bool { !store.connections.isEmpty || store.demo != nil }
 
+    // MARK: Demo mode (#392)
+
+    /// Whether "Try a demo" can start it here: always, unless the demo is already running. Onboarding (#388) and the first
+    /// screen's button ask this and call `startDemo()`, and nothing else of the demo.
+    var demoAvailable: Bool { !isInDemo }
+    /// The demo is the gateway in use.
+    var isInDemo: Bool { store.demo != nil }
+
+    /// Switches to the demo: the built-in gateway with its bots and chats, no server and no network. The saved gateway in
+    /// use, if any, stops and stays saved; `endDemo()` brings it back.
+    func startDemo() async {
+        guard demoAvailable else { return }
+        await activate(.demo)
+    }
+
+    /// Leaves the demo: its runtime stops (its files for the moment go with it), its looks go, and the saved gateway that
+    /// was in use comes back, or the first screen when there is none.
+    func endDemo() async {
+        guard isInDemo else { return }
+        await deactivate()
+        store.leaveDemo()
+        if let c = store.active { await activate(c) }
+    }
+
     #if DEBUG
     /// `-vory-show-signin`: the gateway in use is treated as needing a sign-in, so the banner
     /// and the sheet can be looked at without signing anything out.
@@ -407,6 +431,8 @@ final class AppModel {
             await rt.stop()
         }
         store.activeConnectionID = connection.id
+        // The demo's bots wear its looks while it runs, in memory only.
+        DemoLooks.set(on: connection.isDemo)
         // The demo (#392) runs on its own gateway inside the app, and registers nowhere for push.
         let rt = GatewayRuntime(connection: connection, store: store, transport: connection.isDemo ? .demo(DemoGateway()) : .network)
         if !rt.isEphemeral { rt.pushRegistrar = push }
@@ -512,6 +538,7 @@ final class AppModel {
     func deactivate() async {
         await runtime?.stop()
         runtime = nil
+        DemoLooks.set(on: false)
         ChatGoals.shared.attach(nil)
     }
 

@@ -88,7 +88,10 @@ struct SettingsView: View {
                             HStack(spacing: 12) {
                                 GatewayTile()
                                 VStack(alignment: .leading) {
-                                    Text(model.runtime?.connection.name ?? "No gateway").font(.headline)
+                                    HStack(spacing: 6) {
+                                        Text(model.runtime?.connection.name ?? "No gateway").font(.headline)
+                                        if model.isInDemo { DemoTag() }
+                                    }
                                     // The address in use: with a backup (#283), the one that answered.
                                     Text(model.runtime.map { rt in [rt.addressLabel, rt.address.description].compactMap { $0 }.joined(separator: " · ") } ?? "Add a gateway").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
@@ -98,6 +101,20 @@ struct SettingsView: View {
                             .padding(.vertical, 4)
                         }
                         .accessibilityIdentifier("settings.row.gateways")
+                        // Demo mode (#392): the way out, and the way to a gateway of one's own; with a gateway saved, the
+                        // way in (it switches back with Leave demo).
+                        if model.isInDemo {
+                            Button { Task { await model.endDemo() } } label: { Label("Leave demo", systemImage: "rectangle.portrait.and.arrow.right") }
+                                .accessibilityIdentifier("settings.leaveDemo")
+                            NavigationLink { GatewayFormView(existing: nil).pushedPage(keepsOwnBar: true) } label: {
+                                Label("Connect your gateway", systemImage: "network")
+                            }
+                            .accessibilityIdentifier("settings.connectGateway")
+                        } else if !model.store.connections.isEmpty {
+                            Button { Task { await model.startDemo() } } label: { Label("Try the demo", systemImage: "sparkles") }
+                                .accessibilityHint("Opens Vory with demo bots. Leave demo in Settings brings your gateway back.")
+                                .accessibilityIdentifier("settings.tryDemo")
+                        }
                         if let rt = model.runtime, !rt.profiles.isEmpty {
                             Picker("Profile", selection: Binding(get: { rt.selectedProfile ?? "" }, set: { rt.selectedProfile = $0 })) {
                                 ForEach(rt.profiles) { p in

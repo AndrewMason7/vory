@@ -142,6 +142,8 @@ final class HandsFreeSession {
     // MARK: Start and end
 
     func start(chat: ChatSession) {
+        // Demo mode (#392) has no voice: it needs a real provider, through a gateway of one's own.
+        if chat.runtime.isEphemeral { chat.banner = "Connect a gateway to use voice."; return }
         if isActive { end() }
         // The session follows the chat's turn through observation, with the app away too
         // (a locked phone): the chat keeps telling it, and tells now what it held back.

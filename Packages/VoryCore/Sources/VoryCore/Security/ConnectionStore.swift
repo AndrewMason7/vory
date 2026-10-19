@@ -33,6 +33,9 @@ public final class ConnectionStore {
     /// other device ever switches to it.
     public private(set) var demo: GatewayConnection?
 
+    /// Leaves the demo: the saved gateway that was in use before it (kept all along) is the one in use again.
+    public func leaveDemo() { demo = nil }
+
     public convenience init() {
         self.init(defaults: .standard, connections: Keychain.getCodable([GatewayConnection].self, account: Self.indexAccount) ?? [])
     }

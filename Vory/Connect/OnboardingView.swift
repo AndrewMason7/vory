@@ -91,6 +91,14 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(.glass)
                     .accessibilityIdentifier("onboarding.restore")
+                    // Demo mode (#392): Vory with the demo's bots and chats, no gateway needed (App Review's way in too).
+                    Button { Task { await model.startDemo() } } label: {
+                        Label("Try a demo", systemImage: "sparkles").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(!model.demoAvailable)
+                    .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
+                    .accessibilityIdentifier("onboarding.tryDemo")
                 }
             }
             .frame(maxWidth: 380)

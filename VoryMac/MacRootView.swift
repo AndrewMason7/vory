@@ -508,7 +508,8 @@ private struct GatewayFooter: View {
     }
 
     var body: some View {
-        Button { editing = true } label: {
+        // In the demo (#392) there is no gateway form to open: the click goes to Settings, where Leave demo is.
+        Button { if model.isInDemo { model.selectedTab = .settings } else { editing = true } } label: {
             VStack(spacing: 4) {
                 BotFaceView(spec: liveVory, size: 30, active: model.runtime != nil && BotAmbient.shared.decorativeActive, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
                     .overlay(alignment: .bottomTrailing) {
@@ -517,6 +518,7 @@ private struct GatewayFooter: View {
                             .offset(x: 2, y: 2)
                     }
                 Text(name).font(.caption2.weight(.medium)).lineLimit(1).foregroundStyle(.secondary)
+                if model.isInDemo { DemoTag() }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
@@ -524,8 +526,8 @@ private struct GatewayFooter: View {
         }
         .buttonStyle(.plain)
         .help("\(name) · \(state)\nClick to edit the gateway")
-        .accessibilityLabel("Gateway \(name), \(state)")
-        .accessibilityHint("Edits the gateway.")
+        .accessibilityLabel("Gateway \(name)\(model.isInDemo ? ", demo" : ""), \(state)")
+        .accessibilityHint(model.isInDemo ? "Opens Settings, to leave the demo." : "Edits the gateway.")
         .accessibilityIdentifier("rail.gateway")
         .disabled(model.store.active == nil)
         .sheet(isPresented: $editing) { GatewayFormSheet(existing: model.store.active).withAppModel() }
