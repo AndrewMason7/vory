@@ -71,6 +71,8 @@ struct RootView: View {
             if VoiceOverOracle.isOn { VoiceOverOracle.Probe().frame(width: 1, height: 1).allowsHitTesting(false) }
             // `-vory-card-probe`: where a toggled card's top was at each frame, for the card checks (#437).
             if CardMotionProbe.isOn { CardMotionProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            // `-vory-coldopen-probe`: how the thread moved as the last chat opened, for the open checks (#449).
+            if ColdOpenProbe.isOn { ColdOpenProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
         }
         #endif
         #if DEBUG

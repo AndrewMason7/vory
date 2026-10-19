@@ -77,6 +77,10 @@ struct TranscriptView: View {
     /// A card is opening or closing: the thread's size changes anchor at the top meanwhile, so the card keeps its place
     /// (`holdCard`). Bumped per toggle, so an earlier toggle's release stands down.
     @State private var holdingCard = false
+    /// While a chat's history lands under the rows it opened with, the thread is out of sight until it is at its end (#449).
+    @State private var landingOutOfSight = false
+    @State private var landingReveal: Task<Void, Never>?
+    @State private var landingCap: Task<Void, Never>?
     @State private var cardHold = 0
     /// A row arrived during a hold: the thread follows it once the hold is over (`holdCard`).
     @State private var followAfterHold = false
@@ -244,8 +248,9 @@ struct TranscriptView: View {
                 .padding(.horizontal, wideReplies ? 10 : 16)
                 .padding(.top, 8)
                 // A reopened chat whose history is still on its way shows nothing, then the rows
-                // land as one (the fade is the only animation of the stack, see below).
-                .opacity(chat.isResuming && chat.items.isEmpty ? 0 : 1)
+                // land as one (the fade is the only animation of the stack, see below). Its history
+                // landing under the rows it opened with, nothing either until it is at its end (#449).
+                .opacity((chat.isResuming && chat.items.isEmpty) || landingOutOfSight ? 0 : 1)
                 .animation(.easeOut(duration: 0.25), value: chat.items.isEmpty)
                 // A reading column in the middle of the pane on a wide layout, a page wide however
                 // wide the window is; the full width on the phone.
@@ -277,6 +282,10 @@ struct TranscriptView: View {
             // The keyboard is handled by hand (below) so the last message rides up with it instead
             // of vanishing under the composer; SwiftUI's own avoidance would then double the inset.
             .ignoresSafeArea(.keyboard, edges: .bottom)
+            #if DEBUG
+            .modifier(ThreadGeometryWatch(chat: chat, metrics: metrics, position: String(describing: scrollPosition),
+                                          hidden: (chat.isResuming && chat.items.isEmpty) || landingOutOfSight))
+            #endif
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, v in
                 metrics.reportedInsetBottom = v
                 guard autoInsetFixed == nil, dockTop > 0 else { return }
@@ -288,8 +297,11 @@ struct TranscriptView: View {
                 autoInsetFixed = 0   // no home indicator under a window
                 #endif
             }
-            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.containerSize.height] } action: { _, v in
+            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.containerSize.height] } action: { old, v in
                 metrics.contentHeight = v[0]; metrics.containerHeight = v[1]
+                // Out of sight while a history lands: the lazy stack is still measuring its rows, so the quiet time
+                // before the thread is shown starts again (#449).
+                if landingOutOfSight, old.first != v[0] { landingReveal?.cancel(); landingReveal = nil; revealIfLanded() }
             }
             // The window around the thread (`WindowGeometry`): its own frame in window space, the
             // window's shape (a fold, a resize or an inset that moves makes the automatic inset
@@ -315,6 +327,7 @@ struct TranscriptView: View {
                 g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
             } action: { was, distance in
                 metrics.distanceFromBottom = distance
+                if landingOutOfSight { revealIfLanded() }
                 // Past the end with no finger on it, by any amount: a scroll-to-bottom that used the
                 // lazy stack's estimated height lands beyond the real content and the thread shows
                 // nothing until a drag bounces it back ("chats open blank until you scroll"), and
@@ -406,10 +419,21 @@ struct TranscriptView: View {
             // size changes (`.defaultScrollAnchor(.bottom)` above), with no scroll asked per token:
             // that write ran the transcript's body a second time on every token. A new message
             // fades in where it belongs and the thread eases up to it (`followRows`).
-            .onChange(of: rows.count) { old, new in followRows(from: old, to: new) }
+            .onChange(of: rows.count) { old, new in historyLanding(from: old, to: new); followRows(from: old, to: new) }
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [rows.count, chat.isRunning ? 1 : 0]) { await settleTail() }
-            .onAppear { openedAt = Date(); refreshMentionNames() }
+            .onAppear {
+                openedAt = Date(); refreshMentionNames()
+                // A chat opening with its history still to come and only a few rows (or none) to show meanwhile waits out
+                // of sight until the history has landed and the thread is at its end (#449, see `historyLanding`); a
+                // history slow to come (1.5 s), the rows it has are shown meanwhile, and its landing hides it again.
+                if chat.isResuming, rows.count < 20 { landingOutOfSight = true; capLanding(after: 1500) }
+            }
+            .onChange(of: chat.isResuming) { _, now in
+                guard !now, landingOutOfSight else { return }
+                capLanding()
+                revealIfLanded()
+            }
             // The thread's place after a layout switch rebuilt it: the distance from the end it
             // had (`ChatViewMemory`), put back once the content is laid out; at the end, nothing.
             .onDisappear { ChatViewMemory.setDistanceFromEnd(metrics.stickToBottom || metrics.distanceFromBottom < 24 ? nil : metrics.distanceFromBottom, for: chat) }
@@ -619,6 +643,56 @@ extension TranscriptView {
                 if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
             }
         }
+    }
+
+    /// A chat's history landing under the few rows it opened with (#449): the thread goes out of sight at once, until it is
+    /// at its end. Landing, it was thrown to the top of its content for a few frames when it had opened shorter than the
+    /// screen and the push's top inset changed meanwhile (a Bot Chat, about half its opens), or a few screens up and back
+    /// as the lazy stack measured its rows (a long chat); the landing that followed was the way back. Not a turn's rows
+    /// (only while the chat resumes) and not a few (20 or more).
+    ///
+    /// A chat that opened with only a few rows is out of sight from the start (`onAppear`): the history then lands unseen.
+    /// Opened with more (rows kept from before), the landing itself puts it out of sight, the same update or the next.
+    private func historyLanding(from old: Int, to new: Int) {
+        guard chat.isResuming, new - old >= 20, !landingOutOfSight else { return }
+        landingOutOfSight = true
+        landingReveal?.cancel(); landingReveal = nil
+        capLanding()
+    }
+
+    /// Out of sight 700 ms at most from the history's end (resuming over) or its landing; 1.5 s from opening while it is
+    /// still to come.
+    private func capLanding(after ms: Int = 700) {
+        landingCap?.cancel()
+        landingCap = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(ms))
+            guard !Task.isCancelled, landingOutOfSight else { return }
+            reveal()
+        }
+    }
+
+    /// At its end, or, the history in, shorter than the screen, and still so 80 ms later with its content's height unchanged
+    /// meanwhile (a change starts the wait again, from the geometry handler): the thread is shown, faded in. The throw to the
+    /// top came in the same layout as a first frame at the end, and the lazy stack measuring the rows that had just come
+    /// left a thread shown at its end 556 pt past it a moment later.
+    private func revealIfLanded() {
+        let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
+        if short || abs(metrics.distanceFromBottom) < 10 {
+            guard landingReveal == nil else { return }
+            landingReveal = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(80))
+                let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
+                guard !Task.isCancelled, short || abs(metrics.distanceFromBottom) < 10 else { landingReveal = nil; return }
+                reveal()
+            }
+        } else {
+            landingReveal?.cancel(); landingReveal = nil
+        }
+    }
+
+    private func reveal() {
+        landingCap?.cancel(); landingReveal?.cancel(); landingReveal = nil
+        withAnimation(.easeOut(duration: 0.15)) { landingOutOfSight = false }
     }
 
     private func followRows(from old: Int, to new: Int) {
@@ -1763,6 +1837,101 @@ enum CardMotionProbe {
         func updateUIView(_ v: ReadoutView, context: Context) {}
     }
     #endif
+}
+#endif
+
+#if DEBUG
+/// DEBUG, for the open checks (#449): with `-vory-coldopen-probe`, how the thread moved in the minute after a chat
+/// appeared: its moves of 80 pt or more with no finger on it, when it last moved more than 10 pt from where it settled,
+/// and the largest throw up the thread once the whole history was in (a move away from the end with the content's height
+/// unchanged). Read by a UI test at "debug.coldopen" after the open has settled.
+@MainActor
+enum ColdOpenProbe {
+    nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-coldopen-probe")
+    private static var title = ""
+    private static var began = Date.distantPast
+    /// (ms since the chat appeared, distance from the end, content height, items, a finger on the thread, in sight)
+    private static var samples: [(ms: Int, dist: CGFloat, height: CGFloat, items: Int, touch: Bool, seen: Bool)] = []
+
+    static func begin(_ chat: String) { title = chat; began = Date(); samples = [] }
+    static func note(dist: CGFloat, height: CGFloat, items: Int, touch: Bool, seen: Bool) {
+        let ms = Int(Date().timeIntervalSince(began) * 1000)
+        guard isOn, ms <= 60_000 else { return }
+        samples.append((ms, dist, height, items, touch, seen))
+    }
+    /// "title|items|moves|settle ms|throw pt|shown ms", worked out when it is read, from what was in sight: a move counts
+    /// when the thread was in sight at both ends of it; settle and shown are from the chat appearing.
+    static var summary: String {
+        let full = samples.map(\.items).max() ?? 0
+        var moves = 0, thrown: CGFloat = 0
+        for (a, b) in zip(samples, samples.dropFirst()) where !a.touch && !b.touch && a.seen && b.seen {
+            if abs(b.dist - a.dist) >= 80 { moves += 1 }
+            if a.items == full, b.items == full, abs(b.height - a.height) < 500 { thrown = max(thrown, b.dist - a.dist) }
+        }
+        let seen = samples.filter(\.seen)
+        let final = samples.last?.dist ?? 0
+        let settle = seen.last { abs($0.dist - final) > 10 }?.ms ?? 0
+        let shown = seen.first { $0.items == full }?.ms ?? -1
+        return "\(title)|\(full)|\(moves)|\(settle)|\(Int(thrown))|\(shown)"
+    }
+
+    #if os(iOS)
+    /// A 1 pt element ("debug.coldopen") whose value is `summary`, taken when it is read.
+    final class ReadoutView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.coldopen" } set {} }
+        override var accessibilityLabel: String? { get { "Cold open" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { ColdOpenProbe.summary } } set {} }
+    }
+    struct Readout: UIViewRepresentable {
+        func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
+        func updateUIView(_ v: ReadoutView, context: Context) {}
+    }
+    #endif
+}
+
+/// DEBUG: the thread's geometry for the open checks. With `-vory-geometry-log`, every change of the scroll geometry, every
+/// scroll asked for, the thread appearing and going, its history being fetched and its rows changing, to the perf log on
+/// the uptime clock (`Perf.stamp`), for a timeline of an open; with `-vory-coldopen-probe`, the same changes to
+/// `ColdOpenProbe`. Neither flag: nothing is observed.
+struct ThreadGeometryWatch: ViewModifier {
+    let chat: ChatSession
+    let metrics: ScrollMetrics
+    let position: String
+    /// The thread out of sight (resuming with no rows, or a history landing, #449): what moves then is not seen.
+    let hidden: Bool
+    static let log = ProcessInfo.processInfo.arguments.contains("-vory-geometry-log")
+
+    func body(content: Content) -> some View {
+        if Self.log || ColdOpenProbe.isOn {
+            content
+                .onScrollGeometryChange(for: [CGFloat].self) { g in
+                    [g.contentOffset.y, g.contentSize.height, g.containerSize.height, g.contentInsets.top, g.contentInsets.bottom]
+                } action: { _, v in note(v) }
+                .onChange(of: position) { _, new in if Self.log { Perf.stamp("POS \(chat.title) \(new.prefix(160))") } }
+                .onChange(of: hidden) { _, new in
+                    // The thread coming into sight is no change of its geometry: a sample of its own, so the probe knows when
+                    // it was shown and where it was.
+                    if !new { ColdOpenProbe.note(dist: metrics.distanceFromBottom, height: metrics.contentHeight, items: chat.items.count, touch: metrics.userScrolling, seen: true) }
+                    if Self.log { Perf.stamp("HIDDEN \(chat.title) \(new ? 1 : 0)") }
+                }
+                .onAppear {
+                    ColdOpenProbe.begin(chat.title)
+                    if Self.log { Perf.stamp("APPEAR \(chat.title) items \(chat.items.count) resuming \(chat.isResuming ? 1 : 0)") }
+                }
+                .onDisappear { if Self.log { Perf.stamp("DISAPPEAR \(chat.title)") } }
+                .onChange(of: chat.isResuming) { _, new in if Self.log { Perf.stamp("RESUMING \(chat.title) \(new ? 1 : 0) items \(chat.items.count)") } }
+                .onChange(of: chat.items.count) { old, new in if Self.log { Perf.stamp("ITEMS \(chat.title) \(old) -> \(new)") } }
+        } else {
+            content
+        }
+    }
+
+    private func note(_ v: [CGFloat]) {
+        ColdOpenProbe.note(dist: metrics.distanceFromBottom, height: v[1], items: chat.items.count, touch: metrics.userScrolling, seen: !hidden)
+        guard Self.log else { return }
+        Perf.stamp("GEO \(chat.title) off \(Int(v[0])) h \(Int(v[1])) c \(Int(v[2])) it \(Int(v[3])) ib \(Int(v[4])) end \(Int(v[1] + v[4] - v[0] - v[2])) dist \(Int(metrics.distanceFromBottom)) stick \(metrics.stickToBottom ? 1 : 0) touch \(metrics.userScrolling ? 1 : 0) items \(chat.items.count) vis \(hidden ? 0 : 1)")
+    }
 }
 #endif
 

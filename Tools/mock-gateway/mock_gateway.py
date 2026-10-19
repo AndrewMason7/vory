@@ -1489,6 +1489,8 @@ def model_options() -> dict:
 #   ws-origin       only the WebSocket upgrade gets that page; REST works
 #   ticket-expired  the next N upgrades (default 1) are closed with 4401 "ticket expired", then all is well
 #   stall           nothing answers: REST and upgrades hang, open sockets go quiet (pings unanswered)
+#   slow-resume     session.resume answers N seconds late (default 4); nothing else changes and no socket is dropped
+#                   (#449: a chat's history slow to come, its stored rows shown meanwhile)
 #   none            back to normal
 FAULT = {"mode": "none", "status": 523, "count": 0}
 
@@ -1550,7 +1552,7 @@ async def process_request(connection, request):
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
         FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] == "ticket-expired" else 0)
-        dropped = _drop_sockets() if FAULT["mode"] != "none" else 0
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
@@ -2651,6 +2653,8 @@ class Gateway:
             return ok({"session_id": sid, "stored_session_id": stored, "message_count": 0,
                        "messages": [], "info": session_info(s.title, False, profile)})
         if method in ("session.resume", "session.activate"):
+            if method == "session.resume" and FAULT["mode"] == "slow-resume":
+                await asyncio.sleep(FAULT["count"] or 4)
             stored = p.get("session_id", "")
             if method == "session.resume":
                 RESUMES.append({"session_id": stored, "profile": p.get("profile") or "", "at": time.time()})
@@ -2674,6 +2678,11 @@ class Gateway:
                         {"role": "user", "text": "Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.", "timestamp": row["last_active"] - 20, "row_id": 3},
                         {"role": "assistant", "text": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.", "timestamp": row["last_active"], "row_id": 4},
                     ]
+                    # MOCK_CODING=n: a long Bot Chat too (#449: a long one was thrown to its top as it opened), half as many
+                    # rounds of the coding chat before the two messages.
+                    coding = int(os.environ.get("MOCK_CODING", "0") or 0)
+                    if coding > 0:
+                        live.history = coding_history(coding // 2, row["last_active"]) + live.history
                 elif row and row["id"] == "20260921_093355_d4e5f6":
                     # The export chat: a background job reported in while nobody was looking (the
                     # gateway puts that in the user's seat), and a cut tool preview.
