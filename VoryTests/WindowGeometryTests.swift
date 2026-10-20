@@ -65,4 +65,17 @@ import Testing
         #expect(WindowGeometry.keyboardCarriesOver(from: CGSize(width: 669, height: 951), to: CGSize(width: 669, height: 951)))
         #expect(!WindowGeometry.keyboardCarriesOver(from: CGSize(width: 669, height: 951), to: CGSize(width: 951, height: 669)))
     }
+
+    /// #340: the floating top bar's row gets room only where the system's bars stand in a side strip (the closed Duo)
+    /// and the bar is up; the row's bottom (in the bar's space) plus the bar's top padding and a gap.
+    @Test func theTopBarsRowGetsRoomOnlyBesideASideStrip() {
+        #expect(TopBarRoom.inset(barsVertical: true, barOn: true, rowBottom: 44) == 56)
+        #expect(TopBarRoom.inset(barsVertical: true, barOn: true, rowBottom: 41.3) == 53)
+        // Along the bottom (any phone, the open Duo upright), the system keeps its band: no room.
+        #expect(TopBarRoom.inset(barsVertical: false, barOn: true, rowBottom: 44) == 0)
+        // No bar (a wide window: two columns and the system's own bar).
+        #expect(TopBarRoom.inset(barsVertical: true, barOn: false, rowBottom: 44) == 0)
+        // Not measured yet.
+        #expect(TopBarRoom.inset(barsVertical: true, barOn: true, rowBottom: 0) == 0)
+    }
 }

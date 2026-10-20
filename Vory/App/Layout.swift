@@ -75,6 +75,24 @@ struct VerticalBarEdge<Content: View>: View {
     #endif
 }
 
+/// How far a tab's pages start under the floating top bar's row (#340). The system keeps a band at the top for its
+/// navigation bar, and the bar's row sits over that band; where the system's bars stand in a side strip instead (the
+/// closed iPhone Duo, `toolbarVerticalEdge`), there is no band, and a root page's first row and its search field ran
+/// under the row. Then the tab's navigation stack starts under the row's bottom (`rowBottom`, in the bar's space) plus
+/// the bar's top padding and a gap (`TopBarRoomProbe`, as the stack's own additional safe area, so the system's search
+/// drawer moves with the page); anywhere else, 0.
+enum TopBarRoom {
+    /// The bar's padding over its row (MorphTopBar's `.padding(.top, 4)`).
+    static let barPadding: CGFloat = 4
+    /// The gap between the row's bottom and the page.
+    static let gap: CGFloat = 8
+    static func inset(barsVertical: Bool, barOn: Bool, rowBottom: CGFloat) -> CGFloat {
+        guard barsVertical, barOn, rowBottom > 0 else { return 0 }
+        return (rowBottom + barPadding + gap).rounded()
+    }
+}
+
+
 /// The fold on a partly open iPhone Duo, where it crosses this view's frame (its own
 /// coordinates), with Apple's margins for interactive content included; nil when there is no
 /// active fold here. Read through the iOS 27.1 geometry; nil on anything older.

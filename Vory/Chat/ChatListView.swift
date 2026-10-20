@@ -235,6 +235,8 @@ struct ChatListView: View {
             // An empty bar collapses (the Duo's search drawer rode up under the capsules): an
             // invisible item keeps it at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
+            // On the closed Duo the search drawer rode up under the bar's capsules (#340): the stack starts under its row.
+            .background(TopBarRoomProbe(room: TopBarRoom.inset(barsVertical: model.tabBarVertical, barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
             #endif
             .background(InteractivePopEnabler())
             // The stack's path is watched by whoever owns it (ChatsSplitPage for the model's

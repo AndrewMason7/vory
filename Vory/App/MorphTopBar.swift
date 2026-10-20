@@ -116,6 +116,12 @@ private struct MorphPageActions: ViewModifier {
     @ObservationIgnored private var generation = 0
     /// The finger has the pop: `t` follows it and nothing is tappable.
     var scrubbing = false
+    /// The bottom of the root page's row of controls (the bot circle, the title, the page's own) in the bar's space
+    /// (`.named("morph")`, whose top is the bar's padding under the safe area's top). Where the system's bars stand in a
+    /// side strip (the closed iPhone Duo) nothing else keeps a band for the row, and the root pages start under it by
+    /// this much (`TopBarRoom`, #340). Kept, not cleared, over a chat or a pushed page, so a root page coming back has
+    /// its room at once.
+    var rootRowBottom: CGFloat = 0
     /// A swipe back to a tab's root page is under way (its root probe saw it start). Only that
     /// swipe, or a chat's, is the bar's to follow: a swipe from a page three deep back to the one
     /// under it moved the bar to the root's title and left it there, over a page still pushed
@@ -536,6 +542,13 @@ struct MorphTopBar: View {
             else if !open, state.chat != nil || state.opening, !state.scrubbing { state.pop() }
         }
         .onChange(of: model.roomsOnScreen) { _, n in if n > 0, model.chatsPathOpen { state.roomShown() } }
+        // The root row's bottom for the pages under it (#340): from the root row's own frames only, never mid-scrub
+        // (the row's height doesn't change while `t` moves).
+        .onChange(of: listFrames, initial: true) { _, f in
+            guard !state.scrubbing else { return }
+            let bottom = f.values.map(\.maxY).max() ?? 0
+            if abs(bottom - state.rootRowBottom) > 0.5 { state.rootRowBottom = bottom }
+        }
         // Initial too: the bar is made afresh when a wide window narrows again.
         .onChange(of: model.selectedTab, initial: true) { _, tab in
             let chats = tab == .chats && model.chatsPathOpen

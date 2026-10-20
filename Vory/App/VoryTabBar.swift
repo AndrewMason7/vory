@@ -436,6 +436,8 @@ struct TabRoot: ViewModifier {
             // An empty bar collapses (on the Duo the search drawer rode up under the capsules):
             // an invisible item keeps the bar at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
+            // Where the system's bars stand in a side strip (the closed Duo), the stack starts under the bar's row (#340).
+            .background(TopBarRoomProbe(room: TopBarRoom.inset(barsVertical: model.tabBarVertical, barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
             // "At root" is set by the probe below: on a swipe back SwiftUI's onAppear fires as
             // the pop begins, and the bar's capsules came back over the pushed page before it
             // had moved (Matt, 2026-10-12: "swiping back on other pages is broken"). The probe
@@ -835,6 +837,23 @@ struct OwnBarMarker: UIViewControllerRepresentable {
 
 /// A zero-size view under a tab's root page that finds the UIKit navigation controller behind
 /// the NavigationStack and pops it to the root, animated, whenever `popToRoot` bumps.
+/// The top bar's room on a tab's navigation stack (#340, `TopBarRoom`): the stack's additional safe area at the top, so
+/// its pages and the system's search drawer start under the bar's row where nothing else keeps a band for it (the
+/// closed iPhone Duo). On the stack, not the page: the drawer belongs to the stack's bar and stays where the stack's
+/// safe area puts it (a page's own inset moved its rows and left the drawer under the row, as did a SwiftUI inset or
+/// padding). Pages pushed on the stack get it too: they start that much lower on the closed Duo, never under the row.
+struct TopBarRoomProbe: UIViewRepresentable {
+    var room: CGFloat
+    func makeUIView(context: Context) -> UIView { let v = UIView(); v.isUserInteractionEnabled = false; return v }
+    func updateUIView(_ v: UIView, context: Context) {
+        let room = room
+        DispatchQueue.main.async {
+            guard let nav = v.parentViewController?.navigationController, nav.additionalSafeAreaInsets.top != room else { return }
+            nav.additionalSafeAreaInsets.top = room
+        }
+    }
+}
+
 private struct PopToRootProbe: UIViewRepresentable {
     @Environment(AppModel.self) private var model
     var tab: AppModel.AppTab
