@@ -493,7 +493,7 @@ extension TranscriptView {
             // changed: a token landing in the reply at the end used to re-evaluate every row
             // the lazy stack had drawn, which with a long history was most of a core for the
             // whole reply (the Mac's "beachball on send"). Now a token touches the tail only.
-            OlderRows(rows: rowCache.older(than: split), context: ctx.forOlderRows).equatable()
+            OlderRows(rows: rowCache.older(than: split), context: ctx.forOlderRows(tail: all[split...])).equatable()
         }
         let entering = Self.enteringRowID(all, opening: settling || chat.isResuming)
         ForEach(Array(all[split...])) { row in ctx.rowView(row, entering: row.id == entering) }
@@ -899,12 +899,20 @@ struct RowContext: Equatable {
     /// The context the older, lazy rows are drawn with: what only the thread's last row uses left out (the typing
     /// bubble's tool, which row is last, why a turn was cut short). An older row is never the last one. With them in,
     /// `OlderRows` compared unequal at every tool step and every new row, and every older row the lazy stack had drawn
-    /// was rebuilt with it (#422).
-    var forOlderRows: RowContext {
+    /// was rebuilt with it (#422). Nor the open cards of the rows after them (`tail`): a card toggled at the end left the
+    /// older rows' context unequal, the lazy stack laid itself out again, and the height of its rows not yet measured
+    /// went back to its estimate (a cold open's first toggle: 22,500 pt to the whole history's 41,065, the thread blank
+    /// for four seconds; at rest 330 pt taller or 1,072 pt shorter), moving the tapped card by as much (#473).
+    func forOlderRows(tail: ArraySlice<TranscriptRowModel>) -> RowContext {
         var c = self
         c.typingTool = nil
         c.lastID = nil
         c.interruptCause = nil
+        if !openReasoning.isEmpty || !openTools.isEmpty {
+            let ids = Set(tail.map(\.item.id))
+            c.openReasoning = openReasoning.subtracting(ids)
+            c.openTools = openTools.subtracting(ids)
+        }
         return c
     }
 
