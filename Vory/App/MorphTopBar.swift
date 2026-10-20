@@ -775,9 +775,9 @@ struct MorphTopBar: View {
                 Menu {
                     Button { model.pageRequest = .init(.sessionsAdvanced) } label: { Label("Advanced", systemImage: "internaldrive") }
                 } label: { Image(systemName: "gearshape").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .font(.body.weight(.medium)).foregroundStyle(.tint)
-                .padding(.horizontal, 16).frame(height: 44)
+                .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
                 .accessibilityLabel("Options").accessibilityIdentifier("sessions.options")
                 .accessibilityShowsLargeContentViewer { Label("Options", systemImage: "gearshape") }
             case nil: EmptyView()
@@ -810,10 +810,10 @@ struct MorphTopBar: View {
 
     /// A page's trailing buttons, live, with the footprint `trailIcons` is measured with.
     private func trailButtons(_ items: [(symbol: String, label: String, id: String, action: () -> Void)]) -> some View {
-        HStack(spacing: 18) {
+        HStack(spacing: BarIcon.spacing) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                 Button(action: item.action) { Image(systemName: item.symbol).contentShape(.rect) }
-                    .buttonStyle(MorphPressStyle(kind: .icon))
+                    .buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                     .accessibilityElement(children: .ignore).accessibilityLabel(item.label).accessibilityAddTraits(.isButton)
                     .accessibilityAction { item.action() }
                     .accessibilityShowsLargeContentViewer { Label(item.label, systemImage: item.symbol) }
@@ -821,16 +821,16 @@ struct MorphTopBar: View {
             }
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 
     /// A pushed page's own controls, live, with the footprint `trailIcons` is measured with (#435).
     private func pageActionButtons(_ acts: [MorphPageAction]) -> some View {
-        HStack(spacing: 18) {
+        HStack(spacing: BarIcon.spacing) {
             ForEach(acts) { a in
                 if a.menu.isEmpty {
                     Button(action: a.action) { Image(systemName: a.symbol).contentShape(.rect) }
-                        .buttonStyle(MorphPressStyle(kind: .icon))
+                        .buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                         .accessibilityElement(children: .ignore).accessibilityLabel(a.label).accessibilityAddTraits(.isButton)
                         .accessibilityAction { if a.enabled { a.action() } }
                         .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
@@ -843,7 +843,7 @@ struct MorphTopBar: View {
                             Button { item.action() } label: { Label(item.label, systemImage: item.symbol) }
                         }
                     } label: { Image(systemName: a.symbol).contentShape(.rect) }
-                    .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                    .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                     .accessibilityLabel(a.label).accessibilityIdentifier(a.id)
                     .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
                     .disabled(!a.enabled).opacity(a.enabled ? 1 : 0.35)
@@ -851,14 +851,14 @@ struct MorphTopBar: View {
             }
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 
     /// A page's trailing icons (visual in this pass, measured and morphed like the list's).
     private func trailIcons(_ names: [String], label: String) -> some View {
-        HStack(spacing: 18) { ForEach(names, id: \.self) { Image(systemName: $0) } }
+        HStack(spacing: BarIcon.spacing) { ForEach(names, id: \.self) { Image(systemName: $0).barIconSlot() } }
             .font(.body.weight(.medium)).foregroundStyle(.tint)
-            .padding(.horizontal, 16).frame(height: 44)
+            .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
             .accessibilityLabel(label)
             .accessibilityShowsLargeContentViewer { Label(label, systemImage: names.first ?? "circle") }
     }
@@ -866,24 +866,24 @@ struct MorphTopBar: View {
     /// The + / sort / filters capsule with its controls live: the same footprint as `actions`,
     /// which the layout is measured with.
     private var liveActions: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: BarIcon.spacing) {
             Button { model.chatListRequest = .init(.newBot) } label: { Image(systemName: "plus").contentShape(.rect) }
-                .buttonStyle(MorphPressStyle(kind: .icon))
+                .buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityElement(children: .ignore).accessibilityLabel("New bot").accessibilityAddTraits(.isButton)
                 .accessibilityAction { model.chatListRequest = .init(.newBot) }
                 .accessibilityShowsLargeContentViewer { Label("New bot", systemImage: "plus") }
                 .accessibilityIdentifier("chats.newBot")
             Menu { ChatListSortItems() } label: { Image(systemName: "arrow.up.arrow.down").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityLabel("Sort").accessibilityIdentifier("chats.sort")
                 .accessibilityShowsLargeContentViewer { Label("Sort", systemImage: "arrow.up.arrow.down") }
             Menu { ChatListFilterItems() } label: { Image(systemName: "line.3.horizontal.decrease.circle").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityLabel("Filters").accessibilityIdentifier("chats.filters")
                 .accessibilityShowsLargeContentViewer { Label("Filters", systemImage: "line.3.horizontal.decrease.circle") }
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 
     // MARK: The end states (laid out, not seen)
@@ -991,13 +991,13 @@ struct MorphTopBar: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 18) {
-            Image(systemName: "plus")
-            Image(systemName: "arrow.up.arrow.down")
-            Image(systemName: "line.3.horizontal.decrease.circle")
+        HStack(spacing: BarIcon.spacing) {
+            Image(systemName: "plus").barIconSlot()
+            Image(systemName: "arrow.up.arrow.down").barIconSlot()
+            Image(systemName: "line.3.horizontal.decrease.circle").barIconSlot()
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 }
 
@@ -1054,6 +1054,24 @@ private struct CapsuleFrame: ViewModifier {
             // With the wheel's own slot: one snappy step open, and closed after the refresh.
             .animation(.snappy(duration: 0.3), value: open)
     }
+}
+
+/// The icons in the bar's capsules (+, sort, filters, a page's own): each in a slot of its own, the capsule's height and
+/// at least `width` wide, which is also what's hit. The glyph alone was the hit area, and the audit's hit region failed
+/// the sort arrows (24 × 19) and, once those were the capsule's height, the + (18 wide). The slots are closer together
+/// and the capsule's ends a little narrower, so the glyphs stand where they did and the capsule is its old width.
+enum BarIcon {
+    static let width: CGFloat = 28
+    static let spacing: CGFloat = 12
+    static let endPadding: CGFloat = 11
+}
+
+extension View {
+    /// An icon control's slot in a capsule (`BarIcon`): on the control, outside its button style, so the pressed square
+    /// still hugs the glyph.
+    func barIconHitArea() -> some View { frame(minWidth: BarIcon.width, minHeight: 44).contentShape(.rect) }
+    /// The same slot in the capsules laid out for measuring (`trailIcons`, `actions`).
+    func barIconSlot() -> some View { frame(minWidth: BarIcon.width) }
 }
 
 /// The bar's controls pressed (Matt on 1.5 (18): "at touching indication on the top right icons
