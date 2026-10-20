@@ -57,6 +57,23 @@ import Testing
 
     // MARK: Arrivals
 
+    /// A live attach that failed waits 30 s before the live path is tried again, and on the phone path at rest nothing
+    /// else wakes the chat (no poll, the socket already open): it stayed there, every read waking the iPhone. The retry
+    /// gets its own wake, only in that state.
+    @Test func aFailedLiveAttachIsTriedAgainOnlyOnThePhonePathWithTheSocketUp() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let later = now.addingTimeInterval(30)
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: later, now: now) == 30)
+        // The socket down: its coming back wakes the chat.
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: false, retryAt: later, now: now) == nil)
+        // On the live path, or offline: nothing to retry.
+        #expect(WatchFeedRules.liveRetryWake(route: .live, socketUsable: true, retryAt: later, now: now) == nil)
+        #expect(WatchFeedRules.liveRetryWake(route: .offline, socketUsable: true, retryAt: later, now: now) == nil)
+        // No retry pending (none failed, or it is due and the read about to happen tries it).
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: .distantPast, now: now) == nil)
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: now, now: now) == nil)
+    }
+
     @Test func aFirstReadAnnouncesNothing() {
         var gate = WatchFeedEventGate()
         #expect(gate.arrivals(items: [user("u"), reply("r")], cardIDs: ["c1"]).isEmpty)

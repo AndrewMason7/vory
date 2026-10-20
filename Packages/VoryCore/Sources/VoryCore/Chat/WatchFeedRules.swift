@@ -79,6 +79,15 @@ public enum WatchFeedRules {
         route == .throughPhone && working ? workingPollSeconds : nil
     }
 
+    /// Seconds until the live path is tried again after an attach failed (`retryAt`), or nil for no wake. Only on the
+    /// phone path with the socket up: nothing else wakes a chat there at rest (no poll, and the socket, already open,
+    /// no longer changes), so it stayed on the phone path, every read waking the iPhone, until something happened to
+    /// wake it. In any other state nil: the live path needs no retry, and a socket coming back wakes the chat itself.
+    public static func liveRetryWake(route: WatchFeedRoute, socketUsable: Bool, retryAt: Date, now: Date) -> TimeInterval? {
+        guard route == .throughPhone, socketUsable, retryAt > now else { return nil }
+        return retryAt.timeIntervalSince(now)
+    }
+
     /// Whether a trigger reads the chat again. The phone path reads on every one. The live path has the socket, so only
     /// opening, coming forward (a socket may have dropped meanwhile) and its own changes count. Offline, anything that
     /// might bring a route back tries again.

@@ -62,6 +62,8 @@ final class WatchChatFeed {
     @ObservationIgnored private var liveRetryAt = Date.distantPast
     @ObservationIgnored private var wakes: AsyncStream<WatchFeedTrigger>.Continuation?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// The wake that tries the live path again after an attach failed (`WatchFeedRules.liveRetryWake`).
+    @ObservationIgnored private var liveRetryTask: Task<Void, Never>?
     @ObservationIgnored private var followTask: Task<Void, Never>?
     @ObservationIgnored private var liveDebounce: Task<Void, Never>?
     @ObservationIgnored private var lastLiveSync = Date.distantPast
@@ -92,8 +94,8 @@ final class WatchChatFeed {
             await handle(trigger)
         }
         NotificationCenter.default.removeObserver(forward)
-        for t in [pollTask, followTask, liveDebounce] { t?.cancel() }
-        pollTask = nil; followTask = nil; liveDebounce = nil
+        for t in [pollTask, followTask, liveDebounce, liveRetryTask] { t?.cancel() }
+        pollTask = nil; followTask = nil; liveDebounce = nil; liveRetryTask = nil
         wakes = nil
         model.unregister(self)
         leave()
@@ -136,6 +138,7 @@ final class WatchChatFeed {
         }
         schedulePoll()
         scheduleFollow()
+        scheduleLiveRetry()
     }
 
     /// The socket when it is open and the chat attached on it, else the iPhone. A chat whose attach failed waits 30 s
@@ -257,6 +260,22 @@ final class WatchChatFeed {
         if steps != turnTools { turnTools = steps }
         if let kind = WatchFeedEventGate.strongest(gate.arrivals(items: settled, cardIDs: newCards.map(\.id), loaded: loaded)) {
             event = WatchFeedEvent(kind: kind)
+        }
+    }
+
+    /// One wake when the live path may be tried again, while the chat is on the phone path only because an attach
+    /// failed and the socket is up (`WatchFeedRules.liveRetryWake`); none on the live path or with the socket down.
+    private func scheduleLiveRetry() {
+        guard let wait = WatchFeedRules.liveRetryWake(route: route, socketUsable: model.socketUsable, retryAt: liveRetryAt, now: Date()) else {
+            liveRetryTask?.cancel(); liveRetryTask = nil
+            return
+        }
+        guard liveRetryTask == nil else { return }
+        liveRetryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled, let self else { return }
+            self.liveRetryTask = nil
+            self.wake(.liveChanged)
         }
     }
 

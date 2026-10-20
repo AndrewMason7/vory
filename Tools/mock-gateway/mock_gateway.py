@@ -1532,6 +1532,8 @@ def model_options() -> dict:
 #   stall           nothing answers: REST and upgrades hang, open sockets go quiet (pings unanswered)
 #   slow-resume     session.resume answers N seconds late (default 4); nothing else changes and no socket is dropped
 #                   (#449: a chat's history slow to come, its stored rows shown meanwhile)
+#   resume-refused  the next N session.resume calls (default 1) answer an error, then all is well; no socket is dropped
+#                   (#387: a Watch chat whose live attach failed, tried again once its wait is up)
 #   none            back to normal
 FAULT = {"mode": "none", "status": 523, "count": 0}
 
@@ -1592,8 +1594,8 @@ async def process_request(connection, request):
         q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
-        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] == "ticket-expired" else 0)
-        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume") else 0
+        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] in ("ticket-expired", "resume-refused") else 0)
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
@@ -2774,6 +2776,12 @@ class Gateway:
         if method in ("session.resume", "session.activate"):
             if method == "session.resume" and FAULT["mode"] == "slow-resume":
                 await asyncio.sleep(FAULT["count"] or 4)
+            if method == "session.resume" and FAULT["mode"] == "resume-refused" and FAULT["count"] > 0:
+                FAULT["count"] -= 1
+                if FAULT["count"] == 0:
+                    FAULT["mode"] = "none"
+                print(f"[mock] fault resume-refused: session.resume {p.get('session_id', '')} refused ({FAULT['count']} left)", flush=True)
+                return err(5000, "session could not be resumed")
             stored = p.get("session_id", "")
             if method == "session.resume":
                 RESUMES.append({"session_id": stored, "profile": p.get("profile") or "", "at": time.time()})
