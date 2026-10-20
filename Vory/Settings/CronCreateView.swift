@@ -150,7 +150,15 @@ struct CronCreateView: View {
                 }
             }
         }
+        // Grouped, as the Mac's other forms (the gateway form, the Board's New Task): the Mac's default columns put the
+        // section titles in the field column as plain text and left the prompt a borderless blank. The iPhone's look.
+        .formStyle(.grouped)
+        // The phone's title is short (the long one clipped at large text sizes); the Mac's sheet has room for the whole.
+        #if os(macOS)
+        .navigationTitle("New Scheduled Task")
+        #else
         .navigationTitle("New Task")
+        #endif
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
