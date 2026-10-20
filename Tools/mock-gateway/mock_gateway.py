@@ -1611,6 +1611,21 @@ async def process_request(connection, request):
         print(f"[mock] touched {touched} chat(s) titled {title!r}", flush=True)
         body = json.dumps({"touched": touched}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/mock/start-turn":
+        # Test only (#387): a turn starts in a chat a client has open, as if its prompt had been sent there
+        # (GET /mock/start-turn?session=<stored id or title words>&prompt=<text>), at a moment the test picks: after
+        # the chat's first read, so what the turn brings is an arrival. The chat's members see it on their sockets.
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        want, prompt = unquote(q.get("session", "")).replace("+", " "), unquote(q.get("prompt", "")).replace("+", " ")
+        live = next((s for s in LIVE.values() if want and (s.stored == want or want.lower() in (s.title or "").lower())), None)
+        member = next(iter(live.members), None) if live else None
+        if member is None or not prompt:
+            body = json.dumps({"ok": False, "error": "no prompt" if member else "no such chat open"}).encode()
+            return Response(404, "Not Found", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+        asyncio.get_running_loop().create_task(member.run_turn(live, prompt))
+        print(f"[mock] start-turn {live.stored} {prompt!r}", flush=True)
+        body = json.dumps({"ok": True, "session": live.stored}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     faulted = await _fault(request)
     if faulted is not None:
         print(f"[mock] fault {FAULT['mode']}: {request.path.split('?')[0]} -> {faulted.status_code}", flush=True)

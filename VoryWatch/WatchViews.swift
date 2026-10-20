@@ -1,5 +1,6 @@
 import SwiftUI
 import VoryCore
+import WatchKit
 
 struct WatchRootView: View {
     @Environment(WatchModel.self) private var model
@@ -330,141 +331,109 @@ struct WatchSessionRow: View {
     }
 }
 
-/// One chat: the tail of the transcript, the approval card when one is waiting, and a composer
-/// pinned to the bottom edge so the thread opens at its end. The runtime and streaming are the
-/// same VoryCore code the phone runs.
+/// One chat: the tail of the transcript, the card when one is waiting, and a composer pinned to the bottom edge so the
+/// thread opens at its end. Its data and the one thing that drives it are the chat's feed (`WatchChatFeed`, #387): on
+/// the Watch's own socket or through the iPhone, read when something changed rather than every few seconds. The view
+/// only shows the feed and acts through it; the wrist buzzes only for the feed's arrivals (`WatchChatFeed.event`).
 struct WatchChatView: View {
     @Environment(WatchModel.self) private var model
     var storedID: String
-    @State private var chat: ChatSession?
+    @State private var feed: WatchChatFeed?
     @State private var text = ""
-    @State private var error: String?
     /// Talk: a recording to the gateway, the reply read aloud here.
     @State private var talk = WatchTalk()
-    /// REST-polling fallback state (used when the socket cannot open, e.g. over Bluetooth).
-    @State private var proxied = false
-    @State private var items: [TranscriptItem] = []
-    @State private var cards: [[String: Any]] = []
-    @State private var running = false
-    @State private var statusText = ""
-    @State private var title = "Chat"
-    @State private var profile: String?
-    /// Messages on screen: the last few at first, more with "Show earlier".
-    @State private var shown = 12
-    /// When the thread last followed the stream to its end.
-    @State private var lastFollow = Date.distantPast
-    /// After the live chat failed to attach: not tried again before this.
-    @State private var liveRetryAt = Date.distantPast
+    /// What Talk could not do, under the thread until tapped.
+    @State private var talkNote: String?
 
     var body: some View {
         Group {
-            if proxied {
-                proxiedBody
-            } else if let chat {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            if chat.items.count > shown {
-                                // The last few messages first; the rest a page at a time from the top.
-                                Button { shown += 20 } label: { Label("Show earlier", systemImage: "arrow.up.circle") }.font(.caption)
-                            }
-                            // A step that only thought is a Reasoning card on the phone; the wrist shows no reasoning.
-                            ForEach(chat.items.filter { !$0.isThinkingOnly }.suffix(shown)) { item in WatchTranscriptRow(item: item, profile: chat.profileName).id(item.id) }
-                            if let s = chat.statusLine, chat.isRunning { Text(s).font(.caption2).foregroundStyle(.secondary) }
-                            // What went wrong (a Talk that heard nothing, a chat that could not re-attach).
-                            if let b = chat.banner { Text(b).font(.caption2).foregroundStyle(.red).onTapGesture { chat.banner = nil } }
-                            if let card = chat.firstCard { WatchCardView(chat: chat, card: card) }
-                            // Room under a card for the bottom bar (the field, or Talk's wait line
-                            // and its (x)): the bar is laid over the content, and a card's Once
-                            // and Deny sat under it as it arrived.
-                            Color.clear.frame(height: chat.firstCard != nil ? 44 : 1).id("bottom")
-                        }
-                    }
-                    .defaultScrollAnchor(.bottom)
-                    .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-                    // The history lands after the view does: land the end again once it is in,
-                    // and once more when the live snapshot replaces it.
-                    .task { try? await Task.sleep(for: .milliseconds(350)); proxy.scrollTo("bottom", anchor: .bottom) }
-                    .onChange(of: chat.isResuming) { _, resuming in if !resuming { proxy.scrollTo("bottom", anchor: .bottom) } }
-                    .onChange(of: chat.items.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-                    // A reply grows token by token: following every one of them made the wrist
-                    // lay the thread out dozens of times a second.
-                    .onChange(of: chat.items.last) { _, _ in
-                        let now = Date()
-                        if now.timeIntervalSince(lastFollow) > 0.35 { lastFollow = now; proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
-                    .onChange(of: chat.isRunning) { _, running in
-                        if !running { proxy.scrollTo("bottom", anchor: .bottom) }
-                        // A new turn: last turn's error line has said its piece.
-                        else { chat.banner = nil }
-                    }
-                    .onChange(of: chat.firstCard?.id) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
-                }
-                .navigationTitle(chat.title)
-                .toolbar {
-                    // The bottom bar is where watchOS pins a field to the screen's bottom edge; a
-                    // safe-area inset sat above a blank band on the Ultra.
-                    ToolbarItem(placement: .bottomBar) {
-                        composer {
-                            let t = text; text = ""
-                            // The chat could not be attached on the socket: the phone sends it.
-                            if await chat.send(t) != nil, chat.resumeError != nil {
-                                liveRetryAt = Date().addingTimeInterval(30)
-                                proxied = true
-                                text = t
-                                await proxySend()
-                            }
-                        }
-                    }
-                    if chat.isRunning {
-                        ToolbarItem(placement: .topBarTrailing) { Button { Task { await chat.stop() } } label: { Image(systemName: "stop.fill") }.tint(.red) }
-                    }
-                }
-            } else if let error {
-                Text(error).foregroundStyle(.red)
-            } else { ProgressView() }
+            if let feed { thread(feed) } else { ProgressView() }
         }
-        // Leaving the chat ends Talk's wait and voice: the reply would otherwise be read out later
-        // with no screen to stop it from.
+        // Leaving the chat ends Talk's wait and voice: the reply would otherwise be read out later with no screen to
+        // stop it from.
         .onDisappear { talk.stopWaiting(); talk.stopSpeaking() }
-        // Started again when the runtime is replaced (a new route or address): the old one is stopped.
+        // A feed of its own for each runtime (a new route or address): the old one ends with its task.
         .task(id: model.runtime.map(ObjectIdentifier.init)) {
-            guard let rt = model.runtime else { return }
-            chat = nil; proxied = false; liveRetryAt = .distantPast
-            profile = model.sessions.first { $0.id == storedID }?.profile
-            title = model.sessions.first { $0.id == storedID }?.displayTitle ?? "Chat"
-            await follow(rt)
+            let f = WatchChatFeed(storedID: storedID, model: model)
+            feed = f
+            await f.run()
         }
     }
 
-    /// The chat on the live socket while it is open and the chat attached; over HTTP with the
-    /// phone sending while it is not, moving between the two as the socket comes and goes.
-    /// Without a socket the last messages show over HTTP at once instead of waiting on one
-    /// that may never come. A chat whose attach failed used to stay on screen with every send
-    /// failing, and one whose socket dropped never left the live path.
-    private func follow(_ rt: GatewayRuntime) async {
-        while !Task.isCancelled {
-            if model.socketUsable, chat == nil || proxied, Date() >= liveRetryAt {
-                // The first open shows the cached transcript at once; a retry after a failed
-                // attach stays on the phone path until the chat is attached, not flipping back.
-                let retry = chat != nil
-                if let live = try? await rt.openChat(storedID: storedID, title: nil, profile: profile, waitForResume: retry), !retry || live.resumeError == nil {
-                    chat = live; proxied = false
-                } else { liveRetryAt = Date().addingTimeInterval(30) }
+    private func thread(_ feed: WatchChatFeed) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if feed.hasEarlier {
+                        // The last few messages first; the rest a page at a time from the top.
+                        Button { Task { await feed.loadEarlier() } } label: { Label("Show earlier", systemImage: "arrow.up.circle") }.font(.caption)
+                    }
+                    ForEach(feed.items) { item in WatchTranscriptRow(item: item, profile: feed.profile).id(item.id) }
+                    if feed.isWorking { Text(Self.workingLine(feed)).font(.caption2).foregroundStyle(.secondary) }
+                    // What went wrong (a send that did not get through, the iPhone out of reach, a Talk that heard nothing).
+                    if let p = feed.problem { Text(p.text).font(.caption2).foregroundStyle(.red).onTapGesture { feed.dismissProblem() } }
+                    if let talkNote { Text(talkNote).font(.caption2).foregroundStyle(.red).onTapGesture { self.talkNote = nil } }
+                    if let card = feed.cards.first { WatchCardView(feed: feed, card: card).id(card.id) }
+                    // Room under a card for the bottom bar (the field, or Talk's wait line and its (x)): the bar is laid
+                    // over the content, and a card's buttons sat under it as it arrived.
+                    Color.clear.frame(height: feed.cards.isEmpty ? 1 : 44).id("bottom")
+                }
             }
-            if !proxied, let c = chat, c.resumeError != nil, !c.isResuming {
-                liveRetryAt = Date().addingTimeInterval(30)
-                proxied = true
+            .defaultScrollAnchor(.bottom)
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            // The first read lands after the view does: land the end again once it is in.
+            .onChange(of: feed.isLoading) { _, loading in if !loading { proxy.scrollTo("bottom", anchor: .bottom) } }
+            .onChange(of: feed.event) { _, event in arrived(event, proxy) }
+            .navigationTitle(feed.title)
+            .toolbar {
+                // The bottom bar is where watchOS pins a field to the screen's bottom edge; a safe-area inset sat above
+                // a blank band on the Ultra.
+                ToolbarItem(placement: .bottomBar) {
+                    composer(feed) {
+                        let t = text; text = ""
+                        do {
+                            try await feed.send(t)
+                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        } catch { text = t }
+                    }
+                }
+                if feed.isWorking {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { talk.stopWaiting(); Task { await feed.stop() } } label: { Image(systemName: "stop.fill") }.tint(.red)
+                    }
+                }
             }
-            if !proxied, chat == nil || !model.socketUsable { proxied = true }
-            if proxied { await refreshProxied(rt) }
-            try? await Task.sleep(for: .seconds(proxied ? (running ? 2 : 6) : 1))
         }
     }
 
-    /// The message field, Talk and the send button, one row on the bottom edge. While Talk
-    /// works the row says what it is doing instead of the field.
-    private func composer(send: @escaping () async -> Void) -> some View {
+    /// The feed's arrivals, each once while the chat is open: the only haptics here, and a scroll to what arrived. A
+    /// first read, a wrist raise's read of what was already seen and a switch between the socket and the iPhone have
+    /// none (the feed's gate), where the old view buzzed and jumped on every read.
+    private func arrived(_ event: WatchFeedEvent?, _ proxy: ScrollViewProxy) {
+        guard let event else { return }
+        switch event.kind {
+        case .replyArrived(let id):
+            WKInterfaceDevice.current().play(.success)
+            withAnimation { proxy.scrollTo(id, anchor: .top) }
+        case .cardArrived(let id):
+            WKInterfaceDevice.current().play(.notification)
+            withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+        case .turnFailed:
+            WKInterfaceDevice.current().play(.failure)
+            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+
+    /// "Working…", the gateway's own words when it has some, and how many steps this turn has taken.
+    private static func workingLine(_ feed: WatchChatFeed) -> String {
+        let steps = feed.turnTools.count
+        let line = feed.statusLine?.isEmpty == false ? feed.statusLine! : "Working…"
+        return steps == 0 ? line : "\(line) · \(steps) \(steps == 1 ? "step" : "steps")"
+    }
+
+    /// The message field, Talk and the send button, one row on the bottom edge. While Talk works the row says what it is
+    /// doing instead of the field.
+    private func composer(_ feed: WatchChatFeed, send: @escaping () async -> Void) -> some View {
         HStack(spacing: 6) {
             if talk.isBusy {
                 Text(talk.phaseText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -473,9 +442,8 @@ struct WatchChatView: View {
                 TextField("Message", text: $text)
             }
             // Talk on the live chat, or through the iPhone when this chat is on the phone path.
-            if let target = talkTarget {
-                // While the reply is awaited the same button gives the wait up (the reply still
-                // lands in the chat); before, only the header's Stop or the 180 s limit ended it.
+            if let target = feed.talkTarget {
+                // While the reply is awaited the same button gives the wait up (the reply still lands in the chat).
                 Button { talk.tap(target: target) } label: {
                     Image(systemName: talk.phase == .recording ? "stop.circle.fill" : talk.phase == .speaking ? "speaker.slash.circle.fill" : talk.phase == .waiting ? "xmark.circle.fill" : "mic.circle.fill")
                         .font(.title3)
@@ -494,120 +462,9 @@ struct WatchChatView: View {
         }
         .onChange(of: talk.error) { _, e in
             guard let e else { return }
-            // The phone path shows its line under the thread; the live chat its banner.
-            if proxied { error = e } else { chat?.banner = e }
+            talkNote = e
             talk.error = nil
         }
-    }
-
-    /// Where the mic sends: the live chat on its socket, else the phone path.
-    private var talkTarget: TalkTarget? {
-        if !proxied, let chat { return .live(chat) }
-        if proxied, let rt = model.runtime { return .phone(PhoneTalk(model: model, runtime: rt, storedID: storedID, profile: profile)) }
-        return nil
-    }
-
-    // MARK: REST + phone proxy
-
-    private var proxiedBody: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if items.count >= shown {
-                        Button { shown += 20; Task { if let rt = model.runtime { await refreshProxied(rt) } } } label: { Label("Show earlier", systemImage: "arrow.up.circle") }.font(.caption)
-                    }
-                    ForEach(items.suffix(shown)) { item in WatchTranscriptRow(item: item, profile: profile).id(item.id) }
-                    if running { Text(statusText.isEmpty ? "Working…" : statusText).font(.caption2).foregroundStyle(.secondary) }
-                    ForEach(Array(cards.enumerated()), id: \.offset) { _, c in proxiedCard(c) }
-                    if let error { Text(error).font(.caption2).foregroundStyle(.red) }
-                    Color.clear.frame(height: 1).id("bottom")
-                }
-            }
-            .defaultScrollAnchor(.bottom)
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-            .task { try? await Task.sleep(for: .milliseconds(350)); proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: items.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-        }
-        .navigationTitle(title)
-        .toolbar {
-            ToolbarItem(placement: .bottomBar) { composer { await proxySend() } }
-            if running {
-                ToolbarItem(placement: .topBarTrailing) { Button { talk.stopWaiting(); Task { _ = try? await model.askPhone(["op": "stop", "session": storedID, "profile": profile ?? ""]) } } label: { Image(systemName: "stop.fill") }.tint(.red) }
-            }
-        }
-    }
-
-    @ViewBuilder private func proxiedCard(_ c: [String: Any]) -> some View {
-        let id = c["id"] as? String ?? ""; let method = c["method"] as? String ?? ""
-        VStack(alignment: .leading, spacing: 8) {
-            Label(method == "approval" ? "Approval" : "Needs an answer", systemImage: method == "approval" ? "checkmark.shield" : "questionmark.bubble").font(.caption.weight(.semibold))
-            Text(c["text"] as? String ?? "").font(.footnote).lineLimit(6)
-            if method == "approval" {
-                HStack {
-                    Button("Once") { Task { await proxyChoice(id, "once") } }.tint(.green)
-                    Button("Deny") { Task { await proxyChoice(id, "deny") } }.tint(.red)
-                }
-                HStack { Button("Session") { Task { await proxyChoice(id, "session") } }; Button("Always") { Task { await proxyChoice(id, "always") } } }.font(.caption)
-            } else {
-                Button("Answer with the message field") { Task { await proxyAnswer(id) } }.disabled(text.isEmpty)
-            }
-        }
-        .padding(10).background(.orange.opacity(0.15), in: .rect(cornerRadius: 14))
-    }
-
-    private func refreshProxied(_ rt: GatewayRuntime) async {
-        // The history over HTTP: the watch's own connection, or through the phone when that
-        // does not reach the gateway (the route in Settings).
-        do {
-            let r: JSONValue = try await rt.api.get("/api/sessions/\(storedID)/messages", query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: String(shown + 2))], profile: profile ?? rt.selectedProfile)
-            let msgs = (r["messages"]?.arrayValue ?? r.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
-            // Whole-page: an answer a model put in its reasoning shows as the reply.
-            let built = TranscriptItem.fromHistory(msgs).filter { !$0.isThinkingOnly }
-            let sorted = built.sorted { $0.timestamp < $1.timestamp }
-            // Only replace what changed: a fresh array every poll re-laid out every row.
-            if sorted.map(\.id) != items.map(\.id) || sorted.last?.kind != items.last?.kind { items = sorted }
-        } catch is CancellationError {
-            return
-        } catch {
-            // An empty chat with no word why (the phone away on iPhone only, say) read as broken.
-            if items.isEmpty { self.error = error.localizedDescription }
-        }
-        if let reply = try? await model.askPhone(["op": "cards", "session": storedID, "profile": profile ?? ""]) {
-            guard reply["ok"] as? Bool == true else { error = reply["error"] as? String; return }
-            cards = reply["cards"] as? [[String: Any]] ?? []
-            running = reply["running"] as? Bool ?? false
-            statusText = reply["status"] as? String ?? ""
-            error = nil
-        }
-    }
-
-    private func proxySend() async {
-        let t = text; text = ""
-        do {
-            let r = try await model.askPhone(["op": "prompt", "session": storedID, "profile": profile ?? "", "text": t])
-            if r["ok"] as? Bool != true {
-                error = r["error"] as? String ?? "The phone could not send it."
-                text = t
-            } else {
-                running = true; error = nil
-                items.append(TranscriptItem(id: "local-\(UUID().uuidString)", kind: .user(text: t, attachments: [])))
-            }
-        } catch { self.error = error.localizedDescription; text = t }
-    }
-
-    private func proxyChoice(_ card: String, _ choice: String) async {
-        do {
-            let r = try await model.askPhone(["op": "approval", "session": storedID, "profile": profile ?? "", "card": card, "choice": choice])
-            if r["ok"] as? Bool == true { cards.removeAll { ($0["id"] as? String) == card } } else { error = r["error"] as? String ?? "The phone could not answer it." }
-        } catch { self.error = error.localizedDescription }
-    }
-
-    private func proxyAnswer(_ card: String) async {
-        let t = text; text = ""
-        do {
-            let r = try await model.askPhone(["op": "answer", "session": storedID, "profile": profile ?? "", "card": card, "text": t])
-            if r["ok"] as? Bool == true { cards.removeAll { ($0["id"] as? String) == card } } else { error = r["error"] as? String ?? "The phone could not answer it."; text = t }
-        } catch { self.error = error.localizedDescription; text = t }
     }
 }
 
@@ -688,45 +545,78 @@ enum WatchMarkdown {
     }
 }
 
-/// Approval / clarify / secret cards, sized for a wrist.
+/// Approval / clarify / secret cards, sized for a wrist, answered through the chat's feed on either path (#387).
+/// An approval's two common answers are big (Allow once in green, Deny in red) and the other two the gateway offers sit
+/// smaller under them, with the names the iPhone uses (judgement call #36); "Always allow…" asks first, as there.
 struct WatchCardView: View {
-    var chat: ChatSession
+    var feed: WatchChatFeed
     var card: PendingCard
     @State private var answer = ""
+    @State private var sending = false
+    @State private var failed: String?
+    @State private var confirmAlways = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let a = card.approval {
                 Label("Approval", systemImage: "checkmark.shield").font(.caption.weight(.semibold))
                 Text(a.description?.isEmpty == false ? a.description! : (a.command ?? "")).font(.footnote).lineLimit(6)
-                HStack {
-                    Button("Once") { Task { await chat.respond(card: card, result: ["choice": "once"]) } }.tint(.green)
-                    Button("Deny") { Task { await chat.respond(card: card, result: ["choice": "deny"]) } }.tint(.red)
+                let offered = a.offeredChoices
+                if offered.contains("once") {
+                    Button { choose("once") } label: { Text("Allow once").frame(maxWidth: .infinity) }.tint(.green)
                 }
-                HStack {
-                    Button("Session") { Task { await chat.respond(card: card, result: ["choice": "session"]) } }
-                    Button("Always") { Task { await chat.respond(card: card, result: ["choice": "always"]) } }
+                if offered.contains("deny") {
+                    Button(role: .destructive) { choose("deny") } label: { Text("Deny").frame(maxWidth: .infinity) }.tint(.red)
                 }
-                .font(.caption)
+                if offered.contains("session") {
+                    Button("Allow for this chat") { choose("session") }.font(.caption)
+                }
+                if offered.contains("always") {
+                    Button("Always allow…") { confirmAlways = true }.font(.caption)
+                        .alert("Always allow \(a.alwaysScope)?", isPresented: $confirmAlways) {
+                            Button("Always allow") { choose("always") }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Every chat with this bot runs it without asking, until the rule is removed on the iPhone.")
+                        }
+                }
             } else if let c = card.clarify {
                 Label("Question", systemImage: "questionmark.bubble").font(.caption.weight(.semibold))
                 Text(c.question ?? c.questions?.first?.question ?? "").font(.footnote)
                 // Offered answers are buttons: one tap, no typing on the wrist.
                 ForEach((c.choices ?? c.questions?.first?.choices ?? []).prefix(6), id: \.self) { choice in
-                    Button(choice) { Task { await chat.respond(card: card, result: ["answer": .string(choice)]) } }
-                        .font(.footnote)
+                    Button(choice) { choose(choice) }.font(.footnote)
                 }
                 TextField("Answer", text: $answer)
-                Button("Send") { Task { await chat.respond(card: card, result: ["answer": .string(answer)]) } }.disabled(answer.isEmpty)
+                Button("Send") { reply(answer) }.disabled(answer.isEmpty)
             } else {
                 Label("Input needed", systemImage: "key").font(.caption.weight(.semibold))
                 Text(card.valuePrompt?.prompt ?? card.method).font(.footnote)
                 SecureField("Value", text: $answer)
-                Button("Send") { Task { await chat.respond(card: card, result: ["value": .string(answer)]) } }.disabled(answer.isEmpty)
+                Button("Send") { reply(answer) }.disabled(answer.isEmpty)
             }
+            if let failed { Text(failed).font(.caption2).foregroundStyle(.red) }
         }
+        .disabled(sending)
         .padding(10)
         .background(.orange.opacity(0.15), in: .rect(cornerRadius: 14))
+    }
+
+    /// An approval by the gateway's choice key, or a question by one of its offered answers.
+    private func choose(_ choice: String) {
+        act { try await feed.answer(card, choice: choice) }
+    }
+
+    private func reply(_ text: String) {
+        act { try await feed.answer(card, text: text) }
+    }
+
+    private func act(_ work: @escaping () async throws -> Void) {
+        sending = true; failed = nil
+        Task {
+            do { try await work() } catch { failed = error.localizedDescription }
+            sending = false
+        }
     }
 }
 
