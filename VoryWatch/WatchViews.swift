@@ -410,7 +410,12 @@ struct WatchChatView: View {
                 }
             }
             .onChange(of: feed.event) { _, event in arrived(event, proxy) }
-            .navigationTitle(feed.title)
+            // One line, cut at its end, in the room the bar gives it: the system's own title of a long chat ran on as a
+            // marquee under Back ("…k cleanup"). VoiceOver reads it whole.
+            .navigationTitle {
+                Text(feed.title).lineLimit(1).truncationMode(.tail)
+                    .accessibilityLabel(feed.title).accessibilityIdentifier("watch.chat.title")
+            }
             .toolbar {
                 // The bottom bar is where watchOS pins a field to the screen's bottom edge; a safe-area inset sat above
                 // a blank band on the Ultra. It gives way to a card (`barShown`).

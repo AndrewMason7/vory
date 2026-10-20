@@ -77,6 +77,32 @@ final class WatchChatUITests: WatchUITestCase {
         checkEndsAboveTheBar()
     }
 
+    /// The chat's title is one still line, cut at its end, clear of Back and Stop, and reads whole to VoiceOver. The
+    /// system's title of a long chat ran as a marquee under Back ("…k cleanup"): its frame grew and shrank as it moved,
+    /// so the frame is read three times, two seconds apart, and must not change its width.
+    func testTheTitleStaysClearOfTheBarsButtons() async throws {
+        try openExportChat()
+        let full = "Rewrite the nightly export job"
+        let title = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'watch.chat.title' OR (elementType == %d AND label == %@)", XCUIElement.ElementType.staticText.rawValue, full))
+            .firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "no title")
+        XCTAssertEqual(title.label, full, "the title doesn't read whole")
+        var widths: [CGFloat] = []
+        for pass in 0..<3 {
+            let t = title.frame
+            widths.append(t.width)
+            mark("title pass \(pass) \(t)")
+            for b in app.buttons.allElementsBoundByIndex where b.exists && b.frame.width > 0 && b.frame.minY < t.maxY + 4 {
+                guard b.identifier != "watch.chat.title" else { continue }
+                XCTAssertFalse(t.intersects(b.frame.insetBy(dx: 1, dy: 1)), "the title \(t) runs under '\(b.label)' \(b.frame)")
+            }
+            shot("chat-title-\(pass)")
+            if pass < 2 { sleep(2) }
+        }
+        XCTAssertLessThan((widths.max() ?? 0) - (widths.min() ?? 0), 0.5, "the title moves (a marquee): widths \(widths)")
+    }
+
     /// Brief points 1 and 4: at rest the conversation ends above the composer, its last line never under the bar.
     private func checkEndsAboveTheBar() {
         let field = any("watch.chat.message")
