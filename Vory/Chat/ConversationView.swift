@@ -547,6 +547,8 @@ struct ChatHeader: View {
     /// pill moves to the side of it with more room (nothing interactive sits on the fold).
     var fold: CGRect? = nil
     var showBack = true
+    /// False: the chat shown, not worked with (onboarding's tour, #388): no … menu and no long press on the pill.
+    var showsActions = true
     var onBack: () -> Void
     var onProfile: () -> Void
     var onRename: () -> Void
@@ -647,24 +649,25 @@ struct ChatHeader: View {
             .layoutPriority(1)
             .onAppear { withAnimation(.easeOut(duration: 0.25).delay(0.05)) { popped = true } }
             // A long press on the pill offers the rename; a tap opens the card as before.
-            .contextMenu {
-                Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
-                Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
-            }
+            .modifier(PillMenu(on: showsActions, onRename: onRename, onProfile: onProfile))
             .accessibilityLabel("Chat info: \(chat.title), \(chat.subtitle)")
             // The chat's title, as a navigation bar's is: the rotor's Headings reach the header
             // from anywhere in the thread.
             .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("chat.titlePill")
             Spacer(minLength: 0)
-            Menu {
-                ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
-            } label: {
-                Image(systemName: "ellipsis").font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+            if showsActions {
+                Menu {
+                    ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
+                } label: {
+                    Image(systemName: "ellipsis").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                }
+                .menuStyle(.button).buttonStyle(.plain)
+                .accessibilityIdentifier("chat.more")
+            } else {
+                Color.clear.frame(width: 44, height: 44)
             }
-            .menuStyle(.button).buttonStyle(.plain)
-            .accessibilityIdentifier("chat.more")
         }
         .padding(.horizontal, 16)
         .coordinateSpace(.named("chatHeader"))
@@ -679,6 +682,24 @@ struct ChatHeader: View {
         .task {
             try? await Task.sleep(for: .milliseconds(600))
             backFocused = true
+        }
+    }
+}
+
+/// The header pill's long-press menu, where the header has its actions (`ChatHeader.showsActions`).
+private struct PillMenu: ViewModifier {
+    var on: Bool
+    var onRename: () -> Void
+    var onProfile: () -> Void
+
+    func body(content: Content) -> some View {
+        if on {
+            content.contextMenu {
+                Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
+                Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+            }
+        } else {
+            content
         }
     }
 }

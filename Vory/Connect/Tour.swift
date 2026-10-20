@@ -8,7 +8,8 @@ import VoryCore
 /// his place on the next page as the finger moves it (a lag and a lean), and talks in his typed bubble. Each beat also
 /// plays on its own. With Reduce Motion he doesn't float or fly: he is beside each page, and the change cross-fades.
 /// Built from the app's own parts and styles (BotFaceView, the glass buttons, the app's fonts and colours), so the tour
-/// shows the app as it is. Nothing here touches a gateway; the demo bots' looks are never saved.
+/// shows the app as it is. Beats 3 and 4 are a real chat with Sprout on the tour's own demo (`TourChat`), never the
+/// app's gateway in use; nothing here touches a gateway, and the demo bots' looks are never saved.
 struct TourView: View {
     /// Restore from iCloud (beat 1).
     var onRestore: () -> Void
@@ -19,6 +20,8 @@ struct TourView: View {
     /// Straight to the last beat (a restore that brought no gateway).
     var startAtConnect = false
 
+    @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     /// The tour on screen (not covered by the gateway form, the app in front): Vory's float and the bots' orbit run
@@ -29,9 +32,26 @@ struct TourView: View {
     @State private var progress: CGFloat = 0
     /// What each beat's bubble says now: its first line, then the next as the beat moves on (`TourLines`).
     @State private var line = TourLines()
+    /// The tour's own demo for beats 3 and 4, made as the tour comes up.
+    @State private var tourChat: TourChat?
+    /// Where the tour's chat has got to: Vory's lines follow it, and an approval card moves the tour on to beat 4.
+    @State private var chatPhase: TourChatPhase = .ready
+    @State private var moveOn: Task<Void, Never>?
+    /// The card has been answered, once per chat: the cheer and the mention come once.
+    @State private var answered = false
+    /// Beat 4's mention is due (a moment after the answer): the message bar types it in.
+    @State private var mentionDue = false
+    @State private var mentionTimer: Task<Void, Never>?
 
     private var current: TourBeat { page ?? .hello }
+    /// A keyboard up over the tour's chat (the person tapped its message bar).
+    private var typingInChat: Bool { current.showsChat && !windowGeometry.keyboard.isNull }
     private var animating: Bool { onScreen && scenePhase == .active && !reduceMotion }
+    /// The tour's demo runs from the bots beat (so the chat is there as it slides in) through the approval beat, and
+    /// while any of its chat is in view, with the tour on screen. It stops past them, and starts afresh on the way back.
+    private var wantsChat: Bool {
+        onScreen && (current == .bots || current.showsChat || abs(TourChatLayer.slide(progress)) < 1)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -54,28 +74,110 @@ struct TourView: View {
                 .onScrollGeometryChange(for: CGFloat.self) { g in g.contentOffset.x / max(1, g.containerSize.width) } action: { _, p in
                     progress = p
                 }
+                // Beats 3 and 4's chat, over their pages: it comes and goes with them.
+                if let chat = tourChat?.chat {
+                    TourChatLayer(chat: chat, progress: reduceMotion ? CGFloat(current.rawValue) : progress, size: geo.size,
+                                  origin: geo.frame(in: .global).origin, mention: mentionDue)
+                        .id(ObjectIdentifier(chat))
+                    TourChatWatch(chat: chat) { chatMoved(to: $0) }
+                        .id(ObjectIdentifier(chat))
+                }
                 // Vory, over every page, in his place for the scroll.
                 VoryTourLayer(progress: reduceMotion ? CGFloat(current.rawValue) : progress, size: geo.size,
                               says: line.text(for: current), lineKey: line.key(for: current), reduceMotion: reduceMotion,
-                              animating: animating, lookingDown: current == .connect)
+                              animating: animating, lookingDown: current == .connect,
+                              squint: current.showsChat && chatPhase == .working)
                     .allowsHitTesting(false)
+                    // The person typing in the tour's chat: the chat takes the room, and Vory steps aside until they're done.
+                    .opacity(typingInChat ? 0 : 1)
+                    .animation(.easeOut(duration: 0.2), value: typingInChat)
                 controls
             }
         }
+        // The keyboard (beat 3's message bar) moves nothing but the chat, which rises over it.
+        .ignoresSafeArea(.keyboard)
         .background(Color(.systemBackground))
-        .onAppear { onScreen = true; if startAtConnect { page = .connect } }
-        .onDisappear { onScreen = false }
+        .onAppear {
+            onScreen = true
+            if startAtConnect { page = .connect }
+            if tourChat == nil {
+                tourChat = TourChat(appHasGateway: { [model] in model.hasConnections }, appInDemo: { [model] in model.isInDemo })
+            }
+        }
+        .onDisappear {
+            onScreen = false
+            moveOn?.cancel()
+            mentionTimer?.cancel()
+            Task { [tourChat] in await tourChat?.stop() }
+        }
+        .onChange(of: wantsChat, initial: true) { _, wants in
+            guard let tourChat else { return }
+            Task { if wants { await tourChat.start() } else { await tourChat.stop() } }
+        }
         .onChange(of: page) { _, beat in
             guard let beat else { return }
             line.arrived(at: beat)
             // Landing on Connect: Vory settles beside it, with a tap on the hand.
             if beat == .connect { UIImpactFeedbackGenerator(style: .soft).impactOccurred() }
+            // An answer given on beat 3 has its mention on arriving at beat 4.
+            if beat == .approval { scheduleMention() }
         }
-        .task(id: current) {
-            // Each beat's second line, a moment after its first has been read.
+        .task(id: LineTimer(beat: current, asked: chatPhase == .asked)) {
+            // Each beat's second line, a moment after its first has been read (beat 4's once its card is up).
             try? await Task.sleep(for: .seconds(2.6))
             guard !Task.isCancelled else { return }
-            line.advance(on: current, demo: onDemo != nil)
+            line.advance(on: current, demo: onDemo != nil, asked: chatPhase == .asked)
+        }
+    }
+
+    private struct LineTimer: Hashable { var beat: TourBeat; var asked: Bool }
+
+    /// The tour's chat moved on: Vory's lines follow, with a tap on the hand at Send and at an allowed card, and
+    /// VoiceOver told what the screen alone shows. The card coming up moves the tour on to beat 4 once the line
+    /// about the reply has been read; its answer (the first only) brings the cheer, then the mention.
+    private func chatMoved(to phase: TourChatPhase) {
+        let was = chatPhase
+        guard phase != was else { return }
+        chatPhase = phase
+        line.chatMoved(to: phase)
+        if phase == .ready {
+            // A fresh chat (the tour back after its demo stopped): its answer and mention are still to come.
+            answered = false
+            mentionDue = false
+            mentionTimer?.cancel()
+        }
+        if was == .ready, phase == .working { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        if was == .working, phase == .replied || phase == .asked { AccessibilityNotification.Announcement("Sprout replied").post() }
+        if phase == .asked, current == .chat {
+            moveOn?.cancel()
+            moveOn = Task {
+                try? await Task.sleep(for: .seconds(2.6))
+                guard !Task.isCancelled, current == .chat, chatPhase == .asked else { return }
+                go(to: .approval)
+            }
+        }
+        if case .answered(let allowed) = phase, !answered {
+            answered = true
+            if allowed {
+                // Vory cheers: his finish spin, as a bot's at the end of a turn.
+                BotAmbient.shared.turnFinished(profile: "vory-tour")
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                AccessibilityNotification.Announcement("Approved. Sprout cleared 3.1 gigabytes.").post()
+            }
+            scheduleMention()
+        }
+    }
+
+    /// Beat 4's last moment, once the answer's line has been read: "Type @ to bring another bot in.", and the message
+    /// bar types a mention of Gizmo (shown, not sent). Only on beat 4: an answer given on beat 3 has it on arrival.
+    private func scheduleMention() {
+        guard answered, !mentionDue, current == .approval else { return }
+        mentionTimer?.cancel()
+        mentionTimer = Task {
+            try? await Task.sleep(for: .seconds(2.6))
+            guard !Task.isCancelled, current == .approval else { return }
+            line.mentionCame()
+            mentionDue = true
         }
     }
 
@@ -89,8 +191,11 @@ struct TourView: View {
             TourBotsBeat(centre: VoryTourLayer.anchor(for: .bots, in: size), live: current == .bots && animating, reduceMotion: reduceMotion) {
                 line.botTapped()
             }
-        case .chat, .approval, .everywhere:
-            // Beats 3 to 5 are built from the app's own chat, approval card and frames (the next commits).
+        case .chat, .approval:
+            // The chat itself is on its own layer over these two pages (`TourChatLayer`).
+            Color.clear
+        case .everywhere:
+            // Beat 5 is built from the app's own frames (the next commit).
             Color.clear
         case .connect:
             TourConnectBeat(onConnect: onConnect, onDemo: onDemo)
@@ -141,6 +246,8 @@ struct TourView: View {
 enum TourBeat: Int, CaseIterable, Identifiable, Hashable {
     case hello, bots, chat, approval, everywhere, connect
     var id: Int { rawValue }
+    /// The beats the tour's chat is on.
+    var showsChat: Bool { self == .chat || self == .approval }
 }
 
 /// What Vory says on each beat, in the approved words: a first line on arrival, the next once it has been read (or a
@@ -148,13 +255,21 @@ enum TourBeat: Int, CaseIterable, Identifiable, Hashable {
 struct TourLines: Equatable {
     private var step: [TourBeat: Int] = [:]
     private var tapped = false
+    /// The tour's chat had its card answered: beat 4's lines have moved past it for good.
+    private var answered = false
+
+    /// Vory's line after a Deny (Matt, 2026-10-20).
+    static let afterDeny = "That\u{2019}s fine too. Nothing happens without your OK."
 
     static func lines(_ beat: TourBeat, demo: Bool) -> [String] {
         switch beat {
         case .hello: return ["Hi, I\u{2019}m Vory.", "I bring your Hermes agents to life as bots."]
         case .bots: return ["Every agent on your gateway shows up as a bot.", "Go on, tap one.", "They each get a face, a name and a title."]
-        case .chat: return ["This is a chat with Sprout. Tap Send."]
-        case .approval: return ["Sprout asks before it does anything risky.", "It\u{2019}s your call. Tap Allow once to let it go ahead."]
+        case .chat: return ["This is a chat with Sprout. Tap Send.", "Sprout\u{2019}s on it. You can watch it work.",
+                            "That ring fills as the chat uses up its memory."]
+        // In order: on arrival, once the card is up, after an allow, the mention, after a Deny.
+        case .approval: return ["Sprout asks before it does anything risky.", "It\u{2019}s your call. Tap Allow once to let it go ahead.",
+                                "Done. Sprout cleared 3.1 GB.", "Type @ to bring another bot in.", afterDeny]
         case .everywhere: return ["I\u{2019}m on your iPad too, with room for two columns."]
         case .connect: return demo ? ["Let\u{2019}s connect your gateway.", "Or take me for a spin first."] : ["Let\u{2019}s connect your gateway."]
         }
@@ -170,13 +285,38 @@ struct TourLines: Equatable {
     /// A beat comes into view: its first line, unless it has moved on already (back to a beat already seen).
     mutating func arrived(at beat: TourBeat) { if step[beat] == nil { step[beat] = 0 } }
 
-    /// The beat's next line, a moment in; not past the lines it has, and the bots' last line only after a tap.
-    mutating func advance(on beat: TourBeat, demo: Bool) {
+    /// The beat's next line, a moment in; not past the lines it has, and the bots' last line only after a tap. Beat 3
+    /// follows its chat instead (`chatMoved`); beat 4's second line waits for the card, and its last for the answer.
+    mutating func advance(on beat: TourBeat, demo: Bool, asked: Bool = false) {
         let count = Self.lines(beat, demo: demo).count
         let now = step[beat] ?? 0
         if beat == .bots, now >= 1 { return }
+        if beat == .chat { return }
+        if beat == .approval, now >= 1 || !asked { return }
         if now + 1 < count { step[beat] = now + 1 }
     }
+
+    /// The tour's chat moved on: beat 3's lines follow it (Send, the work, the reply), and beat 4's answer line comes
+    /// with the card's first answer (a later message's reply leaves beat 4 where it is). A fresh chat (back on beat 3
+    /// after the demo stopped) starts both again.
+    mutating func chatMoved(to phase: TourChatPhase) {
+        switch phase {
+        case .ready:
+            step[.chat] = 0
+            step[.approval] = nil
+            answered = false
+        case .working: step[.chat] = 1
+        case .replied, .asked: step[.chat] = 2
+        case .answered(let allowed):
+            step[.chat] = 2
+            guard !answered else { return }
+            answered = true
+            step[.approval] = allowed ? 2 : 4
+        }
+    }
+
+    /// The mention, a moment after the answer: beat 4's last line.
+    mutating func mentionCame() { step[.approval] = 3 }
 
     mutating func botTapped() {
         guard !tapped else { return }
@@ -199,13 +339,17 @@ struct VoryTourLayer: View {
     /// The float runs: the tour on screen, the app in front, no Reduce Motion.
     var animating = true
     var lookingDown = false
+    /// The thinking squint, while Sprout works in the tour's chat.
+    var squint = false
 
-    /// His place and size on each beat, as fractions of the screen and points.
-    struct Place { var x: CGFloat; var y: CGFloat; var size: CGFloat }
+    /// His place and size on each beat, as fractions of the screen and points; `bubbleTop`, a fraction of the height,
+    /// where his bubble's top sits when it isn't just under him. On the bots beat it's above the orbit: under him, the
+    /// bots circling him crossed it.
+    struct Place { var x: CGFloat; var y: CGFloat; var size: CGFloat; var bubbleTop: CGFloat? = nil }
     static func place(_ beat: TourBeat) -> Place {
         switch beat {
         case .hello: return Place(x: 0.5, y: 0.30, size: 150)
-        case .bots: return Place(x: 0.5, y: 0.42, size: 92)
+        case .bots: return Place(x: 0.5, y: 0.42, size: 92, bubbleTop: 0.12)
         case .chat, .approval, .everywhere: return Place(x: 0.5, y: 0.13, size: 64)
         case .connect: return Place(x: 0.5, y: 0.28, size: 112)
         }
@@ -216,13 +360,24 @@ struct VoryTourLayer: View {
         return CGPoint(x: p.x * size.width, y: p.y * size.height)
     }
 
-    /// The place between two pages for a fractional page.
-    private var spot: Place {
+    /// His face's centre on a page, in points.
+    static func faceY(_ p: Place, in size: CGSize) -> CGFloat { p.y * size.height + p.size * 0.46 - 22 }
+    /// His bubble's top on a page, in points: just under his face (it tucks a little under his chin), or where the beat
+    /// puts it.
+    static func bubbleTop(_ p: Place, in size: CGSize) -> CGFloat { p.bubbleTop.map { $0 * size.height } ?? faceY(p, in: size) + p.size * 0.38 }
+
+    /// Where he and his bubble are between two pages, for a fractional page: in points. `tail`, how much of the bubble's
+    /// tail shows: all of it under him, none once it hangs 40 points or more from there (it pointed up at nothing).
+    private var spot: (x: CGFloat, faceY: CGFloat, bubbleTop: CGFloat, size: CGFloat, tail: CGFloat) {
         let last = CGFloat(TourBeat.allCases.count - 1)
         let p = min(max(progress, 0), last)
         let i = Int(p.rounded(.down)), f = p - CGFloat(i)
         let a = Self.place(TourBeat(rawValue: i) ?? .hello), b = Self.place(TourBeat(rawValue: min(i + 1, Int(last))) ?? .connect)
-        return Place(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, size: a.size + (b.size - a.size) * f)
+        func mix(_ u: CGFloat, _ v: CGFloat) -> CGFloat { u + (v - u) * f }
+        func under(_ p: Place) -> CGFloat { Self.faceY(p, in: size) + p.size * 0.38 }
+        let top = mix(Self.bubbleTop(a, in: size), Self.bubbleTop(b, in: size))
+        return (mix(a.x, b.x) * size.width, mix(Self.faceY(a, in: size), Self.faceY(b, in: size)), top, mix(a.size, b.size),
+                max(0, 1 - abs(top - mix(under(a), under(b))) / 40))
     }
 
     /// The lean into a move: most in the middle of a page change, none at rest.
@@ -237,19 +392,22 @@ struct VoryTourLayer: View {
             let t = context.date.timeIntervalSinceReferenceDate
             let bob = reduceMotion ? 0 : sin(t * 1.3) * 5
             let sway = reduceMotion ? 0 : sin(t * 0.8) * 2
-            VStack(spacing: -s.size * 0.12) {
+            ZStack {
                 BotFaceView(spec: BotLookSpec.vory, size: s.size, active: true,
                             gaze: lookingDown ? CGPoint(x: 0, y: 0.6) : .zero,
-                            mood: BotFaceView.Mood(profile: "vory-tour", state: .guide))
+                            mood: BotFaceView.Mood(profile: "vory-tour", state: .guide, squint: squint))
                     .rotationEffect(.degrees(lean + sway))
                     .offset(y: bob)
                     .accessibilityLabel("Vory")
-                VoryTypedBubble(text: says, key: lineKey, reduceMotion: reduceMotion)
+                    .position(x: s.x, y: s.faceY)
+                // Hung from its top, so a second line grows down, as it did under him.
+                VoryTypedBubble(text: says, key: lineKey, reduceMotion: reduceMotion, tail: s.tail)
                     .padding(.horizontal, 24)
                     .accessibilityLabel(says)
+                    .frame(width: size.width, height: 160, alignment: .top)
+                    .position(x: s.x, y: s.bubbleTop + 80)
             }
-            .frame(width: size.width)
-            .position(x: s.x * size.width, y: s.y * size.height + s.size * 0.4)
+            .frame(width: size.width, height: size.height)
         }
         // The lag behind the finger: his place eases after the scroll rather than sticking to it.
         .animation(reduceMotion ? nil : .interpolatingSpring(stiffness: 120, damping: 16), value: progress)
@@ -339,6 +497,141 @@ private struct TourBotsBeat: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(bot.display), \(bot.title)")
         .accessibilityHint("Double tap to say hi")
+    }
+}
+
+/// 3 and 4. The tour's chat with Sprout, on the app's own chat parts (`TourChatCard`). One chat for both beats: it
+/// comes in with beat 3, stays put while Vory moves on to beat 4, and goes with beat 4. With the keyboard up it rises
+/// over it.
+struct TourChatLayer: View {
+    let chat: ChatSession
+    var progress: CGFloat
+    var size: CGSize
+    /// The layer's top left in window space, where the window reports the keyboard.
+    var origin: CGPoint
+    /// Beat 4's mention is due: the message bar types it in.
+    var mention = false
+    @Environment(\.windowGeometry) private var windowGeometry
+
+    /// Where the chat is across the pages, in widths from its place: in from the right with beat 3, still through
+    /// beat 4, out to the left after it. In view while under one width.
+    static func slide(_ progress: CGFloat) -> CGFloat {
+        let first = CGFloat(TourBeat.chat.rawValue), last = CGFloat(TourBeat.approval.rawValue)
+        if progress < first { return first - progress }
+        if progress > last { return last - progress }
+        return 0
+    }
+
+    var body: some View {
+        let slide = Self.slide(progress)
+        let frame = Self.frame(in: size, keyboardTop: keyboardTop)
+        if abs(slide) < 1 {
+            // Its own view, so the swipe moving it doesn't redraw the thread.
+            TourChatCard(chat: chat, mention: mention)
+                .frame(width: min(size.width - 32, 560), height: frame.height)
+                .position(x: size.width / 2 + slide * size.width, y: frame.midY)
+                .animation(.snappy, value: frame)
+        }
+    }
+
+    /// The keyboard's top edge in the layer's space, when one is up (the person typing in the chat).
+    private var keyboardTop: CGFloat? {
+        let keyboard = windowGeometry.keyboard
+        return keyboard.isNull ? nil : keyboard.minY - origin.y
+    }
+
+    /// Where the chat sits, top to bottom: under Vory and his bubble and over Continue and the dots; with the keyboard
+    /// up, from under Skip to just over the keyboard, Vory stepping aside meanwhile (`TourView`). Lifted whole, it
+    /// went up over Vory and his bubble.
+    static func frame(in size: CGSize, keyboardTop: CGFloat?) -> CGRect {
+        if let keyboardTop {
+            let top: CGFloat = 60
+            return CGRect(x: 0, y: top, width: size.width, height: max(160, keyboardTop - 8 - top))
+        }
+        let top = size.height * 0.30
+        return CGRect(x: 0, y: top, width: size.width, height: max(280, size.height - top - 112))
+    }
+}
+
+/// The tour's chat itself: the chat's header (Sprout seated on its pill, without the … menu), the thread, and the
+/// message bar holding the ready-made message, which turns into the approval card when Sprout asks, and after the
+/// answer types beat 4's mention. Its one framing of its own is the app's background in a rounded frame.
+private struct TourChatCard: View {
+    let chat: ChatSession
+    var mention = false
+    @State private var text = TourChat.readyMessage
+    @State private var quote = ""
+    @State private var dockTop: CGFloat = 0
+    @State private var dockHeight: CGFloat = 60
+    @Namespace private var dockSpace
+    private static let topFade: CGFloat = 12
+
+    var body: some View {
+        // The header above the thread, not over it: in this small frame the thread ran under the pill with nothing behind
+        // it (the app's chat has the bar's glass there), and its words read as overlapping. Nothing sits under the pill.
+        VStack(spacing: 0) {
+            ChatHeader(chat: chat, showBack: false, showsActions: false,
+                       onBack: {}, onProfile: {}, onRename: {}, onContext: {}, onNewChat: {}, onClose: {})
+                .padding(.top, 10).padding(.bottom, 4)
+            ZStack(alignment: .bottom) {
+                TranscriptView(chat: chat, dockTop: dockTop, fallbackInset: dockHeight, topInset: 0,
+                               keyboardFloors: false, bandFade: Self.topFade)
+                BottomDock(chat: chat, text: $text, quote: $quote, namespace: dockSpace)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("onboarding.chatDock")
+            }
+            // The thread fades out under the header rather than cut through a line; at rest its first row starts below
+            // the fade.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.topFade)
+                    Rectangle()
+                }
+            }
+        }
+        .background(Color(.systemBackground))
+        .clipShape(.rect(cornerRadius: 32))
+        .overlay { RoundedRectangle(cornerRadius: 32).strokeBorder(Color.primary.opacity(0.1)) }
+        // The tour's Send is a step of it: no keyboard after it, which covered the chat and lifted it over Vory.
+        .environment(\.composerFocusesAfterSend, false)
+        .task(id: mention) {
+            guard mention, text.isEmpty, let bot = TourChat.mentionBot else { return }
+            await typeMention(bot)
+        }
+    }
+
+    /// The mention as a person would make it, shown and not sent: "@Gi" typed, the message bar's own list coming up
+    /// with Gizmo, then Gizmo picked from it (the app writes a bot's folder name, "@gizmo") and the rest of the draft.
+    /// Anything typed meanwhile stops it.
+    private func typeMention(_ bot: DemoBot) async {
+        let query = "@" + String(bot.display.prefix(2))
+        var shown = ""
+        for c in query {
+            guard text == shown else { return }
+            shown.append(c)
+            text = shown
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+        }
+        try? await Task.sleep(for: .seconds(1.4))
+        guard !Task.isCancelled, text == shown else { return }
+        text = "@\(bot.name) " + TourChat.mentionDraft
+    }
+}
+
+/// Follows the tour's chat for the tour (`TourChatPhase`) and draws nothing. The chat changes with every streamed
+/// word and only this small view reads it, so the tour itself redraws only when the phase moves.
+private struct TourChatWatch: View {
+    let chat: ChatSession
+    var moved: (TourChatPhase) -> Void
+    @State private var tracker = TourChatTracker()
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onChange(of: TourChatReading(chat), initial: true) { _, reading in moved(tracker.phase(for: reading)) }
+            .accessibilityHidden(true)
     }
 }
 

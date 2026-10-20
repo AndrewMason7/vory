@@ -40,6 +40,9 @@ struct ComposerView: View {
     private var group: Bool { newMessage?.group == true }
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
+    /// The cursor stays in the field after a send, ready for the next message, as in Messages. Onboarding's tour (#388)
+    /// turns it off: its Send is a step of the tour, and the keyboard coming up covered the chat it shows.
+    @Environment(\.composerFocusesAfterSend) private var focusesAfterSend
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
@@ -100,7 +103,6 @@ struct ComposerView: View {
     @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.windowGeometry) private var windowGeometry
-    @Environment(AppModel.self) private var model
     /// The fold of a partly open Duo, when it runs across the window above the composer (a
     /// laptop pose): the lists that grow up from the field stop under it (Step D).
     @Environment(\.reservedRegions) private var regions
@@ -120,8 +122,9 @@ struct ComposerView: View {
         return String(last.dropFirst())
     }
     private var mentionSuggestions: [ProfileInfo] {
-        guard let q = mentionQuery?.lowercased(), let profiles = model.runtime?.profiles else { return [] }
-        return profiles.filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) || $0.label.lowercased().hasPrefix(q) }
+        // The chat's own gateway's bots: onboarding's tour (#388) runs a demo that is not the app's gateway in use.
+        guard let q = mentionQuery?.lowercased() else { return [] }
+        return chat.runtime.profiles.filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) || $0.label.lowercased().hasPrefix(q) }
     }
     private func pickMention(_ p: ProfileInfo) {
         var parts = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
@@ -903,7 +906,7 @@ struct ComposerView: View {
             quote = ""
         }
         text = ""
-        focused = true
+        if focusesAfterSend { focused = true }
         historyCursor = nil
         NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
         if let prefill = await chat.send(t) { text = prefill }
@@ -1034,4 +1037,9 @@ struct HistorySheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Whether a send leaves the cursor in the composer (`ComposerView`); the app's chats do, onboarding's tour doesn't.
+    @Entry var composerFocusesAfterSend: Bool = true
 }

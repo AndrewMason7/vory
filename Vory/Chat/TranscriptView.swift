@@ -63,6 +63,10 @@ struct TranscriptView: View {
     /// The floating header's bottom edge in window space (0 = not measured): the thread's top
     /// margin ends there, however much safe area the header stands in.
     var headerBottom: CGFloat = 0
+    /// False where the keyboard never covers the thread: onboarding's tour (#388) lifts its chat, dock and all, over
+    /// the keyboard, so the floor below (the keyboard's height, for a thread that runs to the window's bottom) would
+    /// push its last line out of a frame that size.
+    var keyboardFloors = true
     /// The header band's fade (`ChatStyle.bandFade` on iOS, 0 where there is no band): added to
     /// the top margin so the first row reads whole. The bottom has no fade above the bar (the
     /// thread shows through the field's glass, Matt 2026-10-10): the last row ends 8 pt above
@@ -678,7 +682,7 @@ extension TranscriptView {
             if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
         }
         floorTask?.cancel()
-        if inset == 0 { keyboardFloor = 0 } else {
+        if inset == 0 || !keyboardFloors { keyboardFloor = 0 } else {
             floorTask = Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(450))
                 guard !Task.isCancelled else { return }
