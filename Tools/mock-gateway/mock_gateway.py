@@ -1249,6 +1249,37 @@ NO_PDF_TOOLS = "--no-pdf-tools" in sys.argv
 NO_PINS = "--no-pins" in sys.argv
 # Rows that say "pinned" but a pin refused all the same, for the app's refusal path (#406).
 REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
+# MOCK_FENCE=1: a Hermes from about 2026-10-17 on (#467), whose chat edits are fenced (hermes_cli/web_routers/
+# sessions.py, web_server_sessions.py): GET /api/sessions/{id}/mutation-snapshot gives the chat's revision, and a DELETE
+# (identity in the query) or PATCH (in the body) without request_id and expected_revision is refused. Without it, the
+# Hermes before the fence: no snapshot route (404), edits taken as they come.
+FENCE = bool(os.environ.get("MOCK_FENCE"))
+# MOCK_FENCE_REFUSE=<reason>[:<count>]: the next <count> fenced edits (every one without a count) refused with that
+# 409 reason (session_busy, unknown_execution, revision_conflict, ...), for the app's refusal paths.
+_refuse = os.environ.get("MOCK_FENCE_REFUSE", "")
+FENCE_REFUSE = {"reason": _refuse.split(":")[0], "left": int(_refuse.split(":")[1]) if ":" in _refuse else -1} if _refuse else None
+FENCE_REVISIONS: dict = {}      # stored id -> runtime_revision, bumped by every edit that commits
+CLIENT_UPGRADE_REQUIRED = ("client_upgrade_required: this app is out of sync (different versions) "
+                           "with the Hermes backend; update the app to edit sessions")
+
+
+def fence_refusal(identity: dict, sid: str):
+    """The fenced gateway's answer to an edit's identity, or None to go ahead (upstream _mutate_session_request and
+    mutate_runtime_session's checks, in their order)."""
+    if not FENCE:
+        return None
+    rid, rev = identity.get("request_id"), identity.get("expected_revision")
+    if rid in (None, "") and rev in (None, "") and identity.get("expected_generation") in (None, ""):
+        return 409, {"detail": CLIENT_UPGRADE_REQUIRED}
+    if rid in (None, "") or rev in (None, ""):
+        return 409, {"detail": "mutation_identity_required"}
+    if FENCE_REFUSE and FENCE_REFUSE["left"] != 0:
+        FENCE_REFUSE["left"] -= 1 if FENCE_REFUSE["left"] > 0 else 0
+        print(f"[mock] fence refused {sid}: {FENCE_REFUSE['reason']}", flush=True)
+        return 409, {"detail": FENCE_REFUSE["reason"]}
+    if any(r["id"] == sid for r in STORED_SESSIONS) and int(rev) != FENCE_REVISIONS.get(sid, 0):
+        return 409, {"detail": "revision_conflict"}
+    return None
 NEUTRAL_NAMES = [
     ("claude-subscription/claude-opus-4.6", "local/assistant"),
     ("claude-subscription-directsdk-experimental", "local-assistant"),
@@ -1655,19 +1686,47 @@ def _process_request(connection, request):
         result = delete_profile(unquote(base.split("/")[3]))
     elif method == "PUT" and re.fullmatch(r"/api/profiles/[^/]+/(description|model)", base):
         result = put_profile(unquote(base.split("/")[3]), base.split("/")[4], body_json if isinstance(body_json, dict) else {})
+    elif FENCE and method == "GET" and re.fullmatch(r"/api/sessions/[^/]+/mutation-snapshot", base):
+        # The chat's revision as the fenced gateway gives it; an absent chat is exists false, never a 404.
+        sid = unquote(base.split("/")[3])
+        row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
+        result = (200, {"session_id": sid, "exists": row is not None, "runtime_revision": FENCE_REVISIONS.get(sid, 0) if row else 0,
+                        "runtime_generation": None})
+    elif method == "DELETE" and re.fullmatch(r"/api/sessions/[^/]+", base):
+        # A chat deleted: its row goes, so the list the app reloads agrees. Fenced (#467): the identity in the query.
+        sid = unquote(base.split("/")[3])
+        row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
+        refused = fence_refusal({k: unquote(v) for k, v in query.items()}, sid)
+        if refused:
+            result = refused
+        elif row is None:
+            result = (200, {"ok": True, "already_absent": True}) if FENCE else (404, {"detail": "Session not found"})
+        else:
+            STORED_SESSIONS.remove(row)
+            FENCE_REVISIONS[sid] = FENCE_REVISIONS.get(sid, 0) + 1
+            print(f"[mock] deleted chat {sid}", flush=True)
+            result = (200, {"ok": True, "session_id": sid, "operation": "delete", "deleted_ids": [sid]})
     elif method == "PATCH" and base.startswith("/api/sessions/"):
         # A chat's pin, archive or title, kept on the stored row, so the list the app reloads
         # after its own change agrees with it (a pin used to be put back by that reload).
         sid = base.split("/")[3]
         row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
         known = ("archived", "title") if REFUSE_PINS else ("pinned", "archived", "title")
-        if REFUSE_PINS and isinstance(body_json, dict) and not any(k in body_json for k in known):
+        refused = fence_refusal(body_json if isinstance(body_json, dict) else {}, sid)
+        if refused:
+            result = refused
+        elif FENCE and row is None:
+            result = (404, {"detail": "not_found"})
+        elif REFUSE_PINS and isinstance(body_json, dict) and not any(k in body_json for k in known):
             result = (400, {"detail": "Nothing to update; provide 'title' and/or 'archived'."})
         else:
+            if row:
+                FENCE_REVISIONS[sid] = FENCE_REVISIONS.get(sid, 0) + 1
             if row and isinstance(body_json, dict):
                 for key in known:
                     if key in body_json:
                         row[key] = body_json[key]
+            print(f"[mock] patched chat {sid}: {({k: body_json[k] for k in known if k in body_json}) if isinstance(body_json, dict) else {}}", flush=True)
             result = (200, {"ok": True, "title": row["title"] if row else ""})
     elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
         # Held while the task "runs": answered later, without holding up anything else.

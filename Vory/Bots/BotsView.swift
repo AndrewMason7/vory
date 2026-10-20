@@ -536,8 +536,12 @@ struct BotDetailView: View {
     private func delete(_ s: StoredSession) async {
         guard let rt = model.runtime else { return }
         if let chat = rt.chatForStored(s.id) { rt.closeChat(chat) }
-        let _: JSONValue? = try? await rt.api.send("DELETE", "/api/sessions/\(s.id)", profile: profile.name, body: EmptyBody())
+        // A refusal is said; swallowed, the chat came back with the list as if never deleted (#467).
+        var failure: String?
+        do { try await SessionMutation.delete(rt.api, id: s.id, profile: profile.name) }
+        catch { failure = SessionMutation.message(for: error) ?? error.localizedDescription }
         await load()
+        if let failure { error = "Could not delete \u{201C}\(s.displayTitle)\u{201D}: \(failure)" }
     }
 }
 

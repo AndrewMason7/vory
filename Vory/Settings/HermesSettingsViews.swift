@@ -958,8 +958,12 @@ struct SessionsView: View {
 
     private func delete(_ s: StoredSession) async {
         guard let rt else { return }
-        let _: JSONValue? = try? await rt.api.send("DELETE", "/api/sessions/\(s.id)", profile: rt.selectedProfile, body: EmptyBody())
+        // A refusal is said; swallowed, the chat came back with the list as if never deleted (#467).
+        var failure: String?
+        do { try await SessionMutation.delete(rt.api, id: s.id, profile: rt.selectedProfile) }
+        catch { failure = SessionMutation.message(for: error) ?? error.localizedDescription }
         await load()
+        if let failure { error = "Could not delete \u{201C}\(s.displayTitle)\u{201D}: \(failure)" }
     }
 }
 
