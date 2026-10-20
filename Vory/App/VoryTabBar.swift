@@ -677,10 +677,10 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             watchPage(vc)
             let first = !wasPushed
             wasPushed = true
-            guard active, let nav else { return }
+            guard active, let nav else { giveBackItem(under: vc); return }
             // A page that keeps its own bar keeps its back and title, and the bar's state under it
             // stays as it was (the root's, or the Back of the page it came from).
-            if ownsBar(vc, in: nav) { return }
+            if ownsBar(vc, in: nav) { giveBackItem(under: vc); return }
             hideChrome(of: vc)
             guard first else { return }
             Perf.stamp("root probe \(tab.rawValue): push seen")
@@ -764,18 +764,45 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             chromeTaken.add(vc)
             let item = vc.navigationItem
             item.hidesBackButton = true
+            // The page under it gives no Back either. Where the system's bars stand in a side strip (the closed iPhone
+            // Duo), the strip drew a Back from the page underneath's own back item whenever something walked the page's
+            // accessibility tree (VoiceOver, Voice Control, Full Keyboard Access), whatever `hidesBackButton` said: a
+            // second Back beside the bar's.
+            if let under = page(under: vc), under.navigationItem.backBarButtonItem == nil {
+                under.navigationItem.backBarButtonItem = HiddenBack()
+            }
             let titled = keepsTitle && !(item.title ?? "").isEmpty
             if !titled, !(item.titleView is BarHolder) { item.titleView = BarHolder() }
             else if titled, item.titleView is BarHolder { item.titleView = nil }
         }
         /// An empty title view: holds an untitled pushed page's bar at its height.
         private final class BarHolder: UIView {}
+        /// The back item the bar puts on the page under a pushed one, hidden; only this one is taken back.
+        private final class HiddenBack: UIBarButtonItem {
+            override init() { super.init(); isHidden = true }
+            required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        }
+
+        /// The page a pushed page sits on, in this stack.
+        private func page(under vc: UIViewController) -> UIViewController? {
+            guard let pages = nav?.viewControllers, let i = pages.firstIndex(of: vc), i > 0 else { return nil }
+            return pages[i - 1]
+        }
 
         private func showChrome(of vc: UIViewController) {
             guard chromeTaken.contains(vc) else { return }
             chromeTaken.remove(vc)
             vc.navigationItem.hidesBackButton = false
+            giveBackItem(under: vc)
             if vc.navigationItem.titleView is BarHolder { vc.navigationItem.titleView = nil }
+        }
+
+        /// A page keeps the system's Back after all (a wide window, or a page with its own bar): the page under it gets
+        /// its back item back, where the bar had hidden it.
+        private func giveBackItem(under vc: UIViewController) {
+            if let under = page(under: vc), under.navigationItem.backBarButtonItem is HiddenBack {
+                under.navigationItem.backBarButtonItem = nil
+            }
         }
 
         /// This page keeps its own bar: it, or a page under it other than the root, carries the

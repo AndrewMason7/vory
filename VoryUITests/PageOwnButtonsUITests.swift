@@ -79,7 +79,9 @@ final class PageOwnButtonsUITests: XCTestCase {
     private func openSettingsRow(_ id: String) {
         let row = any("settings.row.\(id)")
         XCTAssertTrue(any("settings.row.profile").waitForExistence(timeout: 20), "no Settings rows")
-        for _ in 0..<10 where !(row.exists && row.isHittable) { app.swipeUp(velocity: .slow); pause(0.5) }
+        // Clear of the tab bar: a row behind it reads as hittable, and the tap goes to the bar.
+        let limit = app.windows.firstMatch.frame.maxY - 150
+        for _ in 0..<12 where !(row.exists && row.isHittable && row.frame.maxY < limit) { app.swipeUp(velocity: .slow); pause(0.5) }
         XCTAssertTrue(row.exists && row.isHittable, "no \(id) row on Settings")
         row.tap(); pause(1.5)
     }
