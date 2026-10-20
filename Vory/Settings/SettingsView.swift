@@ -249,7 +249,7 @@ struct GatewaysView: View {
                 }
             }
             Section {
-                Button { Smooth.animate("gatewaySheet"); showAdd = true } label: { Label("Add Gateway", systemImage: "plus") }
+                Button { addGateway() } label: { Label("Add Gateway", systemImage: "plus") }
                     .accessibilityIdentifier("settings.addGateway")
                 if let rt = model.runtime {
                     Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
@@ -261,6 +261,10 @@ struct GatewaysView: View {
             }
         }
         .untitledPage()
+        // Add gateway at the top as on every page that can make something (#428): the bar draws it beside its Back where the
+        // morph bar is up; the page's own toolbar has it elsewhere. The row in the list stays.
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { addGateway() } label: { Label("Add gateway", systemImage: "plus") }.accessibilityIdentifier("gateways.add") } } }
+        .morphPageActions([MorphPageAction(id: "gateways.add", symbol: "plus", label: "Add gateway") { addGateway() }], on: MorphTopBar.active(model))
         .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame().withAppModel() }
         #if os(macOS)
         .sheet(item: $editing) { c in GatewayFormSheet(existing: c).withAppModel() }
@@ -270,6 +274,8 @@ struct GatewaysView: View {
             Button("Cancel", role: .cancel) {}
         } message: { Text("Saved credentials for this gateway are deleted from the Keychain.") }
     }
+
+    private func addGateway() { Smooth.animate("gatewaySheet"); showAdd = true }
 }
 
 // MARK: Profile
@@ -321,6 +327,11 @@ struct ProfileView: View {
             }
         }
         .reloadable { await model.runtime?.loadProfiles() }
+        // Add profile at the top as on every page that can make something (#428), with a gateway to make it on: the bar
+        // draws it beside its Back where the morph bar is up; the page's own toolbar has it elsewhere. The row stays.
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), model.runtime != nil { Button { showCreate = true } label: { Label("Add profile", systemImage: "plus") }.accessibilityIdentifier("profile.add") } } }
+        .morphPageActions([MorphPageAction(id: "profile.add", symbol: "plus", label: "Add profile") { showCreate = true }],
+                          on: MorphTopBar.active(model) && model.runtime != nil)
         .alert("Delete \(pendingDelete?.label ?? "profile")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button(deleting ? "Deleting…" : "Delete", role: .destructive) { if let p = pendingDelete { Task { await delete(p) } } }.disabled(deleting)
             Button("Cancel", role: .cancel) { pendingDelete = nil }

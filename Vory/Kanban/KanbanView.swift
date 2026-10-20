@@ -61,7 +61,7 @@ struct KanbanView: View {
                 .init(label: "Nudge Dispatcher", symbol: "hare") { Task { await store?.nudge() } },
                 .init(label: "Refresh", symbol: "arrow.clockwise") { Task { await store?.refresh() } },
             ]),
-            MorphPageAction(id: "board.new", symbol: "plus", label: "New Task", enabled: store?.isPresent == true) { showNew = true },
+            MorphPageAction(id: "board.new", symbol: "plus", label: "Add task", enabled: store?.isPresent == true) { showNew = true },
         ], on: pushedUnderBar)
         .sheet(item: $detailTask) { t in
             KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
@@ -224,8 +224,9 @@ struct KanbanView: View {
             // The Board tab's root under the morph bar: the bar draws New Task. Pushed from
             // Settings › Board the bar draws it too, beside its Back (#426, #435).
             if !barDrawsNew && !pushedUnderBar {
-            Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
+            Button { showNew = true } label: { Label("Add task", systemImage: "plus") }
                 .disabled(store?.isPresent != true)
+                .accessibilityIdentifier("board.new")
             }
         }
     }

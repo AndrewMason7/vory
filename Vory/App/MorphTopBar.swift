@@ -18,14 +18,16 @@ enum MorphSlot: Hashable, CaseIterable { case lead, mid, trail }
 /// A tab switch morphs one page's set into the next; a slot a page does not have fades.
 enum TabLead { case botMenu, filesHome }
 enum TabTrail { case chatActions, plus(String), filesActions, boardActions, sessionsOptions }
-func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
+@MainActor func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     switch tab {
     case .chats: (.botMenu, .chatActions)
     case .bots: (nil, .plus("New bot"))
     case .files: (.filesHome, .filesActions)
-    case .projects: (nil, .plus("New project"))
+    case .projects: (nil, .plus("Add project"))
     case .kanban: (nil, .boardActions)
     case .sessions: (nil, .sessionsOptions)
+    // Only where the gateway in use can make a task (#428): none rather than one that can't work.
+    case .cron: (nil, CronCreateSupport.shared.onActiveGateway ? .plus("Add scheduled task") : nil)
     default: (nil, nil)
     }
 }
@@ -755,7 +757,7 @@ struct MorphTopBar: View {
             case .boardActions:
                 // The board's … menu needs its store (nudge, refresh): the page's own until wired.
                 trailButtons([("ellipsis.circle", "Board options", "board.options", {}),
-                              ("plus", "New Task", "board.new", { model.pageRequest = .init(.boardNew) })])
+                              ("plus", "Add task", "board.new", { model.pageRequest = .init(.boardNew) })])
             case .sessionsOptions:
                 Menu {
                     Button { model.pageRequest = .init(.sessionsAdvanced) } label: { Label("Advanced", systemImage: "internaldrive") }
@@ -772,12 +774,13 @@ struct MorphTopBar: View {
     }
 
     private func pageRequestID(for tab: AppModel.AppTab) -> String {
-        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; default: "\(tab.rawValue).plus" }
+        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; case .cron: "cron.add"; default: "\(tab.rawValue).plus" }
     }
     private func plusRequest(for tab: AppModel.AppTab) {
         switch tab {
         case .bots: model.pageRequest = .init(.botsNewBot)
         case .projects: model.pageRequest = .init(.projectsNew)
+        case .cron: model.pageRequest = .init(.cronNew)
         default: break
         }
     }

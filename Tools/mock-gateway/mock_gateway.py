@@ -772,6 +772,10 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             {"name": "github", "url": "https://api.githubcopilot.com/mcp/", "enabled": False, "transport": "http"}]}
     if base == "/api/cron/jobs":
         return 200, {"jobs": CRON_JOBS, "count": len(CRON_JOBS)}
+    if base == "/api/cron/delivery-targets":
+        # As the real gateway lists them (hermes_cli/web_routers/cron.py): local first, then the platforms it has set up.
+        return 200, {"targets": [{"id": "local", "name": "Local (save only)", "home_target_set": True, "home_env_var": None},
+                                 {"id": "telegram", "name": "Telegram", "home_target_set": True, "home_env_var": "TELEGRAM_HOME_CHANNEL"}]}
     if base == "/api/messaging/platforms":
         return 200, {"platforms": [
             {"id": "telegram", "label": "Telegram", "status": "not configured", "enabled": False},
@@ -1734,6 +1738,29 @@ def _process_request(connection, request):
                         row[key] = body_json[key]
             print(f"[mock] patched chat {sid}: {({k: body_json[k] for k in known if k in body_json}) if isinstance(body_json, dict) else {}}", flush=True)
             result = (200, {"ok": True, "title": row["title"] if row else ""})
+    elif method == "POST" and base == "/api/cron/jobs":
+        # A new scheduled task (#428), as the real gateway takes it (CronJobCreate, 1eda335a): a schedule is required
+        # (FastAPI answers 422 without one, which is also how the app learns the route is there), the bot is the
+        # profile query. MOCK_NO_CRON_CREATE: a Hermes from before the route, "404" (no such route) or anything else for 405
+        # (the path's GET only).
+        spec = body_json if isinstance(body_json, dict) else {}
+        refuse = os.environ.get("MOCK_NO_CRON_CREATE", "")
+        if refuse:
+            result = (404, {"detail": "Not Found"}) if refuse == "404" else (405, {"detail": "Method Not Allowed"})
+        elif not str(spec.get("schedule") or "").strip():
+            result = (422, {"detail": [{"loc": ["body", "schedule"], "msg": "Field required", "type": "missing"}]})
+        else:
+            name = str(spec.get("name") or "").strip() or f"Task {len(CRON_JOBS) + 1}"
+            jid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or f"task-{len(CRON_JOBS) + 1}"
+            while _cron_job(jid):
+                jid += "-2"
+            prompt = str(spec.get("prompt") or "")
+            job = {"job_id": jid, "name": name, "schedule": spec["schedule"], "prompt": prompt, "prompt_preview": prompt[:120],
+                   "deliver": spec.get("deliver") or "local", "enabled": True, "state": "scheduled",
+                   "profile": query.get("profile") or "default"}
+            CRON_JOBS.append(job)
+            print(f"[mock] created cron job {jid}: {spec['schedule']} on {job['profile']}", flush=True)
+            result = (200, job)
     elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
         # Held while the task "runs": answered later, without holding up anything else.
         async def held() -> Response:
