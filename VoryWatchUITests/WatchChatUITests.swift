@@ -7,11 +7,38 @@ final class WatchChatUITests: WatchUITestCase {
     /// The export chat open, past its first read.
     private func openExportChat() throws {
         try launch()
-        let row = app.staticTexts["Rewrite the nightly export job"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 40), "no chat list")
+        XCTAssertTrue(button("Settings").waitForExistence(timeout: 40), "no start screen")
+        // The chat's row: at the largest text the start screen shows one chat, and the list makes the rest only as they
+        // come into view. Swipes went past it (the row ending above the screen), short drags cancelled each other out,
+        // small crown turns (0.15) barely moved the list, and a half turn could leave it under the title bar, where a
+        // tap at its centre opened Settings (45 mm, ax). So the crown turns until enough of the row shows below the
+        // title bar (back again if it went past), and the tap lands on the middle of what shows.
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rewrite the nightly export job")).firstMatch
+        _ = row.waitForExistence(timeout: 10)
+        let window = app.windows.firstMatch.frame
+        let below = CGRect(x: window.minX, y: window.minY + 60, width: window.width, height: window.height - 60)
+        func shown() -> CGRect { row.exists ? row.frame.intersection(below) : .null }
+        for _ in 0..<16 where shown().isNull || shown().height < 24 {
+            let past = row.exists && row.frame.midY < below.minY
+            XCUIDevice.shared.rotateDigitalCrown(delta: past ? -0.3 : 0.4)
+            sleep(1)
+        }
+        let part = shown()
+        if part.isNull || part.height < 24 {
+            shot("chat-no-row")
+            mark("chat-no-row tree:\n\(app.debugDescription)")
+        }
+        XCTAssertFalse(part.isNull || part.height < 24, "no chat list")
         sleep(1)
-        row.tap()
-        XCTAssertTrue(app.textFields["Message"].firstMatch.waitForExistence(timeout: 20), "no message bar in the chat")
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: part.midX, dy: part.midY)).tap()
+        // The field by its identifier: a TextField's "Message" is its placeholder, which the queries don't match on.
+        // Missing, the screen as it was goes in the log and the shots.
+        let bar = any("watch.chat.message")
+        if !bar.waitForExistence(timeout: 20) {
+            shot("chat-no-bar")
+            mark("chat-no-bar tree:\n\(app.debugDescription)")
+        }
+        XCTAssertTrue(bar.exists, "no message bar in the chat")
         let reply = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "export")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 20), "no rows in the chat")
         sleep(2)
@@ -26,10 +53,42 @@ final class WatchChatUITests: WatchUITestCase {
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200, "the mock did not start the turn")
     }
 
+    /// The screen's controls each have a name and a hit area a finger can take, and can be reached. Checked through
+    /// the element queries: the system's accessibility audit is not one watchOS UI tests run. The system's own Back
+    /// (its navigation bar's, which names itself a moment after the push) is the system's. Every control is listed in
+    /// the log, and every problem in one failure.
+    private func checkControls(_ stage: String, minimum: CGFloat = 28) {
+        let window = app.windows.firstMatch.frame
+        var problems: [String] = []
+        for b in app.buttons.allElementsBoundByIndex where b.exists && b.frame.width > 0 && window.intersects(b.frame) {
+            mark("control \(stage) '\(b.label)' id '\(b.identifier)' \(b.frame) hittable \(b.isHittable)")
+            guard b.identifier != "BackButton" else { continue }
+            if b.label.trimmingCharacters(in: .whitespaces).isEmpty { problems.append("a button with no name at \(b.frame) (id '\(b.identifier)')") }
+            if b.frame.width < minimum || b.frame.height < minimum { problems.append("'\(b.label)' is too small to hit: \(b.frame)") }
+        }
+        XCTAssertTrue(problems.isEmpty, "\(stage): \(problems.joined(separator: "; "))")
+    }
+
     func testAChatOpensAtItsEnd() throws {
         try openExportChat()
         mark("chat open")
         shot("chat")
+        checkControls("chat")
+        checkEndsAboveTheBar()
+    }
+
+    /// Brief points 1 and 4: at rest the conversation ends above the composer, its last line never under the bar.
+    private func checkEndsAboveTheBar() {
+        let field = any("watch.chat.message")
+        let bar = app.toolbars.firstMatch
+        let barTop = min(field.exists ? field.frame.minY : .infinity, bar.exists ? bar.frame.minY : .infinity)
+        let window = app.windows.firstMatch.frame
+        let lines = app.scrollViews.firstMatch.staticTexts.allElementsBoundByIndex
+            .filter { $0.exists && $0.frame.height > 0 && $0.frame.minY < window.maxY }
+        let lastLine = lines.map(\.frame.maxY).max() ?? 0
+        mark("rest: the last line ends at \(lastLine), the bar starts at \(barTop)")
+        XCTAssertTrue(barTop.isFinite, "no bar to measure against")
+        XCTAssertLessThanOrEqual(lastLine, barTop + 1, "the conversation runs under the composer")
     }
 
     func testAnApprovalArrivesWithTheNamesTheIPhoneUses() async throws {
@@ -41,8 +100,13 @@ final class WatchChatUITests: WatchUITestCase {
         sleep(1)
         mark("card arrived")
         shot("chat-card")
+        checkControls("card")
+        XCTAssertTrue(allow.isHittable, "Allow once cannot be reached")
+        // The bar gives way to the card, as the iPhone's dock turns into it, and comes back with the answer.
+        XCTAssertFalse(any("watch.chat.message").exists, "the message bar stays over the card")
         allow.tap()
         XCTAssertTrue(allow.waitForNonExistence(timeout: 20), "Allow once did not answer the card")
+        XCTAssertTrue(any("watch.chat.message").waitForExistence(timeout: 10), "the message bar didn't come back after the answer")
         sleep(2)
         shot("chat-card-answered")
     }
