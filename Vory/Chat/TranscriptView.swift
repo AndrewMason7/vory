@@ -297,12 +297,6 @@ struct TranscriptView: View {
                 autoInsetFixed = 0   // no home indicator under a window
                 #endif
             }
-            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.containerSize.height] } action: { old, v in
-                metrics.contentHeight = v[0]; metrics.containerHeight = v[1]
-                // Out of sight while a history lands: the lazy stack is still measuring its rows, so the quiet time
-                // before the thread is shown starts again (#449).
-                if landingOutOfSight, old.first != v[0] { landingReveal?.cancel(); landingReveal = nil; revealIfLanded() }
-            }
             // The window around the thread (`WindowGeometry`): its own frame in window space, the
             // window's shape (a fold, a resize or an inset that moves makes the automatic inset
             // measure again), and the keyboard as the window has it (in window space, only when
@@ -321,13 +315,27 @@ struct TranscriptView: View {
                 guard (n.object as? ChatSession) === chat, !metrics.stickToBottom || metrics.distanceFromBottom > 24 else { return }
                 jumpToBottom()
             }
-            // Insets included: the bottom margin (dock plus home indicator) is about the size of
+            // The thread's height, its window's and its distance from the end, from one reading of the scroll geometry,
+            // all written before anything is decided from them (#453, #452). Read by two handlers, each told of a change in
+            // its own turn, the height missed the last change of a burst while the distance had it: under load it held
+            // 20,091 pt with the scroll view at 20,030, and in a Bot Chat it stayed 69 pt off for good, so a thread still
+            // being measured read as still and was shown, and one at rest read as not landed.
+            // Insets included in the distance: the bottom margin (dock plus home indicator) is about the size of
             // the threshold, so without it a slightly taller dock showed the arrow at the very end.
-            .onScrollGeometryChange(for: CGFloat.self) { g in
-                g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
-            } action: { was, distance in
-                metrics.distanceFromBottom = distance
+            .onScrollGeometryChange(for: ThreadGeometry.self) { g in
+                ThreadGeometry(height: g.contentSize.height, container: g.containerSize.height,
+                               distance: g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY)
+            } action: { old, now in
+                metrics.contentHeight = now.height; metrics.containerHeight = now.container
+                metrics.distanceFromBottom = now.distance
+                // Out of sight while a history lands: the lazy stack is still measuring its rows, so the quiet time
+                // before the thread is shown starts again (#449).
+                if landingOutOfSight, old.height != now.height { landingReveal?.cancel(); landingReveal = nil }
                 if landingOutOfSight { revealIfLanded() }
+                // The rest follows the distance alone, as it did: nothing to do when only the height moved under a
+                // thread that kept its place.
+                let was = old.distance, distance = now.distance
+                guard distance != was else { return }
                 // Past the end with no finger on it, by any amount: a scroll-to-bottom that used the
                 // lazy stack's estimated height lands beyond the real content and the thread shows
                 // nothing until a drag bounces it back ("chats open blank until you scroll"), and
@@ -1019,6 +1027,14 @@ private struct ScrollViewProbe: UIViewRepresentable {
 #endif
 
 /// The figures a scroll changes every frame. Not observable on purpose (see `TranscriptView.metrics`).
+/// The thread's scroll geometry as one reading (#453): its content height, its window's height, and how far its end is
+/// below the window's bottom, insets included.
+struct ThreadGeometry: Equatable {
+    var height: CGFloat
+    var container: CGFloat
+    var distance: CGFloat
+}
+
 final class ScrollMetrics {
     #if os(iOS)
     /// The UIKit scroll view under the SwiftUI one, for a scroll by a measured distance: its
