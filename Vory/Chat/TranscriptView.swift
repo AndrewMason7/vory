@@ -542,7 +542,10 @@ extension TranscriptView {
     }
 
     /// A card opening or closing keeps its place: for the length of the toggle's animation the thread's size changes
-    /// anchor at its top, so the tapped card's top does not move and the rows below it glide. Anchored at the end, a
+    /// anchor at its top, so the tapped card's top does not move and the rows below it glide; and since that anchor holds
+    /// the thread's top, not the card, the card's own top is kept as well (`CardHold`): rows above it measured in the same
+    /// pass (the lazy stack's estimate for rows not yet measured, as soon after an open) moved it by their correction, 175
+    /// to 251 pt under load and once 1,310 pt (#473). Anchored at the end, a
     /// card that grew pushed itself up and was pulled back a frame later, and one near the bottom was scrolled into view
     /// after it opened, a second motion (#437). A close with the thread at its very end keeps the end anchored: the
     /// thread is shorter after it, so the rows above come down, in the same animation as the close.
@@ -550,10 +553,35 @@ extension TranscriptView {
     /// (rows that arrived meanwhile were held back): a card toggled near the end while a turn streams does not stop the
     /// thread following it. With no turn running, nothing moves after the toggle.
     private func holdCard(opening: Bool) {
-        guard opening || metrics.distanceFromBottom >= 4 else { return }
+        guard opening || metrics.distanceFromBottom >= 4 else { CardHold.shared.end(); return }
         cardHold += 1
         let hold = cardHold
         holdingCard = true
+        // The tapped card's own place, kept against any change above it (`CardHold`): moved by n pt, the thread goes to
+        // the offset that puts it back, from the offset of the same pass, so a move reported again before the scroll has
+        // landed asks for the same place, once. At once, unanimated: it lands in the run-loop turn of the move, so the
+        // moved layout is never drawn. Asked in the toggle's animation instead, the scroll itself was drawn as a slide
+        // (near the end, frames' similarity 0.66 over a second against 1.00), and could be dropped altogether. A finger on
+        // the thread ends it.
+        // An ask that has not moved the thread at all two frames on is asked again (a scroll can be dropped: the card once
+        // stayed 330 pt low, below the dock). Until then a repeat of the same place is not asked twice.
+        var asked: CGFloat?
+        CardHold.shared.begin { delta in
+            guard !metrics.userScrolling else { CardHold.shared.end(); return }
+            let target = metrics.offsetY + delta
+            if let asked, abs(asked - target) < 1 { return }
+            asked = target
+            let from = metrics.offsetY
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { scrollPosition.scrollTo(y: max(0, target + metrics.insetTop)) }
+            Task { @MainActor in
+                for _ in 0..<2 { await FrameClock.next() }
+                guard CardHold.shared.holding, let pending = asked, abs(pending - target) < 1,
+                      abs(metrics.offsetY - from) < 1, abs(metrics.offsetY - target) >= 1 else { return }
+                withTransaction(still) { scrollPosition.scrollTo(y: max(0, target + metrics.insetTop)) }
+            }
+        }
         #if DEBUG
         CardMotionProbe.holding = true
         #endif
@@ -561,6 +589,10 @@ extension TranscriptView {
             try? await Task.sleep(for: .milliseconds(700))
             guard cardHold == hold else { return }
             holdingCard = false
+            CardHold.shared.end()
+            // Past its end at the hold's end (rows above measured shorter while the card was held): landed now, as it
+            // would have been meanwhile.
+            if metrics.distanceFromBottom < -1, !metrics.userScrolling { landPastTheEnd(metrics.distanceFromBottom) }
             #if DEBUG
             CardMotionProbe.holding = false
             #endif
@@ -812,7 +844,7 @@ extension TranscriptView {
     /// following after a moment, once its rows have laid out, eased; either waits while the
     /// keyboard's spring is carrying the thread, and none meets an eased landing under way.
     private func landPastTheEnd(_ distance: CGFloat) {
-        guard Date() > overscrollEaseUntil else { return }
+        guard Date() > overscrollEaseUntil, !CardHold.shared.holding else { return }
         // Locked, any size, once there is more thread than screen (a chat still empty or shorter
         // than the screen reads as past its end until its rows come, and is no landing).
         let locked = metrics.stickToBottom && metrics.contentHeight > metrics.containerHeight
@@ -881,7 +913,7 @@ extension TranscriptView {
                 guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
                 if Date().timeIntervalSince(keyboardMovedAt) > 0.6 { break }
             }
-            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
+            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1, !CardHold.shared.holding else { return }
             Perf.tick("overscrollFix")
             noteLanding()
             // Eased, so it reads as the thread settling rather than a jump of its own; from more
@@ -1980,6 +2012,50 @@ extension View {
     func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true, fade: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep, fade: fade)) }
 }
 
+/// The tapped card's place while the thread holds it (#437, #473). The thread's hold anchors its size changes at its top,
+/// which keeps a card where it is as it grows, unless rows above it are measured in the same pass (the lazy stack's
+/// estimate for rows not yet measured, right after an open or far up a long chat): then the card moved by their
+/// correction. Each card keeps its top on screen in a box (`Top`, no redraw; a number stored and a flag read per move, so
+/// a long chat's cards cost next to nothing while it scrolls); the one tapped is armed with its top before its toggle;
+/// while the thread holds it, a move of its top is answered by scrolling the thread to the offset that puts it back,
+/// counted from the offset of the pass that reported it (`TranscriptView.holdCard`), so a move reported again before
+/// the scroll has landed asks for the same place, once. The thread's other scrolls wait meanwhile (`holding`). The hold's
+/// end, or a finger on the thread, ends it.
+@MainActor final class CardHold {
+    static let shared = CardHold()
+    /// A card's last top on screen, and the top it is held at while armed.
+    final class Top {
+        var y: CGFloat?
+        fileprivate(set) var heldAt: CGFloat?
+        var armed: Bool { heldAt != nil }
+    }
+    private weak var held: Top?
+    private var correct: ((CGFloat) -> Void)?
+    /// A hold under way: the thread's other scrolls (landing past the end, the overscroll fix) wait for its end.
+    var holding: Bool { correct != nil }
+
+    func arm(_ card: Top) {
+        held?.heldAt = nil
+        card.heldAt = card.y
+        held = card
+        correct = nil
+    }
+    func begin(_ correct: @escaping (CGFloat) -> Void) {
+        guard held?.heldAt != nil else { return }
+        self.correct = correct
+    }
+    func end() {
+        held?.heldAt = nil
+        held = nil
+        correct = nil
+    }
+    func moved(_ card: Top, to y: CGFloat) {
+        guard card === held, let top = card.heldAt, let correct else { return }
+        let delta = y - top
+        if abs(delta) >= 0.5 { correct(delta) }
+    }
+}
+
 #if DEBUG
 /// DEBUG, for the card checks (#437): with `-vory-card-probe`, a card toggled in the last second writes its top and
 /// height on screen to the perf log at every layout ("card-motion …"), so a test can say whether its top moved while it
@@ -2201,6 +2277,8 @@ struct ReasoningDisclosure: View {
     /// The whole reasoning, when the fold shows only its start (`TextPieces.foldCap`).
     var onShowAll: ((String) -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Its top on screen, kept without redrawing it, for the thread's hold of it (`CardHold`).
+    @State private var top = CardHold.Top()
     #if DEBUG
     @State private var probeUntil = Date.distantPast
     #endif
@@ -2232,6 +2310,10 @@ struct ReasoningDisclosure: View {
         // One width, open or closed: the closed card was as wide as its header and the open one as wide as its text, so
         // the width grew with the height and the text, laid out at its final width, showed cut on the right (#437).
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { _, y in
+            top.y = y
+            if top.armed { CardHold.shared.moved(top, to: y) }
+        }
         #if DEBUG
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in CardMotionProbe.note("reasoning-\(abs(text.hashValue) % 100_000)", f, until: probeUntil) }
         #endif
@@ -2243,6 +2325,7 @@ struct ReasoningDisclosure: View {
         #if DEBUG
         probeUntil = Date().addingTimeInterval(1); CardMotionProbe.begin()
         #endif
+        CardHold.shared.arm(top)
         withAnimation(reduceMotion ? nil : .snappy) { open.toggle() }
     }
 }
@@ -2670,6 +2753,8 @@ struct ToolCardView: View {
     var compact = false
     @State private var showFull = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Its top on screen, kept without redrawing it, for the thread's hold of it (`CardHold`).
+    @State private var top = CardHold.Top()
     #if DEBUG
     @State private var probeUntil = Date.distantPast
     #endif
@@ -2751,7 +2836,12 @@ struct ToolCardView: View {
             #if DEBUG
             probeUntil = Date().addingTimeInterval(1); CardMotionProbe.begin()
             #endif
+            CardHold.shared.arm(top)
             withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { _, y in
+            top.y = y
+            if top.armed { CardHold.shared.moved(top, to: y) }
         }
         #if DEBUG
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in CardMotionProbe.note("tool-\(activity.id)", f, until: probeUntil) }
@@ -2759,7 +2849,10 @@ struct ToolCardView: View {
         .accessibilityElement(children: .combine)
         // A tap gesture alone gives assistive tech nothing to press (on the Mac the card was plain text).
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() } }
+        .accessibilityAction {
+            CardHold.shared.arm(top)
+            withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() }
+        }
         .accessibilityHint(DeviceWords.isMac ? "Expands the tool log" : "Double-tap to expand the tool log")
     }
 
