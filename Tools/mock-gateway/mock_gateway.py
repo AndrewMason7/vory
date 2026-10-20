@@ -1696,6 +1696,18 @@ def _process_request(connection, request):
         result = delete_profile(unquote(base.split("/")[3]))
     elif method == "PUT" and re.fullmatch(r"/api/profiles/[^/]+/(description|model)", base):
         result = put_profile(unquote(base.split("/")[3]), base.split("/")[4], body_json if isinstance(body_json, dict) else {})
+    elif method == "PUT" and base == "/api/env":
+        # The env page's Save and its + (Add variable, #428): the variable set, its value shown redacted as the gateway
+        # shows it. One store for every profile, as the rest of the mock's env.
+        b = body_json if isinstance(body_json, dict) else {}
+        key, value = str(b.get("key") or "").strip(), str(b.get("value") or "")
+        if not key:
+            result = (400, {"detail": "key is required"})
+        else:
+            row = ENV_VARS.setdefault(key, {"description": "", "category": "Other", "is_password": True})
+            row.update({"is_set": bool(value), "redacted_value": f"«redacted:{value[:4]}...»" if value else None})
+            print(f"[mock] set env {key}", flush=True)
+            result = (200, {"ok": True, "key": key})
     elif FENCE and method == "GET" and re.fullmatch(r"/api/sessions/[^/]+/mutation-snapshot", base):
         # The chat's revision as the fenced gateway gives it; an absent chat is exists false, never a 404.
         sid = unquote(base.split("/")[3])
