@@ -194,4 +194,52 @@ final class SelectModeBarUITests: XCTestCase {
             XCTAssertFalse(label.hasPrefix("Archived"), "\(kept) was archived with the selection: \(label)")
         }
     }
+
+    /// The selection's Delete takes the picked chats off the gateway: gone from the list, and still gone once the list is
+    /// read again. A Hermes that fences its edits (#467; the mock's MOCK_FENCE=1) refused a delete without the chat's
+    /// revision, the app swallowed the refusal, and the chats came back with the next list.
+    func testTheSelectionsDeleteTakesThePickedChatsForGood() throws {
+        continueAfterFailure = true
+        try launchOnChats()
+        select(from: "Standup notes")
+        reveal("Trim the CI cache").tap(); pause(1)
+        XCTAssertEqual(app.staticTexts["morph.title"].firstMatch.label, "2 Selected")
+        app.buttons["chats.select.delete"].firstMatch.tap()
+        let confirm = app.alerts.firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Delete did not ask first")
+        confirm.buttons["Delete"].tap(); pause(3)
+        shot("select-after-delete")
+        XCTAssertFalse(app.alerts.firstMatch.exists, "the delete was refused: \(app.alerts.firstMatch.label)")
+        // The list read again from the gateway, in a new launch.
+        app.terminate()
+        try launchOnChats()
+        for gone in ["Standup notes", "Trim the CI cache"] {
+            XCTAssertFalse(reveal(gone).exists, "\(gone) came back after it was deleted")
+        }
+        XCTAssertTrue(reveal("Rotate the API keys").exists, "a chat that was not picked went too")
+    }
+
+    /// A delete the gateway refuses says why, in words, and the chat stays. Needs the mock refusing every fenced edit
+    /// with session_busy (MOCK_FENCE=1 MOCK_FENCE_REFUSE=session_busy), named in HERMES_E2E_ARGS as
+    /// "fence-refuse=session_busy"; skipped otherwise.
+    func testARefusedDeleteSaysWhyAndKeepsTheChat() throws {
+        guard (ProcessInfo.processInfo.environment["HERMES_E2E_ARGS"] ?? "").contains("fence-refuse=session_busy") else {
+            throw XCTSkip("needs the mock refusing fenced edits with session_busy")
+        }
+        continueAfterFailure = true
+        try launchOnChats()
+        select(from: "Standup notes")
+        app.buttons["chats.select.delete"].firstMatch.tap()
+        let confirm = app.alerts.firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Delete did not ask first")
+        confirm.buttons["Delete"].tap()
+        let refusal = app.alerts.matching(NSPredicate(format: "label BEGINSWITH %@", "Could not delete")).firstMatch
+        XCTAssertTrue(refusal.waitForExistence(timeout: 10), "the refused delete said nothing")
+        let why = refusal.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "A turn is running")).firstMatch
+        XCTAssertTrue(why.exists, "the refusal is not in plain words")
+        shot("select-delete-refused")
+        if refusal.buttons["OK"].exists { refusal.buttons["OK"].tap() }
+        pause(2)
+        XCTAssertTrue(reveal("Standup notes").exists, "the refused chat left the list")
+    }
 }
