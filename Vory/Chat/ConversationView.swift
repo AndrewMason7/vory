@@ -19,17 +19,28 @@ struct ConversationView: View {
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
-    @State private var dockBottom: CGFloat = 0
     #if os(iOS)
     /// The tab bar's height under the chat, when it is there and runs along the bottom.
     private var barReserve: CGFloat { model.tabBarReserved && !model.tabBarVertical ? VoryTabBar.reservedHeight(in: windowGeometry) : 0 }
-    /// The fold of a partly open Duo across the window (Step D): a dock the keyboard has pushed
-    /// onto it moves up above it, with Apple's margin, so the field is never under the fold.
+    /// The fold of a partly open Duo across the window (a laptop pose): the dock moves up above
+    /// it, with Apple's margin, when the keyboard has pushed it onto the fold, and while an open
+    /// list (+, "/", "@") would reach across it from under the fold (Duo stage 2, the Checker's
+    /// call; `ReservedRegions.dockLift`).
     @Environment(\.reservedRegions) private var regions
+    /// The bottom of the dock's slot, lift and bar reserve included (window space): the lift
+    /// is worked out from where the dock stands unlifted, never from where the lift has put
+    /// it. Measured lifted, the dock was off the fold, the lift went to 0 and it dropped back.
+    @State private var dockSlotBottom: CGFloat = 0
+    /// How far the composer's open list reaches above its bottom edge (`ComposerListReach`).
+    @State private var listReach: CGFloat = 0
+    /// The dock went up for an open list: it stays up until the list closes.
+    @State private var liftHeldForList = false
     private var foldLift: CGFloat {
-        guard let fold = regions.horizontalFold, dockBottom > dockTop, dockTop > 0,
-              fold.maxY + ReservedRegions.margin > dockTop, fold.minY < dockBottom else { return 0 }
-        return dockBottom - fold.minY + ReservedRegions.margin
+        guard dockSlotBottom > 0, dockHeight > 0 else { return 0 }
+        let bottom = dockSlotBottom - barReserve
+        let dock = CGRect(x: 0, y: bottom - dockHeight, width: 1, height: dockHeight)
+        let listTop = listReach > 0 ? bottom - BottomDock.bottomPadding - listReach : nil
+        return regions.dockLift(dock: dock, listTop: listTop, held: liftHeldForList)
     }
     #endif
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
@@ -232,6 +243,10 @@ struct ConversationView: View {
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
             dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockSlotBottom = $0 }
+                .onPreferenceChange(ComposerListReach.self) { listReach = $0 }
+                .onChange(of: listReach > 0) { _, open in if !open { liftHeldForList = false } }
+                .onChange(of: listReach > 0 && foldLift > 0) { _, lifted in if lifted { liftHeldForList = true } }
         }
             // On a one-column layout the morph bar (MorphTopBar) draws the chat's controls; on a
             // wide window this header does, over the detail column.
@@ -346,8 +361,6 @@ struct ConversationView: View {
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
             // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
-            // The dock's bottom edge on screen (above the keyboard), where the band below it starts.
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockBottom = $0 }
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this. It follows
             // every frame of an interactive keyboard dismiss too: the thread's rows no longer
@@ -466,6 +479,8 @@ struct BottomDock: View {
     var namespace: Namespace.ID
     /// Another bot's chat: a Read-only pill where the composer would be.
     var readOnly = false
+    /// Under the composer, to the dock's bottom edge.
+    static let bottomPadding: CGFloat = 8
 
     var body: some View {
         // The container is what lets the composer morph into a card; menus presented from
@@ -505,7 +520,7 @@ struct BottomDock: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .padding(.bottom, Self.bottomPadding)
         }
         .animation(.snappy, value: chat.firstCard?.id)
         .animation(.snappy, value: chat.banner)

@@ -145,6 +145,9 @@ enum FoldAvoidance {
 struct ReservedRegions: Equatable {
     var divisions: [CGRect] = []
     var occlusions: [CGRect] = []
+    /// The window can fold: it reports a division, active or not (an open Duo, flat or half
+    /// open). Layouts that must not reflow at every hinge move key on this, not on a fold.
+    var foldable = false
     /// Apple's margin for interactive content beside a region.
     static let margin: CGFloat = 8
     var isEmpty: Bool { divisions.isEmpty && occlusions.isEmpty }
@@ -154,11 +157,56 @@ struct ReservedRegions: Equatable {
     /// A fold that runs up the window (a book pose): left and right halves.
     var verticalFold: CGRect? { divisions.first { $0.height >= $0.width } }
 
-    /// Where a piece at `frame` (window space) that stands on the lower side of a horizontal
-    /// fold may reach up to: the fold's bottom edge plus the margin, or nil with no such fold.
-    func ceiling(for frame: CGRect) -> CGFloat? {
-        guard let fold = horizontalFold, frame.midY > fold.midY else { return nil }
-        return fold.maxY + Self.margin
+    /// How far a list growing up from `y` (window space) may reach before a fold across the
+    /// window above it, the margin kept: nil with no such fold above `y`. No floor (Duo stage
+    /// 2): a floor won over the fold and the + panel opened across it (the 10-12 round). A list
+    /// that wants more room than this lifts the dock over the fold instead (`dockLift`).
+    func room(under y: CGFloat) -> CGFloat? {
+        guard let fold = horizontalFold, y > fold.midY else { return nil }
+        return max(0, y - fold.maxY - Self.margin)
+    }
+
+    /// How far the chat's dock moves up off a fold across the window (a laptop pose), so that
+    /// its bottom edge sits the margin above the fold; 0 where it stays. `dock` is where the
+    /// dock stands unlifted (window space). It moves when it is on the fold itself (the
+    /// keyboard pushed it there), and when it stands under the fold while an open list (+, "/",
+    /// "@") would reach across it: `listTop`, the list's top edge at full size with the dock
+    /// unlifted, nil with no list open. `held` keeps a lift made for the list until the list
+    /// closes (the Checker's call: the dock rides above the fold while the list is open), so
+    /// the list's own resizing after the lift cannot drop the dock back under it.
+    func dockLift(dock: CGRect, listTop: CGFloat? = nil, held: Bool = false) -> CGFloat {
+        guard let fold = horizontalFold, dock.height > 0 else { return 0 }
+        let onFold = dock.minY < fold.maxY + Self.margin && dock.maxY > fold.minY - Self.margin
+        let underFold = dock.minY >= fold.maxY + Self.margin
+        let listCrosses = listTop.map { held || $0 < fold.maxY + Self.margin } ?? false
+        guard onFold || (underFold && listCrosses) else { return 0 }
+        return dock.maxY - fold.minY + Self.margin
+    }
+
+    /// The width of the list column in two columns when a fold runs up the window (a book
+    /// pose): the column ends at the fold's middle, so the fold is the line between the list
+    /// and the chat, as Apple advises, rather than running through the chat. `leading` is the
+    /// split view's leading edge (window space). Nil with no such fold, or where that width is
+    /// outside the column's `range`: the usual width stands.
+    func listWidth(leading: CGFloat, range: ClosedRange<CGFloat>) -> CGFloat? {
+        guard let fold = verticalFold else { return nil }
+        let width = (fold.midX - leading).rounded(.down)
+        return range.contains(width) ? width : nil
+    }
+}
+
+/// Home's six tiles (DashboardView): three to a row, two even rows, on a phone, an iPad and the
+/// Mac; two to a row on a window that can fold (the open Duo), so a fold up the middle falls
+/// between them and never through one (the Checker's call, Duo plan section 6). Keyed to the
+/// window being foldable, not to the fold being there, so the tiles don't reflow at every
+/// hinge move; a fold up the window counts too, in case a flat Duo reports no division.
+enum HomeTiles {
+    static func columns(regions: ReservedRegions) -> Int {
+        #if os(macOS)
+        3
+        #else
+        regions.foldable || regions.verticalFold != nil ? 2 : 3
+        #endif
     }
 }
 
@@ -192,7 +240,8 @@ struct ReservedRegionsReader<Content: View>: View {
                 let origin = proxy.frame(in: .global).origin
                 let regions = ReservedRegions(
                     divisions: proxy.reservedRegions(kind: .division).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
-                    occlusions: proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) })
+                    occlusions: proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
+                    foldable: !proxy.reservedRegions(kind: .division, options: .includeInactive).isEmpty)
                 content().environment(\.reservedRegions, regions)
             }
         }

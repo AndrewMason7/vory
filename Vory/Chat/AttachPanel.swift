@@ -25,7 +25,8 @@ struct AttachPanel: View {
     var close: () -> Void
 
     /// A row is a 40 pt icon with 8 pt above and below; the stack adds 10 pt at each end.
-    private var naturalHeight: CGFloat { CGFloat(items.count) * 56 + 20 }
+    private var naturalHeight: CGFloat { Self.naturalHeight(rows: items.count) }
+    static func naturalHeight(rows: Int) -> CGFloat { CGFloat(rows) * 56 + 20 }
 
     var body: some View {
         if let cap, naturalHeight > cap {

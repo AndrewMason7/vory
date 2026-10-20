@@ -43,6 +43,8 @@ struct DashboardView: View {
     @State private var rangeMoved = false
     /// The range moves under the title at the accessibility sizes.
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// A window that can fold: the tiles go two to a row (`HomeTiles`).
+    @Environment(\.reservedRegions) private var regions
     /// The gateway the last finished load ran against (see `shouldLoad`).
     @State private var loadedConnection: UUID?
 
@@ -292,9 +294,10 @@ struct DashboardView: View {
             let tokens = (t?.totalInput ?? 0) + (t?.totalOutput ?? 0) + (t?.totalCacheRead ?? 0)
             let messages = periodSessions.reduce(0) { $0 + ($1.messageCount ?? 0) }
             let activeDays = Set((usage?.daily ?? []).filter { ($0.sessions ?? 0) > 0 }.map(\.day)).count
-            // Three to a row everywhere: six tiles fill two rows that way, where four left a short
-            // second row on the Mac (the even-column rule is for the card grids, not these tiles).
-            LazyVGrid(columns: EvenColumns.items(3, spacing: 8), spacing: 8) {
+            // Three to a row on a phone, an iPad and the Mac: six tiles fill two rows that way,
+            // where four left a short second row on the Mac. Two to a row on a window that can
+            // fold, so a fold up the middle falls between the tiles (`HomeTiles`, Duo stage 2).
+            LazyVGrid(columns: EvenColumns.items(HomeTiles.columns(regions: regions), spacing: 8), spacing: 8) {
                 tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
                 tile("Messages", Format.count(messages))
                 tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")

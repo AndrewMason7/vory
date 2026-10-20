@@ -103,6 +103,15 @@ struct RootView: View {
                 }
             }
         }
+        // `-vory-geometry-probe`, the Duo's fold (stage 2): every reserved region the window reports, active or not, in
+        // window space, and the margins the system gives each, read straight from the geometry; and the keyboard's overlap.
+        .overlay {
+            if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
+                #if os(iOS)
+                if #available(iOS 27.1, *) { RegionsProbe(keyboard: windowGeometry.keyboardOverlap).ignoresSafeArea().allowsHitTesting(false) }
+                #endif
+            }
+        }
         #endif
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
@@ -420,6 +429,29 @@ struct MainTabView: View {
     }
 }
 
+
+#if DEBUG && os(iOS)
+/// DEBUG, `-vory-geometry-probe`: the window's reserved regions as the system reports them (stage 2 of the Duo work):
+/// division (the fold) and occlusion (a camera), each with its frame in window space, its margins and whether it is
+/// active, included inactive ones; printed in a band the fold doesn't cover.
+@available(iOS 27.1, *)
+private struct RegionsProbe: View {
+    var keyboard: CGFloat
+    var body: some View {
+        GeometryReader { proxy in
+            let line: (ReservedRegion) -> String = { r in
+                let f = r.frame, m = r.margins
+                return String(format: "%@ %@ x%.0f y%.0f w%.0f h%.0f m%.0f/%.0f/%.0f/%.0f", r.kind == .division ? "fold" : "occl",
+                              r.isActive ? "ON" : "off", f.minX, f.minY, f.width, f.height, m.top, m.leading, m.bottom, m.trailing)
+            }
+            let all = proxy.reservedRegions(kind: .division, options: .includeInactive) + proxy.reservedRegions(kind: .occlusion, options: .includeInactive)
+            Text((all.isEmpty ? ["no regions"] : all.map(line)).joined(separator: "\n") + String(format: "\nwin %.0fx%.0f kb %.0f", proxy.size.width, proxy.size.height, keyboard))
+                .font(.caption2.monospaced()).padding(4).background(.mint.opacity(0.9)).foregroundStyle(.black)
+                .position(x: min(proxy.size.width - 130, 160), y: 250)
+        }
+    }
+}
+#endif
 
 /// Publishes the window's reserved regions (the fold, the camera) into the environment.
 private struct ReservedRegionsEnvironment: ViewModifier {

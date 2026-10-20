@@ -13,15 +13,22 @@ struct ChatsSplitPage: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.wideLayout) private var wide
+    @Environment(\.reservedRegions) private var regions
     @State private var columns = NavigationSplitViewVisibility.doubleColumn
+    /// The split view's leading edge in the window (a bar down the leading side moves it in).
+    @State private var leading: CGFloat = 0
 
     /// The list's column: 380 pt where the window is wide enough for both columns at that (the
     /// iPad, the open Duo in landscape), narrower on a window like the open Duo in portrait
     /// (669 pt), where a 380 pt list left the split view no room for the chat and it put the
     /// list over the chat as a dimmed overlay instead of beside it.
+    /// With a fold up the window (the open Duo half open like a book) the list ends at the
+    /// fold instead, so the fold is the line between the list and the chat rather than running
+    /// through the chat (Duo stage 2, `ReservedRegions.listWidth`).
     private var listWidth: (min: CGFloat, ideal: CGFloat) {
         let w = windowGeometry.bounds.width
-        return (280, min(380, max(280, (w * 0.42).rounded(.down))))
+        let atFold = regions.listWidth(leading: leading, range: 280...480)
+        return (280, atFold ?? min(380, max(280, (w * 0.42).rounded(.down))))
     }
 
     /// The model's path as a binding: the list selects into it, the detail stack shows it.
@@ -41,6 +48,7 @@ struct ChatsSplitPage: View {
                 ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
             }
             .navigationSplitViewStyle(.balanced)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { leading = $0 }
         } else {
             // One column (a phone, the closed Duo, the open Duo upright, a narrow window): the
             // list's own stack on the same path. The split view collapsed to one column left
