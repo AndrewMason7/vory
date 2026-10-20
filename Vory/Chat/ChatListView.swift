@@ -364,7 +364,9 @@ struct ChatListView: View {
             #endif
             .task(id: runtime?.connection.id) { await load() }
             .task(id: runtime?.selectedProfile) { await load() }
-            .task(id: prefs.allBots) { await load() }
+            // All bots, and Archived shown or hidden: the list asks for archived chats only while they're shown
+            // (`listQuery`). One task for both: another modifier put this chain past the type checker.
+            .task(id: "\(prefs.allBots)-\(prefs.showArchived)") { await load() }
             // The bots arriving (an empty list too) or changing, a rename included: All bots lists
             // each one's chats.
             .onChange(of: loadedBotNames) { _, _ in Task { await load() } }
@@ -840,6 +842,12 @@ struct ChatListView: View {
             actionFailure = ActionFailure(title: failed.count == 1 ? "Could not archive \u{201C}\(first.displayTitle)\u{201D}" : "Could not archive \(failed.count) chats",
                                           message: PinSupport.reason(error))
         }
+        // The chats archived marked so in the list before it's read again, as a row's own Archive does (`patch`): the
+        // gateway may leave them out of its list now (#474), and the list keeps a left-out chat's flags as they were.
+        let done = Set(list.filter { s in s.archived != true && !failed.contains { $0.0.id == s.id } }.map(\.id))
+        withAnimation(.snappy) {
+            for i in sessions.indices where done.contains(sessions[i].id) { sessions[i].archived = true; sessions[i].pinned = false }
+        }
         await load()
     }
 
@@ -882,6 +890,16 @@ struct ChatListView: View {
     /// answered for its bots (an empty answer counts: such a gateway lists no chats).
     static func canList(allBots: Bool, botsLoaded: Bool) -> Bool { !allBots || botsLoaded }
 
+    /// The list's request: the most recent chats, a page of `limit`, with archived chats asked for only while the
+    /// Archived filter shows them (#474). A Hermes that leaves them out unless asked (`archived=exclude`, its default
+    /// since 1eda335a) sent none, so turning Archived on showed nothing; and with them hidden, they aren't asked for, so
+    /// the page's rows aren't spent on chats nobody sees. An older Hermes ignores the parameter and lists every chat;
+    /// the filter on the device (`filtered`) still hides the archived ones there.
+    nonisolated static func listQuery(limit: Int, showArchived: Bool) -> [URLQueryItem] {
+        [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: String(limit)),
+         URLQueryItem(name: "archived", value: showArchived ? "include" : "exclude")]
+    }
+
     private func load(attempt: Int = 0) async {
         guard let runtime else { return }
         let cacheProfile = prefs.allBots ? "*" : runtime.selectedProfile
@@ -905,6 +923,7 @@ struct ChatListView: View {
             var all: [StoredSession] = []
             if prefs.allBots {
                 let profiles = runtime.profiles.map(\.name)
+                let showArchived = prefs.showArchived
                 // Each bot's rows in the bots' own order, whichever answered first: a chat the
                 // gateway lists under several bots kept whichever listing arrived first, so its
                 // bot and avatar flipped between loads (Matt, 2026-10-12: "the bots and chats
@@ -913,7 +932,7 @@ struct ChatListView: View {
                 try await withThrowingTaskGroup(of: (String, [StoredSession]).self) { group in
                     for p in profiles {
                         group.addTask {
-                            let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "50")], profile: p)
+                            let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: Self.listQuery(limit: 50, showArchived: showArchived), profile: p)
                             return (p, r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
                         }
                     }
@@ -928,7 +947,7 @@ struct ChatListView: View {
                 // Each row carries the bot it was listed for: opening it later must not depend
                 // on which bot is selected by then.
                 let listed = runtime.selectedProfile
-                let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: listed)
+                let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: Self.listQuery(limit: 100, showArchived: prefs.showArchived), profile: listed)
                 all = r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
             }
             pinsKept = PinSupport.kept(rows: all, connection: runtime.connection.id)
@@ -941,6 +960,10 @@ struct ChatListView: View {
             // pinned chat itself, so the only rows such a keep held were stale ones (a chat
             // compressed onto a new id, one deleted elsewhere), and those could never be
             // unpinned or archived again (the row was the app's own copy).
+            // Such a row keeps the pin and archive the list last had for it: a Hermes that lists archived chats only
+            // when asked (#474) leaves out a chat archived here on purpose, and added as unarchived it came straight
+            // back, unarchived, while Archived was hidden. Kept archived, the filter decides.
+            let before = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let now = Date().timeIntervalSince1970
             for chat in runtime.chats where !listed.contains(chat.storedID) && !chat.storedID.isEmpty
                 && (chat.isRunning || !chat.items.isEmpty)
@@ -950,13 +973,14 @@ struct ChatListView: View {
                                          preview: chat.items.first.flatMap { if case .user(let t, _) = $0.kind { return t }; return nil },
                                          source: "ios", model: chat.modelName.isEmpty ? nil : chat.modelName,
                                          startedAt: chat.items.first?.timestamp.timeIntervalSince1970 ?? now, lastActive: max(last, now - 1),
-                                         messageCount: chat.items.count, isActive: chat.isRunning, archived: false, pinned: false, profile: chat.profileName))
+                                         messageCount: chat.items.count, isActive: chat.isRunning,
+                                         archived: before[chat.storedID]?.archived ?? false, pinned: before[chat.storedID]?.pinned ?? false,
+                                         profile: chat.profileName))
             }
             // A chat keeps its place until it has new messages: the gateway counts an attach as
             // activity, so the chat just read floated to the top on the way back and every row
             // shifted (Matt, 2026-10-12: "the chats list jumps ... we want it to remain the same
             // when going into a chat and out of"). Its old time stays until something was said.
-            let before = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             all = all.map { s in
                 guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
                 var kept = s; kept.lastActive = was; return kept

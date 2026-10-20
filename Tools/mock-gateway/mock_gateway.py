@@ -655,12 +655,18 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         # The real gateway refuses a page over 100 (FastAPI le=100 → 422), as a tester's Home found out.
         if int(query.get("limit") or 20) > 100:
             return 422, {"detail": [{"loc": ["query", "limit"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}]}
+        # Archived chats as the real gateway lists them (hermes_cli/web_routers/sessions.py, 1eda335a): left out
+        # unless asked for (archived=exclude, the default), only them (only), or every chat (include) (#474).
+        archived = query.get("archived") or "exclude"
+        if archived not in ("exclude", "only", "include"):
+            return 400, {"detail": "archived must be one of: exclude, only, include"}
         # The mock lists every chat under every bot (the demo data is small), but each row says
         # whose store it is in, as the real gateway's rows do.
-        rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS]
+        rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS
+                if archived == "include" or bool(s.get("archived")) == (archived == "only")]
         if NO_PINS:
             rows = [{k: v for k, v in r.items() if k != "pinned"} for r in rows]
-        return 200, {"sessions": rows, "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
+        return 200, {"sessions": rows, "total": len(rows), "limit": 100, "offset": 0}
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
