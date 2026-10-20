@@ -344,6 +344,12 @@ struct WatchChatView: View {
     @State private var talk = WatchTalk()
     /// What Talk could not do, under the thread until tapped.
     @State private var talkNote: String?
+    /// The bottom bar's top edge and the thread's bottom edge, on screen: the room the thread leaves under its last row
+    /// (brief points 1 and 4: the conversation ends above the composer, never under it).
+    @State private var barTop: CGFloat = 0
+    @State private var threadBottom: CGFloat = 0
+    /// The person moved the thread (a scroll, Show earlier) since the first read landed: the late settle leaves it.
+    @State private var movedByPerson = false
 
     var body: some View {
         Group {
@@ -366,7 +372,7 @@ struct WatchChatView: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if feed.hasEarlier {
                         // The last few messages first; the rest a page at a time from the top.
-                        Button { Task { await feed.loadEarlier() } } label: { Label("Show earlier", systemImage: "arrow.up.circle") }.font(.caption)
+                        Button { movedByPerson = true; Task { await feed.loadEarlier() } } label: { Label("Show earlier", systemImage: "arrow.up.circle") }.font(.caption)
                     }
                     ForEach(feed.items) { item in WatchTranscriptRow(item: item, profile: feed.profile).id(item.id) }
                     if feed.isWorking { Text(Self.workingLine(feed)).font(.caption2).foregroundStyle(.secondary) }
@@ -374,20 +380,41 @@ struct WatchChatView: View {
                     if let p = feed.problem { Text(p.text).font(.caption2).foregroundStyle(.red).onTapGesture { feed.dismissProblem() } }
                     if let talkNote { Text(talkNote).font(.caption2).foregroundStyle(.red).onTapGesture { self.talkNote = nil } }
                     if let card = feed.cards.first { WatchCardView(feed: feed, card: card).id(card.id) }
-                    // Room under a card for the bottom bar (the field, or Talk's wait line and its (x)): the bar is laid
-                    // over the content, and a card's buttons sat under it as it arrived.
-                    Color.clear.frame(height: feed.cards.isEmpty ? 1 : 44).id("bottom")
+                    // Room for the bottom bar under the last row, the bar's own height as measured: the bar is laid over
+                    // the content, and the last lines (or a card's buttons) ran under it. With the bar gone for a card,
+                    // a little room for the screen's rounded edge.
+                    Color.clear.frame(height: barShown(feed) ? max(8, threadBottom - barTop + 6) : 8).id("bottom")
                 }
             }
-            .defaultScrollAnchor(.bottom)
+            // The thread opens on its end and sits at the bottom when short. As it changes size it keeps its end in
+            // view, but while a card waits it keeps its top: the bar giving way to the card changed the size, and held by
+            // the end, the card slid back to its last two choices with the ask and Allow once out of sight.
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            .defaultScrollAnchor(feed.cards.isEmpty ? .bottom : .top, for: .sizeChanges)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { threadBottom = $0 }
+            .onScrollPhaseChange { _, phase in if phase == .interacting { movedByPerson = true } }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-            // The first read lands after the view does: land the end again once it is in.
-            .onChange(of: feed.isLoading) { _, loading in if !loading { proxy.scrollTo("bottom", anchor: .bottom) } }
+            // The first read lands after the view does: land the end again once it is in, and once more when its rows have
+            // been laid out. At the largest text the lazy stack placed the first scroll on its estimates of the tall rows,
+            // past the content, and the chat opened blank (41 mm, ax); the view before the feed settled it the same way.
+            // Restores the settle the view had before the feed (range B dropped it); after the first read only.
+            .onChange(of: feed.isLoading) { _, loading in
+                guard !loading else { return }
+                proxy.scrollTo("bottom", anchor: .bottom)
+                movedByPerson = false
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    // Not over the person's own move in the meantime, nor over a card that came (it lands itself).
+                    if !movedByPerson, feed.cards.isEmpty { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+            }
             .onChange(of: feed.event) { _, event in arrived(event, proxy) }
             .navigationTitle(feed.title)
             .toolbar {
                 // The bottom bar is where watchOS pins a field to the screen's bottom edge; a safe-area inset sat above
-                // a blank band on the Ultra.
+                // a blank band on the Ultra. It gives way to a card (`barShown`).
+                if barShown(feed) {
                 ToolbarItem(placement: .bottomBar) {
                     composer(feed) {
                         let t = text; text = ""
@@ -396,6 +423,7 @@ struct WatchChatView: View {
                             withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                         } catch { text = t }
                     }
+                }
                 }
                 if feed.isWorking {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -417,7 +445,15 @@ struct WatchChatView: View {
             withAnimation { proxy.scrollTo(id, anchor: .top) }
         case .cardArrived(let id):
             WKInterfaceDevice.current().play(.notification)
-            withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+            // From its top: the ask and Allow once first. A card is taller than the Watch's screen, and landed by its
+            // bottom it showed only the last two choices, the ask and Allow once out of sight above. Again once the bar
+            // has given way to it (`barShown`), unless the person has moved the thread since.
+            withAnimation { proxy.scrollTo(id, anchor: .top) }
+            movedByPerson = false
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                if !movedByPerson { withAnimation { proxy.scrollTo(id, anchor: .top) } }
+            }
         case .turnFailed:
             WKInterfaceDevice.current().play(.failure)
             withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -431,15 +467,34 @@ struct WatchChatView: View {
         return steps == 0 ? line : "\(line) · \(steps) \(steps == 1 ? "step" : "steps")"
     }
 
+    /// Talk's and Send's hit area: a finger's worth, where the glyph alone was 19 pt.
+    private static let buttonSide: CGFloat = 30
+
+    /// While a card waits the bottom bar gives way to it, as the iPhone's dock turns into the card: laid over the
+    /// content, the field and Talk covered the card's Allow once at the largest text (41 mm, ax). The bar comes back
+    /// with the answer, the draft kept; it stays while Talk is at work, so a recording can still be stopped (the
+    /// planner, 2026-10-20).
+    private static let barGivesWayToCards = true
+
+    private func barShown(_ feed: WatchChatFeed) -> Bool {
+        !(Self.barGivesWayToCards && !feed.cards.isEmpty && !talk.isBusy)
+    }
+
     /// The message field, Talk and the send button, one row on the bottom edge. While Talk works the row says what it is
     /// doing instead of the field.
     private func composer(_ feed: WatchChatFeed, send: @escaping () async -> Void) -> some View {
+        composerRow(feed, send: send)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { barTop = $0 }
+    }
+
+    private func composerRow(_ feed: WatchChatFeed, send: @escaping () async -> Void) -> some View {
         HStack(spacing: 6) {
             if talk.isBusy {
                 Text(talk.phaseText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 0)
             } else {
                 TextField("Message", text: $text)
+                    .accessibilityIdentifier("watch.chat.message")
             }
             // Talk on the live chat, or through the iPhone when this chat is on the phone path.
             if let target = feed.talkTarget {
@@ -448,6 +503,9 @@ struct WatchChatView: View {
                     Image(systemName: talk.phase == .recording ? "stop.circle.fill" : talk.phase == .speaking ? "speaker.slash.circle.fill" : talk.phase == .waiting ? "xmark.circle.fill" : "mic.circle.fill")
                         .font(.title3)
                         .symbolEffect(.pulse, isActive: talk.phase == .recording || talk.phase == .waiting)
+                        // A finger's worth to hit, not the 19 pt glyph alone.
+                        .frame(width: Self.buttonSide, height: Self.buttonSide)
+                        .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(talk.phase == .recording ? Color.red : talk.isBusy ? Color.accentColor : Color.secondary)
@@ -455,9 +513,15 @@ struct WatchChatView: View {
                 .accessibilityLabel(talk.phase == .recording ? "Stop and send" : talk.phase == .speaking ? "Stop speaking" : talk.phase == .waiting ? "Stop waiting for the reply" : "Talk")
             }
             if !talk.isBusy {
-                Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title3) }
+                Button { Task { await send() } } label: {
+                    Image(systemName: "arrow.up.circle.fill").font(.title3)
+                        .frame(width: Self.buttonSide, height: Self.buttonSide)
+                        .contentShape(.circle)
+                }
                     .buttonStyle(.plain).disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
                     .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
+                    // VoiceOver read the glyph's name ("Arrow Up Circle").
+                    .accessibilityLabel("Send")
             }
         }
         .onChange(of: talk.error) { _, e in
