@@ -128,7 +128,10 @@ public enum WatchFeedRules {
 
 /// Which arrivals the Watch announces. Nothing on the first read of a chat, nothing for rows or cards already seen (a
 /// wrist raise reads the chat again), and nothing after a switch between the live and phone paths, whose rows carry
-/// other ids for the same messages: those reads only learn what is there.
+/// other ids for the same messages: those reads only learn what is there. The first read is the first of a completed
+/// load: a live chat shows its cached transcript while it resumes, and the resume's history then brought rows the
+/// cache didn't have, announced as arrivals (a buzz on opening, 2 of 6 opens in the gates). Everything present when the
+/// load completes counts as seen, whichever read gets there first.
 public struct WatchFeedEventGate: Sendable {
     private var seenItems: Set<String> = []
     private var seenCards: Set<String> = []
@@ -139,12 +142,13 @@ public struct WatchFeedEventGate: Sendable {
     /// The next read only learns what is there (a switch of path).
     public mutating func reseed() { seeded = false }
 
-    /// The arrivals in `items` (settled rows) and `cardIDs` since the last read.
-    public mutating func arrivals(items: [TranscriptItem], cardIDs: [String]) -> [WatchFeedEventKind] {
+    /// The arrivals in `items` (settled rows) and `cardIDs` since the last read. `loaded`: the read is of a completed load
+    /// (a live chat's resume done; a read through the iPhone always is). Until one has been, reads only learn.
+    public mutating func arrivals(items: [TranscriptItem], cardIDs: [String], loaded: Bool = true) -> [WatchFeedEventKind] {
         defer {
             seenItems.formUnion(items.map(\.id))
             seenCards.formUnion(cardIDs)
-            seeded = true
+            if loaded { seeded = true }
         }
         guard seeded else { return [] }
         var out: [WatchFeedEventKind] = []

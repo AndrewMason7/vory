@@ -48,6 +48,31 @@ struct WatchTurnRelayTests {
         #expect(told.map(\.1) == [.start, .showCards, .end, .end])
     }
 
+    /// The Live Activity is started again as it is taken over or refreshed, and shows the cards on each refresh: passed on
+    /// every time, one turn's start woke a following Watch three times (range B's gates, +0.5, +1.1 and +4.9 s). The Watch
+    /// hears a turn's start once until its end, its end once, and its cards when they changed; the inner reporter still
+    /// gets every call.
+    @Test func aTurnsRepeatedStartsReachTheWatchOnce() throws {
+        let inner = Recorder()
+        var told: [(String, WatchFeedRules.TurnCall)] = []
+        let relay = WatchTurnRelay(inner: inner) { chat, call in told.append((chat.storedID, call)) }
+        let a = try chat("a"), b = try chat("b")
+        relay.start(for: a)
+        relay.start(for: a)
+        relay.start(for: b)
+        relay.start(for: a)
+        relay.showCards(for: a)
+        relay.showCards(for: a)
+        relay.end(for: a, phase: "done")
+        relay.end(for: a, phase: "done")
+        // The next turn starts again.
+        relay.start(for: a)
+        relay.showCards(for: a)
+        #expect(inner.calls.count == 10, "the Live Activity lost calls: \(inner.calls)")
+        #expect(told.map(\.0) == ["a", "b", "a", "a", "a", "a"])
+        #expect(told.map(\.1) == [.start, .start, .showCards, .end, .start, .showCards])
+    }
+
     @Test func theConvenienceUpdateReachesTheInnerReporterWithNoDetail() throws {
         let inner = Recorder()
         let relay = WatchTurnRelay(inner: inner) { _, _ in }

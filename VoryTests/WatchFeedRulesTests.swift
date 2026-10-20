@@ -86,6 +86,21 @@ import Testing
         #expect(gate.arrivals(items: [user("hist-u"), reply("hist-r"), reply("hist-r2")], cardIDs: ["c1"]) == [.replyArrived(itemID: "hist-r2")])
     }
 
+    /// A live chat shows its cached transcript while it resumes, and the resume's history brought a row the cache didn't
+    /// have, announced as an arrival: a buzz on opening, 2 of 6 opens in range B's gates (history row h-5-4, the read
+    /// right after the first load). What is there when the load completes is learned, whichever read gets there first.
+    @Test func aReadRightAfterTheFirstLoadAnnouncesNothing() {
+        var gate = WatchFeedEventGate()
+        // The open's read: the cached transcript, the chat still resuming.
+        #expect(gate.arrivals(items: [user("u"), reply("h-5-3")], cardIDs: [], loaded: false).isEmpty)
+        // A liveChanged read as the resume lands: the history, with a row the cache didn't have and a card waiting.
+        #expect(gate.arrivals(items: [user("u"), reply("h-5-3"), reply("h-5-4")], cardIDs: ["c1"], loaded: true).isEmpty)
+        // Read again straight after: quiet.
+        #expect(gate.arrivals(items: [user("u"), reply("h-5-3"), reply("h-5-4")], cardIDs: ["c1"]).isEmpty)
+        // A reply that comes after the load is announced.
+        #expect(gate.arrivals(items: [user("u"), reply("h-5-3"), reply("h-5-4"), reply("r")], cardIDs: ["c1"]) == [.replyArrived(itemID: "r")])
+    }
+
     @Test func aCardAndAFailedTurnAreAnnounced() {
         var gate = WatchFeedEventGate()
         _ = gate.arrivals(items: [user("u")], cardIDs: [])

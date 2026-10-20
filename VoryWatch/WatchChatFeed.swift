@@ -166,7 +166,9 @@ final class WatchChatFeed {
         lastLiveSync = Date()
         let all = c.items
         let settled = WatchFeedRules.settled(all)
-        apply(settled: settled, cards: c.cards, working: c.isRunning, status: c.statusLine, tools: WatchFeedRules.turnTools(all))
+        // Still resuming, the chat shows its cached transcript: the gate learns, and announces nothing until the load is done.
+        apply(settled: settled, cards: c.cards, working: c.isRunning, status: c.statusLine, tools: WatchFeedRules.turnTools(all),
+              loaded: !c.isResuming)
         if c.interruptCause != nil, let b = c.banner { problem = WatchFeedProblem(kind: .interrupted, text: b) }
         else if let b = c.banner { problem = WatchFeedProblem.from(b) }
         isLoading = c.showsSyncing
@@ -241,7 +243,8 @@ final class WatchChatFeed {
 
     // MARK: Both paths
 
-    private func apply(settled: [TranscriptItem], cards newCards: [PendingCard], working: Bool, status: String?, tools: [ToolActivity]) {
+    private func apply(settled: [TranscriptItem], cards newCards: [PendingCard], working: Bool, status: String?, tools: [ToolActivity],
+                       loaded: Bool = true) {
         let shown = Array(settled.suffix(limit))
         // Only what changed: a fresh array every read laid out every row again.
         if shown.map(\.id) != items.map(\.id) || shown.last?.kind != items.last?.kind { items = shown }
@@ -252,7 +255,7 @@ final class WatchChatFeed {
         if line != statusLine { statusLine = line }
         let steps = working ? tools : []
         if steps != turnTools { turnTools = steps }
-        if let kind = WatchFeedEventGate.strongest(gate.arrivals(items: settled, cardIDs: newCards.map(\.id))) {
+        if let kind = WatchFeedEventGate.strongest(gate.arrivals(items: settled, cardIDs: newCards.map(\.id), loaded: loaded)) {
             event = WatchFeedEvent(kind: kind)
         }
     }
