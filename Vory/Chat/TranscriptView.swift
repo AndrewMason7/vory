@@ -250,7 +250,7 @@ struct TranscriptView: View {
                 // A reopened chat whose history is still on its way shows nothing, then the rows
                 // land as one (the fade is the only animation of the stack, see below). Its history
                 // landing under the rows it opened with, nothing either until it is at its end (#449).
-                .opacity((chat.isResuming && chat.items.isEmpty) || landingOutOfSight ? 0 : 1)
+                .opacity((chat.isResuming && chat.items.isEmpty) || landingOutOfSight || historyArriving ? 0 : 1)
                 .animation(.easeOut(duration: 0.25), value: chat.items.isEmpty)
                 // A reading column in the middle of the pane on a wide layout, a page wide however
                 // wide the window is; the full width on the phone.
@@ -305,8 +305,8 @@ struct TranscriptView: View {
                                         frame: { scrollTop = $0.minY; scrollBottom = $0.maxY },
                                         shapeChanged: { autoInsetFixed = nil },
                                         keyboard: { keyboardMoved(to: $0) }))
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, new in
-                metrics.offsetY = new
+            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.y, $0.contentInsets.top] } action: { _, new in
+                metrics.offsetY = new[0]; metrics.insetTop = new[1]
             }
             // Your own message brings the thread to the end, as in Messages, however far up it
             // was scrolled: a tester sent one from up the thread, saw nothing happen, and had to
@@ -345,7 +345,7 @@ struct TranscriptView: View {
                 // followed every change of the last row hid the small ones until it went with the
                 // per-token scroll.
                 if distance < -1, !metrics.userScrolling { landPastTheEnd(distance) }
-                let away = distance > 120
+                let away = distance > 120 && !metrics.probing
                 if away != awayFromBottom { withAnimation(.snappy) { awayFromBottom = away } }
                 // Content growing under a locked thread also reads as "away" for a frame; only a
                 // finger on the thread unlocks it: any upward pull from where the touch began
@@ -435,6 +435,7 @@ struct TranscriptView: View {
                 // A chat opening with its history still to come and only a few rows (or none) to show meanwhile waits out
                 // of sight until the history has landed and the thread is at its end (#449, see `historyLanding`); a
                 // history slow to come (1.5 s), the rows it has are shown meanwhile, and its landing hides it again.
+                metrics.shownItems = chat.items.count; metrics.landings = 0; metrics.probed = false
                 if chat.isResuming, rows.count < 20 { landingOutOfSight = true; capLanding(after: 1500) }
             }
             .onChange(of: chat.isResuming) { _, now in
@@ -662,7 +663,11 @@ extension TranscriptView {
     /// A chat that opened with only a few rows is out of sight from the start (`onAppear`): the history then lands unseen.
     /// Opened with more (rows kept from before), the landing itself puts it out of sight, the same update or the next.
     private func historyLanding(from old: Int, to new: Int) {
-        guard chat.isResuming, new - old >= 20, !landingOutOfSight else { return }
+        guard chat.isResuming, new - old >= 20 else { return }
+        // Landings count from the history's coming, out of sight already (opened with few rows) or not, and its rows are
+        // measured once before it is shown (`probeMeasuring`).
+        metrics.landings = 0; metrics.probed = false
+        guard !landingOutOfSight else { return }
         landingOutOfSight = true
         landingReveal?.cancel(); landingReveal = nil
         capLanding()
@@ -675,31 +680,95 @@ extension TranscriptView {
         landingCap = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(ms))
             guard !Task.isCancelled, landingOutOfSight else { return }
-            reveal()
+            reveal("cap")
         }
     }
 
-    /// At its end, or, the history in, shorter than the screen, and still so 80 ms later with its content's height unchanged
-    /// meanwhile (a change starts the wait again, from the geometry handler): the thread is shown, faded in. The throw to the
-    /// top came in the same layout as a first frame at the end, and the lazy stack measuring the rows that had just come
-    /// left a thread shown at its end 556 pt past it a moment later.
+    /// How far a landing's layout may still move the thread's height for the landing to count as stuck (#453).
+    static let settledStep: CGFloat = 12
+    /// The measuring scroll's rounds at most, out of sight before a long history is shown (#468, `probeMeasuring`).
+    static let probeRounds = 4
+
+    /// At its end, or, the history in, shorter than the screen, and still so two frames later with its content's height
+    /// unchanged meanwhile (a change starts the wait again, from the geometry handler, and from here): the thread is
+    /// shown, faded in. The throw to the top came in the same layout as a first frame at the end, and the lazy stack
+    /// measuring the rows that had just come left a thread shown at its end 556 pt past it a moment later (#449).
+    ///
+    /// If the thread had to be landed past its end meanwhile, the landing must also have stuck: the layout after it moved
+    /// the height by less than `settledStep` (#453). Under load the lazy stack measures in bursts, each set off by the
+    /// landing before it (rows newly in the window measure shorter, the end moves up, the thread is landed again), and the
+    /// bursts came 30 to 230 ms apart, so two quiet frames fell between two of them and the thread was shown 81 to 99 pt
+    /// from where it would settle, still moving. Bursts shrink as they go (209, 226, 127, 61, 35, 23, 19, 9 pt): the
+    /// thread is shown once one is under a line, or at the cap.
+    ///
+    /// The wait is in frames, not milliseconds (#453): under load the lazy stack's reports of its height came farther
+    /// apart than the 80 ms the wait used to be, while the height was still falling, so the quiet read as settled and the
+    /// thread was shown 99 to 185 pt past its end, its correction in sight. A frame comes as often as the app gets to draw,
+    /// so two of them stretch with the load; with none, they are 17 to 33 ms. Only SwiftUI's own report counts, read with
+    /// the distance in one reading (the geometry handler): a check against the UIKit scroll view refused every frame where
+    /// a separate height handler had missed the last change (69 pt in a Bot Chat), and left the thread to its cap.
     private func revealIfLanded() {
-        let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
-        if short || abs(metrics.distanceFromBottom) < 10 {
+        guard !metrics.probing else { return }
+        if landedAtEnd() {
             guard landingReveal == nil else { return }
             landingReveal = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(80))
-                let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
-                guard !Task.isCancelled, short || abs(metrics.distanceFromBottom) < 10 else { landingReveal = nil; return }
-                reveal()
+                let height = metrics.contentHeight
+                for _ in 0..<2 {
+                    await FrameClock.next()
+                    guard !Task.isCancelled else { return }
+                }
+                guard metrics.contentHeight == height, landedAtEnd() else {
+                    landingReveal = nil
+                    revealIfLanded()
+                    return
+                }
+                // A history taller than two screens is measured before it is shown (#468): see `probeMeasuring`.
+                if !metrics.probed, metrics.contentHeight > metrics.containerHeight * 2 {
+                    metrics.probed = true
+                    landingReveal = nil
+                    probeMeasuring()
+                    return
+                }
+                // Landed past its end since the history came: shown once the layout after the last landing has moved the
+                // height by less than a line; more, and this height is the one the next quiet frames must hold.
+                if metrics.landings > 0, abs(height - metrics.landedHeight) >= Self.settledStep {
+                    metrics.landedHeight = height
+                    landingReveal = nil
+                    revealIfLanded()
+                    return
+                }
+                reveal(metrics.landings > 0 ? "landing" : "frames")
             }
         } else {
             landingReveal?.cancel(); landingReveal = nil
         }
     }
 
-    private func reveal() {
+    /// A history arriving under the rows the thread was shown with (#449, #453): out of sight in the update that brings
+    /// it, not the next. `historyLanding` puts the thread out of sight from the rows' count, an update later, and a thread
+    /// shown with its few stored rows flashed 15,703 pt past its end for 15 ms as its history landed. Counted in items,
+    /// which the rows are made from, as `rows` is built afresh on every read.
+    private var historyArriving: Bool { chat.isResuming && chat.items.count >= metrics.shownItems + 20 }
+
+    /// At its end, or, the history in, shorter than the screen.
+    private func landedAtEnd() -> Bool {
+        let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
+        return short || abs(metrics.distanceFromBottom) < 10
+    }
+
+    private func reveal(_ why: String = "now") {
         landingCap?.cancel(); landingReveal?.cancel(); landingReveal = nil
+        // The cap during a probe: back at the end first, so the thread is never shown a screen up its history.
+        if metrics.probing {
+            metrics.probeTask?.cancel(); metrics.probeTask = nil; metrics.probing = false
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+        }
+        #if DEBUG
+        if ThreadGeometryWatch.log { Perf.stamp("SHOWN \(chat.title) by \(why)") }
+        #endif
+        metrics.shownItems = chat.items.count
         withAnimation(.easeOut(duration: 0.15)) { landingOutOfSight = false }
     }
 
@@ -749,9 +818,57 @@ extension TranscriptView {
         let locked = metrics.stickToBottom && metrics.contentHeight > metrics.containerHeight
         guard distance >= -60 || locked, Date().timeIntervalSince(keyboardMovedAt) > 0.6 else { scheduleOverscrollFix(); return }
         Perf.tick("overscrollLand")
+        noteLanding()
         var still = Transaction()
         still.disablesAnimations = true
         withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+    }
+
+    /// The lazy stack measures its rows only as a scroll brings them near, and until then a long history's height is its
+    /// estimate (40,494 pt for a chat that settles at 19,282). Shown at its end over that, nothing moves while it rests (the
+    /// anchor holds the end), but the first scroll measures it: in a pull past the end the scroll view kept its offset while
+    /// the content shrank under the finger, 4,404 pt past the end in sight, then snapped back in a frame (#468; Matt's
+    /// "stutters instead of rubber-banding" right after opening). So out of sight, at its end and quiet, the thread is
+    /// scrolled up and, a frame later, landed back at its end, in rounds. The lazy stack measures a step with each scroll
+    /// that moves the view, and the scroll's layout runs in its own turn, so the next frame has it. One round took a long
+    /// chat from 40,494 to 22,940 pt and stopped there (the end clamped back, so the landing stuck on a height still 3,600
+    /// pt off, and the first pull measured the rest in sight), so the rounds go on, each two screens deeper than the last,
+    /// until one from the second on moves the height by less than a line, at most `probeRounds`. Two frames a round: rounds
+    /// of two frames each way had a loaded open shown at 1,025 to 1,140 ms against 606 to 709 without them. Then the
+    /// landing waits for one that sticks (`revealIfLanded`). Unanimated and out of sight, with no finger, so no arrow,
+    /// haptic or lock changes; the cap meanwhile lands it first (`reveal`).
+    private func probeMeasuring() {
+        guard landingOutOfSight, !metrics.probing else { return }
+        metrics.probing = true
+        metrics.probeTask = Task { @MainActor in
+            var still = Transaction()
+            still.disablesAnimations = true
+            for round in 1...Self.probeRounds {
+                let before = metrics.contentHeight
+                withTransaction(still) { scrollPosition.scrollTo(y: max(0, metrics.offsetY + metrics.insetTop - metrics.containerHeight * CGFloat(2 * round))) }
+                await FrameClock.next()
+                guard !Task.isCancelled else { return }
+                withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+                await FrameClock.next()
+                guard !Task.isCancelled else { return }
+                // Never on the first round: the thread's end is its tail (rows never lazy, always measured), which can be
+                // taller than a screen, and a round inside it measures nothing new and reads as settled (a long chat
+                // shown at 21,088 pt that way had the rest measured by the first pull's bounce, 1,770 pt past the end).
+                if round > 1, abs(metrics.contentHeight - before) < Self.settledStep { break }
+            }
+            metrics.probing = false; metrics.probeTask = nil
+            guard landingOutOfSight else { return }
+            noteLanding()
+            withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+            revealIfLanded()
+        }
+    }
+
+    /// A landing past the end while the thread is out of sight: the reveal waits for one that sticks (`revealIfLanded`).
+    private func noteLanding() {
+        guard landingOutOfSight else { return }
+        metrics.landings += 1
+        metrics.landedHeight = metrics.contentHeight
     }
 
     private func scheduleOverscrollFix() {
@@ -766,6 +883,7 @@ extension TranscriptView {
             }
             guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
             Perf.tick("overscrollFix")
+            noteLanding()
             // Eased, so it reads as the thread settling rather than a jump of its own; from more
             // than a screen past (a thread showing nothing) at once, as an animated scroll through
             // rows still being laid out glitched them (`jumpToBottom`).
@@ -1052,6 +1170,21 @@ final class ScrollMetrics {
     var contentHeight: CGFloat = 0
     var containerHeight: CGFloat = 0
     var reportedInsetBottom: CGFloat = 0
+    /// The scroll view's top inset (the header's room), with `offsetY`: a scroll to an offset goes to `offsetY` plus it,
+    /// as `ScrollPosition.scrollTo(y:)` counts from the content's top under the inset, not from the scroll view's edge.
+    var insetTop: CGFloat = 0
+    /// The thread's landings past its end while out of sight since its history came, and the height at the last one
+    /// (#453, `revealIfLanded`).
+    var landings = 0
+    var landedHeight: CGFloat = 0
+    /// The out-of-sight scroll that makes the lazy stack measure a history before it is shown (#468, `probeMeasuring`):
+    /// done once per history, under way, and its task.
+    var probed = false
+    var probing = false
+    var probeTask: Task<Void, Never>?
+    /// The chat's item count when the thread was last shown (or opened): a history arriving under it hides the thread in
+    /// the same update (`historyArriving`).
+    var shownItems = 0
 }
 
 /// Drag the thread left to peek at each message's time, as in Messages: one transform on the
