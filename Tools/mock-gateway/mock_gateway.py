@@ -2159,6 +2159,24 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": "Checking the disk first. " + text, "status": "complete", "usage": usage(s.output_tokens, 2)})
 
+    async def _tour_turn(self, s: Session, prompt: str) -> None:
+        """Onboarding's ask (#388), with the tour's own command and words and only Allow once and Deny: what the
+        tour's Watch picture shows (TourWatchShot in WatchChatUITests)."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, "Checking what takes the space. ", delay=0.01)
+        answer = await self.ask("approval", s.sid, {
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "command": "find ./logs -mtime +30 -delete",
+            "description": "Delete the logs older than 30 days (3.1 GB)",
+            "tool_name": "terminal",
+            "choices": ["once", "deny"],
+            "allow_session": False, "allow_permanent": False})
+        text = "Done. I cleared 3.1 GB." if (answer or {}).get("choice", "deny") != "deny" else "Understood, I'll leave the logs alone."
+        await self.stream_words(s, text)
+        self.store_turn(s, prompt, ["Checking what takes the space. ", 1, text])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": "Checking what takes the space. " + text, "status": "complete", "usage": usage(s.output_tokens, 2)})
+
     async def _marathon_turn(self, s: Session, prompt: str) -> None:
         """A long run of the kind a person starts and leaves going with the phone in a pocket:
         a step at a time (a sentence, then a tool call with a screenful of output), then a long
@@ -2473,6 +2491,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("morph"):
             await self._morph_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("tour"):
+            await self._tour_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
             await self._card_turn(s, prompt)

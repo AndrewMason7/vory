@@ -5,7 +5,10 @@ import XCTest
 /// (the mock's /mock/start-turn) brings an approval card, answered with the names the iPhone uses (#36).
 final class WatchChatUITests: WatchUITestCase {
     /// The export chat open, past its first read.
-    private func openExportChat() throws {
+    private func openExportChat() throws { try openChat("Rewrite the nightly export job", rows: "export") }
+
+    /// The chat titled `title` open, past its first read (a row containing `rows` on screen).
+    private func openChat(_ title: String, rows: String) throws {
         try launch()
         XCTAssertTrue(button("Settings").waitForExistence(timeout: 40), "no start screen")
         // The chat's row: at the largest text the start screen shows one chat, and the list makes the rest only as they
@@ -13,7 +16,7 @@ final class WatchChatUITests: WatchUITestCase {
         // small crown turns (0.15) barely moved the list, and a half turn could leave it under the title bar, where a
         // tap at its centre opened Settings (45 mm, ax). So the crown turns until enough of the row shows below the
         // title bar (back again if it went past), and the tap lands on the middle of what shows.
-        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rewrite the nightly export job")).firstMatch
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
         _ = row.waitForExistence(timeout: 10)
         let window = app.windows.firstMatch.frame
         let below = CGRect(x: window.minX, y: window.minY + 60, width: window.width, height: window.height - 60)
@@ -39,16 +42,16 @@ final class WatchChatUITests: WatchUITestCase {
             mark("chat-no-bar tree:\n\(app.debugDescription)")
         }
         XCTAssertTrue(bar.exists, "no message bar in the chat")
-        let reply = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "export")).firstMatch
+        let reply = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", rows)).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 20), "no rows in the chat")
         sleep(2)
     }
 
     /// A turn in the open chat, as if its prompt had been sent from elsewhere.
-    private func startTurn(_ prompt: String) async throws {
+    private func startTurn(_ prompt: String, in session: String = "nightly export") async throws {
         let base = ProcessInfo.processInfo.environment["HERMES_E2E_URL"] ?? ""
         var c = try XCTUnwrap(URLComponents(string: base + "/mock/start-turn"))
-        c.queryItems = [URLQueryItem(name: "session", value: "nightly export"), URLQueryItem(name: "prompt", value: prompt)]
+        c.queryItems = [URLQueryItem(name: "session", value: session), URLQueryItem(name: "prompt", value: prompt)]
         let (_, response) = try await URLSession.shared.data(from: try XCTUnwrap(c.url))
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200, "the mock did not start the turn")
     }
@@ -135,5 +138,17 @@ final class WatchChatUITests: WatchUITestCase {
         XCTAssertTrue(any("watch.chat.message").waitForExistence(timeout: 10), "the message bar didn't come back after the answer")
         sleep(2)
         shot("chat-card-answered")
+    }
+
+    /// Onboarding's Watch picture (#388 beat 5, `TourWatch`): the mock's tour ask in "Disk cleanup on the log host", as
+    /// the Watch shows it. Made by Tools/dev/tour-frames.sh; skipped unless TOUR_FRAMES_OUT names the folder.
+    func testTheToursAskOnTheWatch() async throws {
+        guard let out = ProcessInfo.processInfo.environment["TOUR_FRAMES_OUT"], !out.isEmpty else { throw XCTSkip("TOUR_FRAMES_OUT not set") }
+        try openChat("Disk cleanup on the log host", rows: "disk")
+        try await startTurn("tour", in: "disk cleanup")
+        XCTAssertTrue(app.buttons["Allow once"].firstMatch.waitForExistence(timeout: 30), "no approval card arrived")
+        sleep(2)
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: out).appendingPathComponent("TourWatch.png"))
+        shot("TourWatch")
     }
 }

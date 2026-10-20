@@ -42,8 +42,11 @@ struct TourView: View {
     /// Beat 4's mention is due (a moment after the answer): the message bar types it in.
     @State private var mentionDue = false
     @State private var mentionTimer: Task<Void, Never>?
+    /// Beat 5's place on show: each in turn, until its line has been read (`TourPlace.dwell`).
+    @State private var place: TourPlace = TourPlace.all(pad: DeviceWords.device == "iPad")[0]
 
     private var current: TourBeat { page ?? .hello }
+    private var places: [TourPlace] { TourPlace.all(pad: DeviceWords.device == "iPad") }
     /// A keyboard up over the tour's chat (the person tapped its message bar).
     private var typingInChat: Bool { current.showsChat && !windowGeometry.keyboard.isNull }
     private var animating: Bool { onScreen && scenePhase == .active && !reduceMotion }
@@ -86,7 +89,8 @@ struct TourView: View {
                 VoryTourLayer(progress: reduceMotion ? CGFloat(current.rawValue) : progress, size: geo.size,
                               says: line.text(for: current), lineKey: line.key(for: current), reduceMotion: reduceMotion,
                               animating: animating, lookingDown: current == .connect,
-                              squint: current.showsChat && chatPhase == .working)
+                              squint: current.showsChat && chatPhase == .working,
+                              hop: current == .everywhere ? place.rawValue : 0)
                     .allowsHitTesting(false)
                     // The person typing in the tour's chat: the chat takes the room, and Vory steps aside until they're done.
                     .opacity(typingInChat ? 0 : 1)
@@ -117,10 +121,18 @@ struct TourView: View {
         .onChange(of: page) { _, beat in
             guard let beat else { return }
             line.arrived(at: beat)
+            // Beat 5 starts from its first place each time it comes into view.
+            if beat == .everywhere { showPlace(places[0]) }
             // Landing on Connect: Vory settles beside it, with a tap on the hand.
             if beat == .connect { UIImpactFeedbackGenerator(style: .soft).impactOccurred() }
             // An answer given on beat 3 has its mention on arriving at beat 4.
             if beat == .approval { scheduleMention() }
+        }
+        .task(id: PlaceTimer(onBeat: onScreen && current == .everywhere, place: place)) {
+            guard onScreen, current == .everywhere else { return }
+            try? await Task.sleep(for: .seconds(place.dwell))
+            guard !Task.isCancelled else { return }
+            nextPlace()
         }
         .task(id: LineTimer(beat: current, asked: chatPhase == .asked)) {
             // Each beat's second line, a moment after its first has been read (beat 4's once its card is up).
@@ -131,6 +143,19 @@ struct TourView: View {
     }
 
     private struct LineTimer: Hashable { var beat: TourBeat; var asked: Bool }
+    private struct PlaceTimer: Hashable { var onBeat: Bool; var place: TourPlace }
+
+    /// Beat 5's next place, once this one has been read; the last stays.
+    private func nextPlace() {
+        guard let i = places.firstIndex(of: place), i + 1 < places.count else { return }
+        showPlace(places[i + 1])
+    }
+
+    private func showPlace(_ p: TourPlace) {
+        place = p
+        line.placeShown(p)
+        if UIAccessibility.isVoiceOverRunning { AccessibilityNotification.Announcement(p.spoken).post() }
+    }
 
     /// The tour's chat moved on: Vory's lines follow, with a tap on the hand at Send and at an allowed card, and
     /// VoiceOver told what the screen alone shows. The card coming up moves the tour on to beat 4 once the line
@@ -195,8 +220,7 @@ struct TourView: View {
             // The chat itself is on its own layer over these two pages (`TourChatLayer`).
             Color.clear
         case .everywhere:
-            // Beat 5 is built from the app's own frames (the next commit).
-            Color.clear
+            TourEverywhere(place: place, size: size, reduceMotion: reduceMotion, live: onScreen && current == .everywhere)
         case .connect:
             TourConnectBeat(onConnect: onConnect, onDemo: onDemo)
         }
@@ -270,7 +294,10 @@ struct TourLines: Equatable {
         // In order: on arrival, once the card is up, after an allow, the mention, after a Deny.
         case .approval: return ["Sprout asks before it does anything risky.", "It\u{2019}s your call. Tap Allow once to let it go ahead.",
                                 "Done. Sprout cleared 3.1 GB.", "Type @ to bring another bot in.", afterDeny]
-        case .everywhere: return ["I\u{2019}m on your iPad too, with room for two columns."]
+        // By place (`placeShown`): the three places an ask reaches share the first.
+        case .everywhere: return ["You\u{2019}ll see these wherever you are.", "I\u{2019}m on your \(TourPlace.otherDevice) and Mac too.",
+                                  "Give me a backup address and I\u{2019}ll still find you away from home.",
+                                  "Your gateways and bot looks sync through iCloud."]
         case .connect: return demo ? ["Let\u{2019}s connect your gateway.", "Or take me for a spin first."] : ["Let\u{2019}s connect your gateway."]
         }
     }
@@ -291,7 +318,7 @@ struct TourLines: Equatable {
         let count = Self.lines(beat, demo: demo).count
         let now = step[beat] ?? 0
         if beat == .bots, now >= 1 { return }
-        if beat == .chat { return }
+        if beat == .chat || beat == .everywhere { return }
         if beat == .approval, now >= 1 || !asked { return }
         if now + 1 < count { step[beat] = now + 1 }
     }
@@ -318,6 +345,16 @@ struct TourLines: Equatable {
     /// The mention, a moment after the answer: beat 4's last line.
     mutating func mentionCame() { step[.approval] = 3 }
 
+    /// Beat 5's line for the place on show.
+    mutating func placeShown(_ place: TourPlace) {
+        switch place {
+        case .island, .lockScreen, .watch: step[.everywhere] = 0
+        case .devices: step[.everywhere] = 1
+        case .homeAway: step[.everywhere] = 2
+        case .iCloud: step[.everywhere] = 3
+        }
+    }
+
     mutating func botTapped() {
         guard !tapped else { return }
         tapped = true
@@ -341,6 +378,8 @@ struct VoryTourLayer: View {
     var lookingDown = false
     /// The thinking squint, while Sprout works in the tour's chat.
     var squint = false
+    /// A change hops him (beat 5's places, as he goes from one to the next).
+    var hop = 0
 
     /// His place and size on each beat, as fractions of the screen and points; `bubbleTop`, a fraction of the height,
     /// where his bubble's top sits when it isn't just under him. On the bots beat it's above the orbit: under him, the
@@ -398,6 +437,14 @@ struct VoryTourLayer: View {
                             mood: BotFaceView.Mood(profile: "vory-tour", state: .guide, squint: squint))
                     .rotationEffect(.degrees(lean + sway))
                     .offset(y: bob)
+                    .keyframeAnimator(initialValue: CGFloat(0), trigger: hop) { face, y in
+                        face.offset(y: reduceMotion ? 0 : y)
+                    } keyframes: { _ in
+                        KeyframeTrack {
+                            SpringKeyframe(-18, duration: 0.18)
+                            SpringKeyframe(0, duration: 0.42, spring: .bouncy)
+                        }
+                    }
                     .accessibilityLabel("Vory")
                     .position(x: s.x, y: s.faceY)
                 // Hung from its top, so a second line grows down, as it did under him.

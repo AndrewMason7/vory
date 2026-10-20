@@ -227,6 +227,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppIcon.icon,
+				LiveTurnViews.swift,
 			);
 			target = AA00000000000000000110 /* VoryNotificationService */;
 		};
@@ -234,6 +235,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppIcon.icon,
+				LiveTurnViews.swift,
 			);
 			target = AA00000000000000000125 /* VoryNotificationContent */;
 		};
