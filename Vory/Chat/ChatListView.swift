@@ -832,8 +832,7 @@ struct ChatListView: View {
         for s in list where s.archived != true {
             var body: [String: JSONValue] = ["archived": .bool(true)]
             if s.pinned == true { body["pinned"] = .bool(false) }
-            if let p = s.profile ?? runtime.selectedProfile, !p.isEmpty { body["profile"] = .string(p) }
-            do { let _: JSONValue? = try await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body)) }
+            do { try await SessionMutation.patch(runtime.api, id: s.id, profile: s.profile ?? runtime.selectedProfile, fields: body) }
             catch { failed.append((s, error)) }
         }
         // One alert for the batch, not one per chat (and not a red line the reload below clears).
@@ -846,12 +845,20 @@ struct ChatListView: View {
 
     private func delete(_ list: [StoredSession]) async {
         guard let runtime else { return }
+        var failed: [(StoredSession, Error)] = []
         for s in list {
             droppedIDs.insert(s.id)
             if let chat = runtime.chatForStored(s.id) { runtime.closeChat(chat) }
-            let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/sessions/\(s.id)", profile: s.profile ?? runtime.selectedProfile, body: EmptyBody())
+            // A refusal is said, and the chat stays: swallowed, it came back with the next list as if deleted and
+            // undeleted by itself (#467, a newer Hermes refusing every delete without its revision).
+            do { try await SessionMutation.delete(runtime.api, id: s.id, profile: s.profile ?? runtime.selectedProfile) }
+            catch { failed.append((s, error)); droppedIDs.remove(s.id) }
         }
-        sessions.removeAll { s in list.contains { $0.id == s.id } }
+        sessions.removeAll { s in list.contains { l in l.id == s.id } && !failed.contains { $0.0.id == s.id } }
+        if let (first, error) = failed.first {
+            actionFailure = ActionFailure(title: failed.count == 1 ? "Could not delete \u{201C}\(first.displayTitle)\u{201D}" : "Could not delete \(failed.count) chats",
+                                          message: PinSupport.reason(error))
+        }
         await load()
     }
 
@@ -1248,8 +1255,13 @@ struct ChatListView: View {
         guard let runtime else { return }
         if let chat = runtime.chatForStored(s.id) { runtime.closeChat(chat) }
         sessions.removeAll { $0.id == s.id }
-        // The chat's own bot, not the selected one: with All bots on, rows come from every profile.
-        let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/sessions/\(s.id)", profile: s.profile ?? runtime.selectedProfile, body: EmptyBody())
+        // The chat's own bot, not the selected one: with All bots on, rows come from every profile. A refusal is said
+        // and the chat comes back at once, not silently with the next list (#467).
+        do { try await SessionMutation.delete(runtime.api, id: s.id, profile: s.profile ?? runtime.selectedProfile) }
+        catch {
+            droppedIDs.remove(s.id)
+            actionFailure = ActionFailure(title: "Could not delete \u{201C}\(s.displayTitle)\u{201D}", message: PinSupport.reason(error))
+        }
         await load()
     }
 
@@ -1259,7 +1271,6 @@ struct ChatListView: View {
     private func patch(_ s: StoredSession, _ fields: [String: JSONValue], afterClose: Bool = false) async {
         guard let runtime else { return }
         var body = fields
-        if let p = s.profile ?? runtime.selectedProfile, !p.isEmpty { body["profile"] = .string(p) }
         // Archiving a pinned chat unpins it too: the gateway lists every pinned chat, archived
         // or not, so an archived pin would stay at the top as if nothing happened.
         if case .bool(true)? = body["archived"], s.pinned == true { body["pinned"] = .bool(false) }
@@ -1268,8 +1279,8 @@ struct ChatListView: View {
         if case .bool(let v)? = body["pinned"] { pinned = v }
         if case .bool(let v)? = body["archived"] { archived = v }
         if afterClose { heldRows[s.id] = was }
-        let payload = JSONValue.object(body)
-        async let sent: JSONValue? = runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: payload)
+        // Fenced on a newer Hermes (#467): the chat's revision with the edit.
+        async let sent: Void = SessionMutation.patch(runtime.api, id: s.id, profile: s.profile ?? runtime.selectedProfile, fields: body)
         if afterClose { try? await Task.sleep(for: Self.closeBeforeMove) }
         // Shown now, by the row's id (a reload in the wait may have reordered the list); the
         // gateway's answer decides whether it stays that way.
@@ -1351,8 +1362,9 @@ enum PinSupport {
         return false
     }
 
-    /// The gateway's reason in plain words, without the HTTP status.
+    /// The gateway's reason in plain words, without the HTTP status: a fenced edit's refusal in Vory's own (#467).
     static func reason(_ error: Error) -> String {
+        if let words = SessionMutation.message(for: error) { return words }
         if let e = error as? HermesAPIError, case .http(_, let detail) = e, !detail.isEmpty { return detail }
         return error.localizedDescription
     }
