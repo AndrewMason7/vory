@@ -1,8 +1,8 @@
 import XCTest
 
-/// Demo mode's way in and out (#392), on a device with no gateway: the first screen's "Try a demo" opens Vory on the
-/// demo's bots and chats, Settings tags the gateway "Demo" and offers Leave demo, and leaving brings back the first
-/// screen with nothing of the demo left. Runs on the demo copy (HERMES_E2E_BUNDLE), which keeps no gateway between
+/// Demo mode's way in and out (#392), on a device with no gateway: the tour's "Try a demo" (its last beat, #388) opens
+/// Vory on the demo's bots and chats, Settings tags the gateway "Demo" and offers Leave demo, and leaving brings back the
+/// tour with nothing of the demo left. Runs on the demo copy (HERMES_E2E_BUNDLE), which keeps no gateway between
 /// launches; skipped without it.
 final class DemoEntryUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -20,8 +20,12 @@ final class DemoEntryUITests: XCTestCase {
         app.launchArguments = ["-companionPromptShown", "YES"]
         app.launch()
 
+        // Try a demo is on the tour's last beat (#388): Skip goes there.
+        let skip = app.buttons["onboarding.skip"].firstMatch
+        XCTAssertTrue(skip.waitForExistence(timeout: 30), "no tour on a device with no gateway")
+        skip.tap()
         let tryDemo = app.buttons["onboarding.tryDemo"].firstMatch
-        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30), "no Try a demo on the first screen")
+        XCTAssertTrue(tryDemo.waitForExistence(timeout: 10), "no Try a demo on the tour's last beat")
         XCTAssertEqual(tryDemo.label, "Try a demo")
         tryDemo.tap()
         XCTAssertTrue(text("Packing list for the lake weekend").firstMatch.waitForExistence(timeout: 30), "the demo's chats did not load")
@@ -38,7 +42,7 @@ final class DemoEntryUITests: XCTestCase {
         shot.name = "demo-settings"; shot.lifetime = .keepAlways; add(shot)
         leave.tap()
 
-        XCTAssertTrue(app.buttons["onboarding.tryDemo"].firstMatch.waitForExistence(timeout: 30), "leaving the demo did not go back to the first screen")
+        XCTAssertTrue(app.buttons["onboarding.getStarted"].firstMatch.waitForExistence(timeout: 30), "leaving the demo did not go back to the tour")
         XCTAssertFalse(text("Packing list for the lake weekend").firstMatch.exists, "the demo's chats are still shown")
     }
 }
