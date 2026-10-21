@@ -20,10 +20,10 @@ final class ChatListPrefs {
     var showArchived: Bool { didSet { if showArchived != oldValue { d.set(showArchived, forKey: "chats.filter.archived") } } }
     var sortKey: String { didSet { if sortKey != oldValue { d.set(sortKey, forKey: "chats.sort") } } }
     var groupsOnly: Bool { didSet { if groupsOnly != oldValue { d.set(groupsOnly, forKey: "chats.filter.groups") } } }
-    var projectFilter: String { didSet { if projectFilter != oldValue, !inDemo { d.set(projectFilter, forKey: "chats.filter.project") } } }
+    var projectFilter: String { didSet { if projectFilter != oldValue { keepOwn(projectFilter, "chats.filter.project") } } }
     var byProject: Bool { didSet { if byProject != oldValue { d.set(byProject, forKey: "chats.byProject") } } }
-    var collapsedRaw: String { didSet { if collapsedRaw != oldValue, !inDemo { d.set(collapsedRaw, forKey: "chats.byProject.collapsed") } } }
-    var archivedRoomsRaw: String { didSet { if archivedRoomsRaw != oldValue, !inDemo { d.set(archivedRoomsRaw, forKey: "chats.archivedRooms") } } }
+    var collapsedRaw: String { didSet { if collapsedRaw != oldValue { keepOwn(collapsedRaw, "chats.byProject.collapsed") } } }
+    var archivedRoomsRaw: String { didSet { if archivedRoomsRaw != oldValue { keepOwn(archivedRoomsRaw, "chats.archivedRooms") } } }
     /// While the demo runs, the filter by project, the folded projects and the archived rooms are the demo's, for its life
     /// (#494): its projects and rooms are not the person's, and kept they left the person's list filtered to a project
     /// they don't have. Leaving it brings the person's own back.
@@ -32,6 +32,12 @@ final class ChatListPrefs {
             guard inDemo != oldValue else { return }
             if inDemo { projectFilter = ""; collapsedRaw = ""; archivedRoomsRaw = "" } else { refresh() }
         }
+    }
+    /// One of the three, kept outside the demo, and only when it is not what is kept already: coming back from the demo
+    /// puts the person's own back from the defaults and wrote them over themselves, an absent one as "" (#494).
+    private func keepOwn(_ value: String, _ key: String) {
+        guard !inDemo, value != (d.string(forKey: key) ?? "") else { return }
+        d.set(value, forKey: key)
     }
     var botColorsRaw: String { didSet { if botColorsRaw != oldValue { d.set(botColorsRaw, forKey: BotColors.storageKey) } } }
     var botAvatarsRaw: String { didSet { if botAvatarsRaw != oldValue { d.set(botAvatarsRaw, forKey: BotAvatarStore.storageKey) } } }

@@ -390,6 +390,14 @@ import Testing
         #expect(UserDefaults.standard.string(forKey: "chats.archivedRooms") == "r1")
         prefs.inDemo = false
         #expect(prefs.projectFilter == "mine" && prefs.collapsedRaw == "a" && prefs.archivedRoomsRaw == "r1", "leaving the demo did not bring the person's own back")
+
+        // Where the person has none, leaving writes none: putting theirs back wrote "" over an absent key.
+        for k in keys { UserDefaults.standard.removeObject(forKey: k) }
+        prefs.inDemo = true
+        prefs.projectFilter = "proj-lake"; prefs.collapsedRaw = "proj-lab"; prefs.archivedRoomsRaw = "room-weekend"
+        prefs.inDemo = false
+        #expect(keys.allSatisfy { UserDefaults.standard.object(forKey: $0) == nil }, "leaving the demo wrote \(keys.filter { UserDefaults.standard.object(forKey: $0) != nil })")
+        #expect(prefs.projectFilter == "" && prefs.collapsedRaw == "" && prefs.archivedRoomsRaw == "")
     }
 
     #if os(iOS)
