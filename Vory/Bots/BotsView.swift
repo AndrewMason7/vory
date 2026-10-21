@@ -56,7 +56,8 @@ struct BotsView: View {
             }
             .pageToolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    if !MorphTopBar.active(model) { Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot") }
+                    // No New bot in the demo (#494): its look editor wrote the person's own bot's look.
+                    if !MorphTopBar.active(model), !model.isInDemo { Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot") }
                 }
             }
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame().withAppModel() } }
@@ -74,7 +75,7 @@ struct BotsView: View {
             .task(id: model.runtime?.connection.id) { await load() }
             .onChange(of: model.pageRequest) { _, r in
                 guard let r, r.kind == .botsNewBot else { return }
-                model.pageRequest = nil; showNewBot = true
+                model.pageRequest = nil; showNewBot = !model.isInDemo
             }
         }
     }
@@ -150,7 +151,8 @@ struct BotsView: View {
             Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
         }
         Divider()
-        Button { editing = p } label: { Label("Edit bot…", systemImage: "pencil") }
+        // Not in the demo (#494): Edit Bot has the look editor, which wrote the person's own bot's look.
+        if !rt.isEphemeral { Button { editing = p } label: { Label("Edit bot…", systemImage: "pencil") } }
         if renameSupported, p.isDefault != true {
             Button { renaming = p } label: { Label("Rename bot…", systemImage: "folder.badge.gearshape") }
         }

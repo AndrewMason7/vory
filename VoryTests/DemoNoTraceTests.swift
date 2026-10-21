@@ -377,6 +377,14 @@ import Testing
     }
     #endif
 
+    /// A bot card has no Look in the demo (#494): edited there, a look went to the person's own bot of the same name.
+    @Test func aBotCardHasNoLookInTheDemo() {
+        #expect(!ProfileTab.available(withChat: true, look: false).contains(.look))
+        #expect(!ProfileTab.available(withChat: false, look: false).contains(.look))
+        #expect(ProfileTab.available(withChat: false, look: false).first == .instructions)
+        #expect(ProfileTab.available(withChat: false) == [.look, .instructions, .model, .display])
+    }
+
     @Test func homesVisitMarkIsNeverTheDemos() {
         #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
         #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)

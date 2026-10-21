@@ -82,4 +82,36 @@ final class DemoEntryUITests: XCTestCase {
         // The demo is never kept, so the next launch starts without it.
         app.terminate()
     }
+
+    /// The demo has no look editor and no New bot (#494): a look edited there, a colour or a photo, went to the person's
+    /// own bot of the same name, and to their other devices. Neither the Chats bar's +, a bot card's Look tab, nor the
+    /// Bots page's +.
+    func testTheDemoHasNoLookEditorOrNewBot() throws {
+        guard let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty else {
+            throw XCTSkip("HERMES_E2E_BUNDLE not set")
+        }
+        continueAfterFailure = true
+        app = XCUIApplication(bundleIdentifier: bundle)
+        app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats"]
+        app.launch()
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Packing list' AND NOT (identifier BEGINSWITH 'chat.')")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "the demo's chats did not load")
+        XCTAssertFalse(app.buttons["chats.newBot"].exists, "the Chats bar offers New bot in the demo")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label == 'New bot'")).firstMatch.exists, "New bot is offered in the demo")
+
+        row.tap()
+        let pill = app.buttons["chat.titlePill"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 15), "no title pill")
+        pill.tap()
+        let instructions = app.descendants(matching: .any).matching(identifier: "profile.tab.instructions").firstMatch
+        XCTAssertTrue(instructions.waitForExistence(timeout: 10), "the bot card did not open")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "profile.tab.look").firstMatch.exists, "the bot card has Look in the demo")
+        app.terminate()
+
+        app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "bots"]
+        app.launch()
+        XCTAssertTrue(text("Sprout").firstMatch.waitForExistence(timeout: 30), "the demo's bots did not load")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label == 'New bot'")).firstMatch.exists, "the Bots page offers New bot in the demo")
+        app.terminate()
+    }
 }

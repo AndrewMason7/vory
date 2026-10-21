@@ -279,7 +279,7 @@ struct ChatListView: View {
                 ToolbarItem(placement: .topBarLeading) { if !MorphTopBar.active(model) { profileMenu } }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if !MorphTopBar.active(model) {
-                    Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
+                    if !model.isInDemo { Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot") }
                     // One View menu (sort + filters) wherever the list is a split view's column
                     // or shares a strip with the system's items: three buttons beside the title
                     // truncated "Chats" in a 380 pt column, and worse in the open Duo's portrait.
@@ -310,7 +310,8 @@ struct ChatListView: View {
                 guard let r else { return }
                 model.chatListRequest = nil
                 switch r.kind {
-                case .newBot: showNewBot = true
+                // No New bot in the demo (#494): its look editor wrote the person's own bot's look.
+                case .newBot: showNewBot = !model.isInDemo
                 case .manageProjects: showProjects = true
                 case .selectChats: withAnimation(selectMotion) { selecting = true }
                 // Select's controls in the morph bar (#408).
@@ -1697,7 +1698,7 @@ struct ChatListProfileItems: View {
                 }
                 Toggle(isOn: Bindable(prefs).allBots) { Label("All bots", systemImage: "person.2") }
                 #if os(macOS)
-                Button { model.chatListRequest = .init(.newBot) } label: { Label("New Bot…", systemImage: "plus") }
+                if !model.isInDemo { Button { model.chatListRequest = .init(.newBot) } label: { Label("New Bot…", systemImage: "plus") } }
                 #endif
                 Divider()
                 // With a backup address (#283), the address in use beside the gateway's name.

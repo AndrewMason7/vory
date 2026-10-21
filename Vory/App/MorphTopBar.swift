@@ -21,7 +21,8 @@ enum TabTrail { case chatActions, plus(String), filesActions, boardActions, sess
 @MainActor func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     switch tab {
     case .chats: (.botMenu, .chatActions)
-    case .bots: (nil, .plus("New bot"))
+    // No New bot in the demo (#494): its look editor wrote the person's own bot's look.
+    case .bots: (nil, AppModel.shared.isInDemo ? nil : .plus("New bot"))
     case .files: (.filesHome, .filesActions)
     case .projects: (nil, .plus("Add project"))
     case .kanban: (nil, .boardActions)
@@ -867,12 +868,15 @@ struct MorphTopBar: View {
     /// which the layout is measured with.
     private var liveActions: some View {
         HStack(spacing: BarIcon.spacing) {
+            // No New bot in the demo (#494), here and in `actions`, which the layout is measured with.
+            if !model.isInDemo {
             Button { model.chatListRequest = .init(.newBot) } label: { Image(systemName: "plus").contentShape(.rect) }
                 .buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityElement(children: .ignore).accessibilityLabel("New bot").accessibilityAddTraits(.isButton)
                 .accessibilityAction { model.chatListRequest = .init(.newBot) }
                 .accessibilityShowsLargeContentViewer { Label("New bot", systemImage: "plus") }
                 .accessibilityIdentifier("chats.newBot")
+            }
             Menu { ChatListSortItems() } label: { Image(systemName: "arrow.up.arrow.down").contentShape(.rect) }
                 .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityLabel("Sort").accessibilityIdentifier("chats.sort")
@@ -992,7 +996,7 @@ struct MorphTopBar: View {
 
     private var actions: some View {
         HStack(spacing: BarIcon.spacing) {
-            Image(systemName: "plus").barIconSlot()
+            if !model.isInDemo { Image(systemName: "plus").barIconSlot() }
             Image(systemName: "arrow.up.arrow.down").barIconSlot()
             Image(systemName: "line.3.horizontal.decrease.circle").barIconSlot()
         }
