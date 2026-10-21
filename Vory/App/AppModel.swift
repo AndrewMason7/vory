@@ -413,8 +413,20 @@ final class AppModel {
     }
 
     func activateSavedConnection() async {
+        guard !Self.isUnitTestHost else { return }
         if let c = store.active { await activate(c) }
     }
+
+    /// The app as the host the unit tests run inside: it connects no saved gateway (#494). A used simulator's saved gateway
+    /// came back with the host, and its runtime wrote the person's stores (the widgets' snapshot, the chat list's settings
+    /// as it switched the demo's off) while the tests read them: the demo's no-trace checks failed on a used simulator and
+    /// passed on a fresh one. The UI tests launch the app as itself, which this leaves alone. A test hook, so DEBUG only:
+    /// a Release build never reads the test runner's variable (CUT-SWEEP §1).
+    #if DEBUG
+    nonisolated static let isUnitTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    #else
+    nonisolated static let isUnitTestHost = false
+    #endif
 
     /// Whether Face ID may be asked for now, for a remembered sign-in: the app in front and its
     /// own lock not up (the lock asks for Face ID itself, and two prompts would collide).

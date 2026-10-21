@@ -111,6 +111,9 @@ import Testing
     }
 
     @Test func aDemoUsedAndLeftLeavesNoTraceAndSendsNothingAnywhere() async throws {
+        // Nothing else writes the stores read here: the test host connects no gateway of its own (#494; a used
+        // simulator's saved gateway did, and rewrote the widgets' snapshot mid-test).
+        #expect(AppModel.isUnitTestHost && AppModel.shared.runtime == nil, "the test host runs \(AppModel.shared.runtime?.connection.name ?? "a gateway"), which writes the stores this test reads")
         let keychainWas = Self.useWorkingKeychain()
         defer { Keychain.memoryOnly = keychainWas }
         // A clean start, as on a new device: what an earlier run (or an older build) left for the demo would hide a
@@ -196,7 +199,8 @@ import Testing
         #expect(Self.cacheStamps() == cacheBefore, "a demo chat was written to the transcript cache")
         #expect(TranscriptCache.load(connection: GatewayConnection.demoID, storedID: chat.storedID) == nil, "the new chat was cached")
         #expect(Self.files(in: Self.sharedMedia) == mediaBefore, "the shared media cache changed")
-        #expect(WidgetSnapshot.load() == snapshotBefore, "the widgets' snapshot changed")
+        let snapshotAfter = WidgetSnapshot.load()
+        #expect(snapshotAfter == snapshotBefore, "the widgets' snapshot changed: \(snapshotBefore.map { "\($0.gatewayName) \($0.connectionID) at \($0.updatedAt.timeIntervalSince1970)" } ?? "none") -> \(snapshotAfter.map { "\($0.gatewayName) \($0.connectionID) at \($0.updatedAt.timeIntervalSince1970)" } ?? "none")")
         let ownAfter = ownKeys.map { UserDefaults.standard.object(forKey: $0).map { "\($0)" } }
         #expect(ownAfter == ownBefore, "the demo changed the person's own settings: \(zip(ownKeys, zip(ownBefore, ownAfter)).filter { $0.1.0 != $0.1.1 }.map(\.0))")
         #expect(Keychain.get(account: BotLooks.account) == looksBefore, "the looks' copy for the extensions and the Watch changed")
@@ -415,7 +419,7 @@ import Testing
         prefs.inDemo = true
         prefs.projectFilter = "proj-lake"; prefs.collapsedRaw = "proj-lab"; prefs.archivedRoomsRaw = "room-weekend"
         prefs.inDemo = false
-        #expect(keys.allSatisfy { UserDefaults.standard.object(forKey: $0) == nil }, "leaving the demo wrote \(keys.filter { UserDefaults.standard.object(forKey: $0) != nil })")
+        #expect(keys.allSatisfy { UserDefaults.standard.object(forKey: $0) == nil }, "leaving the demo wrote \(keys.compactMap { k in UserDefaults.standard.object(forKey: k).map { "\(k)=\($0)" } })")
         #expect(prefs.projectFilter == "" && prefs.collapsedRaw == "" && prefs.archivedRoomsRaw == "")
     }
 
