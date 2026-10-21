@@ -589,13 +589,17 @@ struct DashboardView: View {
             if let list { sessions = list; error = nil }
             else if sessions.isEmpty { error = "Could not load the chat list." }
         }
-        // The Overview widget and complications draw from the shared snapshot.
-        if let a = usageResult.0, var snap = WidgetSnapshot.load() {
-            snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list, previous: snap.usage)
-            snap.save()
-            WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
-        }
+        if let a = usageResult.0 { Self.keepForWidgets(a, sessions: list, runtime: rt) }
         return list != nil
+    }
+
+    /// The month's numbers into the shared snapshot the Overview widget and complications draw from: a gateway's own,
+    /// never the demo's (#493: its numbers stayed on the saved gateway's widget after leaving it).
+    static func keepForWidgets(_ a: UsageAnalytics, sessions: [StoredSession]?, runtime rt: GatewayRuntime) {
+        guard !rt.isEphemeral, var snap = WidgetSnapshot.load() else { return }
+        snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: sessions, previous: snap.usage)
+        snap.save()
+        WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
     }
 }
 

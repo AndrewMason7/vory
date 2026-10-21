@@ -229,6 +229,25 @@ import Testing
         #expect(defaults.object(forKey: demoKey) == nil && !FileManager.default.fileExists(atPath: folder.path))
     }
 
+    /// Home's month reaches the widgets' snapshot from a gateway only, never from the demo (#493): the demo's numbers
+    /// stayed on the saved gateway's widget after leaving it.
+    @Test func homesNumbersReachTheWidgetsFromAGatewayOnly() async throws {
+        let before = WidgetSnapshot.load()
+        defer { if let before { before.save() } else { Keychain.delete(account: WidgetSnapshot.account) } }
+        WidgetSnapshot(gatewayName: "Home", connectionID: UUID().uuidString, profile: "default", needsAttention: 0, chats: [], contextPercent: nil).save()
+        let planted = WidgetSnapshot.load()
+        let store = ConnectionStore(defaults: UserDefaults(suiteName: "dev.vory.tests.demotrace." + UUID().uuidString)!, connections: [])
+        let demo = GatewayRuntime(connection: .demo, store: store, transport: .demo(DemoGateway(pace: .quick)))
+        await demo.start()
+        let month: UsageAnalytics = try await demo.api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: "30")])
+        DashboardView.keepForWidgets(month, sessions: nil, runtime: demo)
+        await demo.stop()
+        #expect(WidgetSnapshot.load() == planted, "the demo's numbers went to the widgets")
+        let own = GatewayRuntime(connection: GatewayConnection(name: "own", gateway: try GatewayURL.normalize("https://127.0.0.1:1"), authMode: .sessionToken), store: store)
+        DashboardView.keepForWidgets(month, sessions: nil, runtime: own)
+        #expect(WidgetSnapshot.load()?.usage != nil, "a gateway's numbers did not reach the widgets")
+    }
+
     @Test func homesVisitMarkIsNeverTheDemos() {
         #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
         #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)
