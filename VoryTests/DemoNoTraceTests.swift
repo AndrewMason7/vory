@@ -36,6 +36,11 @@ import Testing
             .appendingPathComponent("vory-media", isDirectory: true)
     }
 
+    private static var botPhotos: URL {
+        (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+            .appending(path: "BotAvatars", directoryHint: .isDirectory)
+    }
+
     private static func files(in dir: URL) -> Set<String> {
         Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
     }
@@ -104,6 +109,12 @@ import Testing
         #expect(Self.demoKeys([GatewayConnection.demoID.uuidString] + chatIDs).isEmpty)
         #expect(Self.demoFiles().isEmpty)
         let cacheBefore = Self.cacheStamps()
+        // The person's own settings and looks the app's screens could write from the demo (#494), as they were.
+        let ownKeys = [GatewayRuntime.defaultProfileKey, "chats.filter.project", "chats.byProject.collapsed", "chats.archivedRooms",
+                       "companionPromptShown", "notificationsSetupCardDone"]
+        let ownBefore = ownKeys.map { UserDefaults.standard.object(forKey: $0).map { "\($0)" } }
+        let looksBefore = Keychain.get(account: BotLooks.account)
+        let photosBefore = Self.files(in: Self.botPhotos)
         let defaultsBefore = UserDefaults.standard.dictionaryRepresentation()
         let renamedBefore = UserDefaults.standard.stringArray(forKey: ChatSession.renamedByPersonKey) ?? []
         let snapshotBefore = WidgetSnapshot.load()
@@ -145,6 +156,18 @@ import Testing
         #expect(download.path.hasPrefix(scratch.path), "the download went to \(download.path)")
         chat.stageAttachment(data: Data("hello".utf8), name: "note.txt", kind: .file)
         #expect(chat.staged.first?.localURL?.path.hasPrefix(scratch.path) == true)
+        // What the app's own screens write, done as they do it in the demo (#494): Home's month for the widgets, a default
+        // bot chosen, the chat list's project filter, folded projects and archived rooms, and the looks' copy.
+        let month: UsageAnalytics = try await rt.api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: "30")])
+        DashboardView.keepForWidgets(month, sessions: nil, runtime: rt)
+        rt.defaultProfileChoice = DemoContent.bots.last?.name ?? "default"
+        let prefs = ChatListPrefs.shared
+        prefs.inDemo = true
+        prefs.projectFilter = "demo-project"; prefs.collapsedRaw = "demo-project"; prefs.archivedRoomsRaw = "room-weekend"
+        prefs.inDemo = false
+        DemoLooks.set(on: true)
+        BotLooksMirror.mirror()
+        DemoLooks.set(on: false)
         await rt.stop()
 
         // No trace. The defaults: no key of the core's for the demo, and nothing that names its gateway or a chat of it.
@@ -161,6 +184,10 @@ import Testing
         #expect(TranscriptCache.load(connection: GatewayConnection.demoID, storedID: chat.storedID) == nil, "the new chat was cached")
         #expect(Self.files(in: Self.sharedMedia) == mediaBefore, "the shared media cache changed")
         #expect(WidgetSnapshot.load() == snapshotBefore, "the widgets' snapshot changed")
+        let ownAfter = ownKeys.map { UserDefaults.standard.object(forKey: $0).map { "\($0)" } }
+        #expect(ownAfter == ownBefore, "the demo changed the person's own settings: \(zip(ownKeys, zip(ownBefore, ownAfter)).filter { $0.1.0 != $0.1.1 }.map(\.0))")
+        #expect(Keychain.get(account: BotLooks.account) == looksBefore, "the looks' copy for the extensions and the Watch changed")
+        #expect(Self.files(in: Self.botPhotos) == photosBefore, "the bots' photos changed")
         #expect(!FileManager.default.fileExists(atPath: scratch.path), "the demo's scratch folder is still there")
         #expect(store.connections.isEmpty && UserDefaults(suiteName: suite)?.string(forKey: "activeConnectionID") == nil)
         // Nothing sent anywhere.
