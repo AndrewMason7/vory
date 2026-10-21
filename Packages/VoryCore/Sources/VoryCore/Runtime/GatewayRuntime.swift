@@ -454,9 +454,16 @@ public final class GatewayRuntime {
     /// with another one; empty follows the gateway's own active profile.
     public static let defaultProfileKey = "bots.defaultProfile"
     public var defaultProfile: String? {
-        let d = UserDefaults.standard.string(forKey: Self.defaultProfileKey) ?? ""
+        let d = defaultProfileChoice
         return d.isEmpty || !profiles.contains(where: { $0.name == d }) ? nil : d
     }
+    /// The default bot as Settings shows it ("": follow the gateway). The demo's is its own, for its life only (#494):
+    /// the setting is the person's, kept and synced, and a demo bot chosen there stayed after leaving the demo.
+    public var defaultProfileChoice: String {
+        get { isEphemeral ? ephemeralDefaultProfile : (UserDefaults.standard.string(forKey: Self.defaultProfileKey) ?? "") }
+        set { if isEphemeral { ephemeralDefaultProfile = newValue } else { UserDefaults.standard.set(newValue, forKey: Self.defaultProfileKey) } }
+    }
+    private var ephemeralDefaultProfile = ""
     /// Back to the default bot, when one is chosen and the selection drifted (a chat opened from
     /// another bot's list, a route from a notification).
     public func returnToDefaultProfile() {

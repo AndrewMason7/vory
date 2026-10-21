@@ -512,7 +512,7 @@ struct BotsSettingsView: View {
             SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: DeviceWords.isMac ? "What applies to every bot at once: the default bot and glass." : "What applies to every bot at once: the default bot, glass, motion and tilt.")
             if let rt = model.runtime {
                 Section {
-                    Picker("Default bot", selection: $defaultProfile) {
+                    Picker("Default bot", selection: defaultBot(rt)) {
                         Text("Follow the gateway").tag("")
                         ForEach(rt.profiles) { p in
                             Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
@@ -594,6 +594,15 @@ struct BotsSettingsView: View {
             }
         }
         .onChange(of: glassAll) { _, _ in BotLooksMirror.mirror() }
+    }
+
+    /// The default bot setting, or in the demo the demo's own for its life (#494): a demo bot chosen here was kept, and
+    /// synced to the person's other devices.
+    private func defaultBot(_ rt: GatewayRuntime) -> Binding<String> {
+        Binding(get: { rt.isEphemeral ? rt.defaultProfileChoice : defaultProfile },
+                set: { v in
+                    if rt.isEphemeral { rt.defaultProfileChoice = v; rt.returnToDefaultProfile() } else { defaultProfile = v }
+                })
     }
 }
 

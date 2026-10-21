@@ -265,6 +265,31 @@ import Testing
         #expect(try now() == planted, "the looks were copied while the demo ran")
     }
 
+    /// A default bot chosen in the demo is the demo's, for its life (#494): the setting is the person's own, kept and
+    /// synced, and a demo bot chosen there stayed after leaving. A gateway's choice is kept as before.
+    @Test func theDemosDefaultBotIsItsOwn() async throws {
+        let key = GatewayRuntime.defaultProfileKey
+        let before = UserDefaults.standard.string(forKey: key)
+        defer { if let before { UserDefaults.standard.set(before, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) } }
+        UserDefaults.standard.set("mine", forKey: key)
+        let store = ConnectionStore(defaults: UserDefaults(suiteName: "dev.vory.tests.demotrace." + UUID().uuidString)!, connections: [])
+        let demo = GatewayRuntime(connection: .demo, store: store, transport: .demo(DemoGateway(pace: .quick)))
+        await demo.start()
+        await demo.loadProfiles()
+        #expect(demo.defaultProfileChoice == "", "the demo took the person's default")
+        let bot = try #require(DemoContent.bots.last?.name)
+        demo.defaultProfileChoice = bot
+        demo.returnToDefaultProfile()
+        #expect(demo.defaultProfile == bot && demo.selectedProfile == bot)
+        await demo.stop()
+        #expect(UserDefaults.standard.string(forKey: key) == "mine", "the demo's default bot was kept")
+
+        let own = GatewayRuntime(connection: GatewayConnection(name: "own", gateway: try GatewayURL.normalize("https://127.0.0.1:1"), authMode: .sessionToken), store: store)
+        #expect(own.defaultProfileChoice == "mine")
+        own.defaultProfileChoice = "work"
+        #expect(UserDefaults.standard.string(forKey: key) == "work")
+    }
+
     @Test func homesVisitMarkIsNeverTheDemos() {
         #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
         #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)
