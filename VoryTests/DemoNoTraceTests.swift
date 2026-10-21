@@ -40,6 +40,32 @@ import Testing
         Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
     }
 
+    /// Every key of the defaults that names the demo's gateway or one of its chats.
+    private static func demoKeys(_ ids: [String]) -> [String] {
+        let ids = ids.filter { !$0.isEmpty }.map { $0.uppercased() }
+        return UserDefaults.standard.dictionaryRepresentation().keys.filter { k in ids.contains { k.uppercased().contains($0) } }.sorted()
+    }
+
+    /// The app's own folders under Caches and Application Support (the transcripts, the media and the pictures), walked
+    /// through: whatever in them is named after the demo's gateway.
+    private static func demoFiles() -> [String] {
+        let id = GatewayConnection.demoID.uuidString
+        let fm = FileManager.default
+        var roots: [URL] = []
+        if let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            roots += ["transcripts", "vory-media", "vory-web-images", "vory-voice-previews"].map { caches.appending(path: $0, directoryHint: .isDirectory) }
+        }
+        if let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            roots.append(support.appending(path: "BotAvatars", directoryHint: .isDirectory))
+        }
+        var out: [String] = []
+        for root in roots {
+            guard let walk = fm.enumerator(at: root, includingPropertiesForKeys: nil) else { continue }
+            for case let u as URL in walk where u.lastPathComponent.uppercased().contains(id) { out.append(u.path) }
+        }
+        return out
+    }
+
     /// Each demo chat's transcript cache file, by path, with when it was last written (none: absent). A copy an older
     /// build left there (one without the guard) is not this run's: what counts is that nothing writes it now.
     private static func cacheStamps() -> [String: Date] {
@@ -69,6 +95,14 @@ import Testing
     }
 
     @Test func aDemoUsedAndLeftLeavesNoTraceAndSendsNothingAnywhere() async throws {
+        // A clean start, as on a new device: what an earlier run (or an older build) left for the demo would hide a
+        // write of this one's, its key already there with the same ids (#493: how the cache of the demo's chat list
+        // got past this test).
+        let chatIDs = DemoContent.chats.map(\.id)
+        DemoTraces.sweep()
+        for key in Self.demoKeys(chatIDs) { UserDefaults.standard.removeObject(forKey: key) }
+        #expect(Self.demoKeys([GatewayConnection.demoID.uuidString] + chatIDs).isEmpty)
+        #expect(Self.demoFiles().isEmpty)
         let cacheBefore = Self.cacheStamps()
         let defaultsBefore = UserDefaults.standard.dictionaryRepresentation()
         let renamedBefore = UserDefaults.standard.stringArray(forKey: ChatSession.renamedByPersonKey) ?? []
@@ -118,6 +152,9 @@ import Testing
         let added = UserDefaults.standard.dictionaryRepresentation().filter { defaultsBefore[$0.key] == nil }.map(\.key)
         let ours = added.filter { key in demoIDs.contains { key.contains($0) } || ["kanban.", "gateway.", "chat.", "chats.", "transcript"].contains { key.hasPrefix($0) } }
         #expect(ours.isEmpty, "the demo wrote defaults: \(ours.sorted())")
+        // From the clean start: no key names the demo or a chat of it, and no file is named after it, at all.
+        #expect(Self.demoKeys(demoIDs).isEmpty, "keys that name the demo: \(Self.demoKeys(demoIDs))")
+        #expect(Self.demoFiles().isEmpty, "files named after the demo: \(Self.demoFiles())")
         let renamed = UserDefaults.standard.stringArray(forKey: ChatSession.renamedByPersonKey) ?? []
         #expect(renamed == renamedBefore, "the demo's rename was recorded")
         #expect(Self.cacheStamps() == cacheBefore, "a demo chat was written to the transcript cache")
@@ -133,6 +170,65 @@ import Testing
 
     /// Home's "since you were here" mark is kept from the person's own visits only: a visit in the demo writes none, so
     /// after leaving it Home measures from their own last visit (the demo legs found the demo's Home visit kept).
+    /// The chat list's cache never keeps the demo's list, and never reads back one an older build kept (#493): read back,
+    /// the list kept its chats' first times (a chat keeps its time until it has new messages), so the demo's chats aged
+    /// a day at a time. The sweep at launch and on leaving the demo takes such a list away; a gateway's own list is kept.
+    @Test func theChatListsCacheNeverKeepsTheDemos() throws {
+        let demo = GatewayConnection.demoID
+        let key = SessionCache.key(connection: demo, profile: "default")
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let list = [StoredSession(id: DemoContent.botChatID, title: "Bot Chat", lastActive: 1, messageCount: 4)]
+        SessionCache.save(list, connection: demo, profile: "default")
+        #expect(UserDefaults.standard.object(forKey: key) == nil, "the demo's list was saved")
+        UserDefaults.standard.set(try JSONEncoder().encode(list), forKey: key)
+        #expect(SessionCache.load(connection: demo, profile: "default").isEmpty, "an older build's list was read back")
+        #expect(SessionCache.loadAny(connection: demo).isEmpty, "an older build's list was read back")
+        DemoTraces.sweep()
+        #expect(UserDefaults.standard.object(forKey: key) == nil, "the sweep left an older build's list")
+
+        let own = UUID()
+        defer { UserDefaults.standard.removeObject(forKey: SessionCache.key(connection: own, profile: "default")) }
+        SessionCache.save(list, connection: own, profile: "default")
+        #expect(SessionCache.load(connection: own, profile: "default").map(\.id) == [DemoContent.botChatID])
+        DemoTraces.sweep()
+        #expect(SessionCache.load(connection: own, profile: "default").map(\.id) == [DemoContent.botChatID], "the sweep took a gateway's own list")
+    }
+
+    /// The sweep at launch leaves a demo that is already running alone (a test build started in it, `-vory-demo`), and
+    /// takes the demo's keys when it isn't; leaving the demo sweeps either way. It takes the demo's gateway id only.
+    @Test func theLaunchSweepSkipsADemoThatRuns() throws {
+        let suite = "dev.vory.tests.demotrace." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let caches = FileManager.default.temporaryDirectory.appending(path: suite, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: caches) }
+        let demoKey = "sessions.cache." + GatewayConnection.demoID.uuidString + ".default"
+        let chatKey = "voice.quick.restore." + DemoContent.botChatID
+        let folder = caches.appending(path: "transcripts/" + GatewayConnection.demoID.uuidString, directoryHint: .isDirectory)
+        func plant() throws {
+            defaults.set(Data("[]".utf8), forKey: demoKey)
+            defaults.set(["a": 1], forKey: chatKey)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+
+        let running = ConnectionStore(defaults: defaults, connections: [])
+        running.activeConnectionID = GatewayConnection.demoID
+        try plant()
+        DemoTraces.sweepAtLaunch(store: running, defaults: defaults, caches: caches)
+        #expect(defaults.object(forKey: demoKey) != nil, "the launch sweep took state from under a running demo")
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+
+        let saved = ConnectionStore(defaults: defaults, connections: [])
+        DemoTraces.sweepAtLaunch(store: saved, defaults: defaults, caches: caches)
+        #expect(defaults.object(forKey: demoKey) == nil, "the launch sweep left the demo's key")
+        #expect(!FileManager.default.fileExists(atPath: folder.path), "the launch sweep left the demo's transcripts")
+        #expect(defaults.object(forKey: chatKey) != nil, "the sweep took a key by a chat id, which a real chat can have")
+
+        try plant()
+        DemoTraces.sweep(defaults: defaults, caches: caches)
+        #expect(defaults.object(forKey: demoKey) == nil && !FileManager.default.fileExists(atPath: folder.path))
+    }
+
     @Test func homesVisitMarkIsNeverTheDemos() {
         #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
         #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)

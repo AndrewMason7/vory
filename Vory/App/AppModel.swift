@@ -311,6 +311,8 @@ final class AppModel {
         // `-vory-demo`: start on the built-in demo gateway (#392), before the welcome screen has its button.
         if ProcessInfo.processInfo.arguments.contains("-vory-demo") { store.activeConnectionID = GatewayConnection.demoID }
         #endif
+        // What an older build kept of the demo, gone before anything reads it (#493); not while a demo runs.
+        DemoTraces.sweepAtLaunch(store: store)
         // The bots' own names (#315) before anything reads a label.
         BotNames.install()
         CloudSync.shared.start(store: store)
@@ -374,6 +376,7 @@ final class AppModel {
         LocalNotifier.removeAll(connection: GatewayConnection.demoID)
         ComposerDrafts.forgetDemo()
         await deactivate()
+        DemoTraces.sweep()
         store.leaveDemo()
         if let c = store.active { await activate(c) }
     }
