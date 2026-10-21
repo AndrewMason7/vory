@@ -45,6 +45,8 @@ struct TourView: View {
     @State private var moveOn: Task<Void, Never>?
     /// The card has been answered, once per chat: the cheer and the mention come once.
     @State private var answered = false
+    /// Beat 3's move to beat 4: once the card has come up and its line's hold has ended (`TourCardMove`).
+    @State private var cardMove = TourCardMove()
     /// Beat 4's mention is due (a moment after the answer): the message bar types it in.
     @State private var mentionDue = false
     @State private var mentionTimer: Task<Void, Never>?
@@ -54,6 +56,12 @@ struct TourView: View {
     @State private var controlsTop: CGFloat = 0
     /// Beat 5's place on show: each in turn, until its line has been read (`TourPlace.dwell`).
     @State private var place: TourPlace = TourPlace.all(pad: DeviceWords.device == "iPad")[0]
+    /// Vory's line on show and since when: the line `line` gives once the one on show has stayed up for its time
+    /// (`TourLines.hold`), so a line the chat moves past quickly is still read (#489). A new beat's line comes at once.
+    @State private var shown = ShownLine()
+    /// Lines due on this beat behind the one on show, in order.
+    @State private var waiting: [ShownLine] = []
+    private struct ShownLine: Equatable { var beat: TourBeat? = nil; var key = ""; var text = ""; var since = Date.distantPast }
 
     /// The tour's own words and buttons, and Vory's bubble, grow no larger than this (the planner's call, 2026-10-20):
     /// past it, Vory, his bubble, the pages and the buttons ran over each other. Its buttons show the Large Content
@@ -107,10 +115,13 @@ struct TourView: View {
                 }
                 // Vory, over every page, in his place for the scroll.
                 VoryTourLayer(progress: reduceMotion ? CGFloat(current.rawValue) : progress, size: geo.size,
-                              says: line.text(for: current), lineKey: line.key(for: current), reduceMotion: reduceMotion,
+                              says: said(current).text, lineKey: said(current).key, say: said, reduceMotion: reduceMotion,
                               animating: animating, lookingDown: current == .connect,
                               squint: current.showsChat && chatPhase == .working,
                               hop: current == .everywhere ? place.rawValue : 0, bubbleBottom: $bubbleBottom, compact: compact)
+                    // The lag behind the finger: his place eases after the scroll rather than sticking to it. The layer's
+                    // progress is what's animated (`VoryTourLayer.animatableData`), so everything on it moves together.
+                    .animation(reduceMotion ? nil : .interpolatingSpring(stiffness: 120, damping: 16), value: progress)
                     .dynamicTypeSize(...Self.largestText)
                     .allowsHitTesting(false)
                     // The person typing in the tour's chat: the chat takes the room, and Vory steps aside until they're done.
@@ -118,6 +129,9 @@ struct TourView: View {
                     .animation(.easeOut(duration: 0.2), value: typingInChat)
                 controls
                     .dynamicTypeSize(...Self.largestText)
+                #if DEBUG
+                if TourGapProbe.isOn { TourGapProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+                #endif
             }
             .coordinateSpace(.named(Self.space))
         }
@@ -143,6 +157,9 @@ struct TourView: View {
         }
         .onChange(of: page) { _, beat in
             guard let beat else { return }
+            #if DEBUG
+            TourGapProbe.event("page \(beat.rawValue + 1)")
+            #endif
             line.arrived(at: beat)
             // Beat 5 starts from its first place each time it comes into view.
             if beat == .everywhere { showPlace(places[0]) }
@@ -158,14 +175,36 @@ struct TourView: View {
             nextPlace()
         }
         .task(id: LineTimer(beat: current, asked: chatPhase == .asked)) {
-            // Each beat's second line, a moment after its first has been read (beat 4's once its card is up).
-            try? await Task.sleep(for: .seconds(2.6))
+            // Each beat's second line, once its first has been read (beat 4's once its card is up).
+            try? await Task.sleep(for: .seconds(lineHold))
             guard !Task.isCancelled else { return }
             line.advance(on: current, demo: onDemo != nil, asked: chatPhase == .asked)
+        }
+        .onChange(of: "\(current.rawValue)|" + line.key(for: current), initial: true) {
+            // A new beat's line comes at once; on the same beat each line waits its turn behind the one on show.
+            let due = ShownLine(beat: current, key: line.key(for: current), text: line.text(for: current), since: Date())
+            if shown.beat != current { shown = due; waiting = []; return }
+            guard due.key != shown.key, !waiting.contains(where: { $0.key == due.key }) else { return }
+            waiting.append(due)
+        }
+        .task(id: "\(shown.key)|\(waiting.first?.key ?? "")") {
+            // The next line waiting, once the one on show has stayed up for its time.
+            guard let next = waiting.first else { return }
+            let left = shown.since.addingTimeInterval(TourLines.hold(for: shown.text, typed: !reduceMotion)).timeIntervalSinceNow
+            if left > 0 { try? await Task.sleep(for: .seconds(left)) }
+            guard !Task.isCancelled, waiting.first?.key == next.key else { return }
+            waiting.removeFirst()
+            shown = ShownLine(beat: next.beat, key: next.key, text: next.text, since: Date())
         }
     }
 
     private struct LineTimer: Hashable { var beat: TourBeat; var asked: Bool }
+    /// A beat's line as on show: the one the queue has up, if it's that beat's, otherwise the beat's line now.
+    private func said(_ beat: TourBeat) -> (text: String, key: String) {
+        shown.beat == beat ? (shown.text, shown.key) : (line.text(for: beat), line.key(for: beat))
+    }
+    /// The time the line on show needs (`TourLines.hold`): the beats' own timers wait for it before moving the line on.
+    private var lineHold: TimeInterval { TourLines.hold(for: line.text(for: current), typed: !reduceMotion) }
     private struct PlaceTimer: Hashable { var onBeat: Bool; var place: TourPlace }
 
     /// Beat 5's next place, once this one has been read; the last stays.
@@ -189,19 +228,24 @@ struct TourView: View {
         chatPhase = phase
         line.chatMoved(to: phase)
         if phase == .ready {
-            // A fresh chat (the tour back after its demo stopped): its answer and mention are still to come.
+            // A fresh chat (the tour back after its demo stopped): its card, answer and mention are still to come.
             answered = false
+            cardMove.freshChat()
+            moveOn?.cancel()
             mentionDue = false
             mentionTimer?.cancel()
         }
         if was == .ready, phase == .working { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         if was == .working, phase == .replied || phase == .asked { AccessibilityNotification.Announcement("Sprout replied").post() }
-        if phase == .asked, current == .chat {
-            moveOn?.cancel()
-            moveOn = Task {
-                try? await Task.sleep(for: .seconds(2.6))
-                guard !Task.isCancelled, current == .chat, chatPhase == .asked else { return }
-                go(to: .approval)
+        if phase == .asked {
+            if let next = cardMove.cardUp(on: current) { go(to: next) }
+            if current == .chat {
+                moveOn?.cancel()
+                moveOn = Task {
+                    try? await Task.sleep(for: .seconds(lineHold))
+                    guard !Task.isCancelled, let next = cardMove.holdEnded(on: current) else { return }
+                    go(to: next)
+                }
             }
         }
         if case .answered(let allowed) = phase, !answered {
@@ -222,7 +266,7 @@ struct TourView: View {
         guard answered, !mentionDue, current == .approval else { return }
         mentionTimer?.cancel()
         mentionTimer = Task {
-            try? await Task.sleep(for: .seconds(2.6))
+            try? await Task.sleep(for: .seconds(lineHold))
             guard !Task.isCancelled, current == .approval else { return }
             line.mentionCame()
             mentionDue = true
@@ -307,9 +351,39 @@ enum TourBeat: Int, CaseIterable, Identifiable, Hashable {
     var showsChat: Bool { self == .chat || self == .approval }
 }
 
+/// Beat 3's move to beat 4: once both the card has come up in this chat and the line about it has been up its time,
+/// whichever comes last, whatever the chat has done meanwhile (the card still up, answered, or its answer's turn still
+/// running). It went only while the card was unanswered, and #489's longer holds let an answer come first: the tour
+/// stayed on beat 3 for good. Only from beat 3, once a chat; a fresh chat starts it again.
+struct TourCardMove {
+    private(set) var cardCame = false
+    private(set) var holdDone = false
+    private(set) var moved = false
+
+    /// The card came up: the move, if the hold is over.
+    mutating func cardUp(on beat: TourBeat) -> TourBeat? { cardCame = true; return due(on: beat) }
+    /// The hold ended: the move, if the card has come.
+    mutating func holdEnded(on beat: TourBeat) -> TourBeat? { holdDone = true; return due(on: beat) }
+    mutating func freshChat() { self = TourCardMove() }
+
+    private mutating func due(on beat: TourBeat) -> TourBeat? {
+        guard cardCame, holdDone, !moved, beat == .chat else { return nil }
+        moved = true
+        return .approval
+    }
+}
+
 /// What Vory says on each beat, in the approved words: a first line on arrival, the next once it has been read (or a
 /// bot has been tapped). Each line has a key of its own, so the bubble types it out once.
 struct TourLines: Equatable {
+    /// How long a line stays up at the least (#489, Matt: on a beat with more than one line they changed too fast): the
+    /// time it takes to type in (none under Reduce Motion, where it shows at once), then a second, then 0.3 s a word.
+    static func hold(for line: String, typed: Bool) -> TimeInterval {
+        let typing = typed ? line.reduce(0.0) { $0 + ($1 == " " ? 0.012 : 0.022) } : 0
+        let words = line.split(whereSeparator: \.isWhitespace).count
+        return typing + 1.0 + 0.3 * Double(words)
+    }
+
     private var step: [TourBeat: Int] = [:]
     private var tapped = false
     /// The tour's chat had its card answered: beat 4's lines have moved past it for good.
@@ -400,11 +474,13 @@ struct TourLines: Equatable {
 /// Vory on his layer: the glass cloud from the app icon (`BotLookSpec.vory`), where the scroll puts him between his
 /// places on two pages, leaning into the move and lagging it a little; floating gently when the page is still. His
 /// typed bubble goes with him. Reduce Motion: in his place on the page in front, no float, no lean.
-struct VoryTourLayer: View {
+struct VoryTourLayer: View, Animatable {
     var progress: CGFloat
     var size: CGSize
     var says: String
     var lineKey: String
+    /// Any beat's line as on show, for the bubble that speaks for it while the pages move (`speakers`).
+    var say: (TourBeat) -> (text: String, key: String) = { _ in ("", "") }
     var reduceMotion: Bool
     /// The float runs: the tour on screen, the app in front, no Reduce Motion.
     var animating = true
@@ -415,6 +491,7 @@ struct VoryTourLayer: View {
     var hop = 0
     /// Where his bubble ends, in the tour's space.
     @Binding var bubbleBottom: CGFloat
+    @State private var bubbleHeight: CGFloat = 0
     /// His smaller, higher places, for the accessibility text sizes (`place(_:compact:)`).
     var compact = false
 
@@ -447,68 +524,141 @@ struct VoryTourLayer: View {
 
     /// His face's centre on a page, in points.
     static func faceY(_ p: Place, in size: CGSize) -> CGFloat { p.y * size.height + p.size * 0.46 - 22 }
-    /// His bubble's top on a page, in points: just under his face (it tucks a little under his chin), or where the beat
+    /// The most his float takes him from his place, up or down, in points (#489: smaller than it was, 5).
+    static let bob: CGFloat = 2.5
+    /// The room between him and his bubble at the nearest his float brings them (#489, Matt: he sometimes overlapped
+    /// it; it had tucked under his chin).
+    static let bubbleGap: CGFloat = 8
+    /// His bubble's top on a page, in points: under his face, clear of it at the bottom of his float, or where the beat
     /// puts it.
-    static func bubbleTop(_ p: Place, in size: CGSize) -> CGFloat { p.bubbleTop.map { $0 * size.height } ?? faceY(p, in: size) + p.size * 0.38 }
+    static func bubbleTop(_ p: Place, in size: CGSize) -> CGFloat {
+        p.bubbleTop.map { $0 * size.height } ?? faceY(p, in: size) + p.size / 2 + bob + bubbleGap
+    }
 
-    /// Where he and his bubble are between two pages, for a fractional page: in points. `tail`, how much of the bubble's
-    /// tail shows: all of it under him, none once it hangs 40 points or more from there (it pointed up at nothing).
-    private var spot: (x: CGFloat, faceY: CGFloat, bubbleTop: CGFloat, size: CGFloat, tail: CGFloat) {
+    /// Where he and his bubbles are between two pages, for a fractional page: in points. His bubble hangs under him and
+    /// goes with him (`under`); a beat that hangs it elsewhere (the bots beat, above the orbit) has its own there
+    /// (`hung`). Between a beat of each the two cross-fade, neither showing in the middle of the move, so no bubble
+    /// passes over his face (#489: the one bubble slid through him on the way to the bots beat and from it). `top`, the
+    /// one bubble's old place between the two, is where the pages' words and the chat keep below, as they did.
+    struct Spot { var x, faceY, size, under, underShows, hung, hungShows, top: CGFloat }
+    static func spot(_ progress: CGFloat, in size: CGSize, compact: Bool) -> Spot {
         let last = CGFloat(TourBeat.allCases.count - 1)
         let p = min(max(progress, 0), last)
         let i = Int(p.rounded(.down)), f = p - CGFloat(i)
         let a = Self.place(TourBeat(rawValue: i) ?? .hello, compact: compact), b = Self.place(TourBeat(rawValue: min(i + 1, Int(last))) ?? .connect, compact: compact)
         func mix(_ u: CGFloat, _ v: CGFloat) -> CGFloat { u + (v - u) * f }
-        func under(_ p: Place) -> CGFloat { Self.faceY(p, in: size) + p.size * 0.38 }
-        let top = mix(Self.bubbleTop(a, in: size), Self.bubbleTop(b, in: size))
-        return (mix(a.x, b.x) * size.width, mix(Self.faceY(a, in: size), Self.faceY(b, in: size)), top, mix(a.size, b.size),
-                max(0, 1 - abs(top - mix(under(a), under(b))) / 40))
+        // How much of a beat's bubble shows: all of it on its own beats, going in the first half of a move off them and
+        // coming in the second half of one onto them.
+        func shows(_ on: (Place) -> Bool) -> CGFloat {
+            switch (on(a), on(b)) {
+            case (true, true): return 1
+            case (true, false): return max(0, 1 - 2 * f)
+            case (false, true): return max(0, 2 * f - 1)
+            case (false, false): return 0
+            }
+        }
+        let faceY = mix(Self.faceY(a, in: size), Self.faceY(b, in: size)), faceSize = mix(a.size, b.size)
+        return Spot(x: mix(a.x, b.x) * size.width, faceY: faceY, size: faceSize, under: faceY + faceSize / 2 + bob + bubbleGap,
+                    underShows: shows { $0.bubbleTop == nil }, hung: (a.bubbleTop ?? b.bubbleTop).map { $0 * size.height } ?? 0,
+                    hungShows: shows { $0.bubbleTop != nil }, top: mix(bubbleTop(a, in: size), bubbleTop(b, in: size)))
     }
 
     /// The lean into a move: most in the middle of a page change, none at rest.
     private var lean: Double {
         let f = progress - progress.rounded(.down)
-        return reduceMotion ? 0 : Double(sin(f * .pi)) * 9
+        return reduceMotion ? 0 : Double(sin(f * .pi)) * 5
+    }
+
+    /// The pages' progress is what's animated, so his place, his bubbles' places and how much of each shows all come from
+    /// one in-between value on every frame. Animated one by one, a progress that jumped (a page change landing after a
+    /// stall, as the tour's chat comes up) took the bots beat's bubble out evenly while he flew up into it.
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    /// Which beat each bubble speaks for between two pages. On a move to or from a beat that hangs its bubble elsewhere
+    /// (the bots beat), the bubble hung there speaks for that beat and the one under him for the beat it hangs under him
+    /// on: at a change of page they had both taken the new beat's line while he was still on the old one. Elsewhere nil,
+    /// the beat in front's line.
+    static func speakers(_ progress: CGFloat, compact: Bool) -> (under: TourBeat?, hung: TourBeat?) {
+        let last = TourBeat.allCases.count - 1
+        let p = min(max(progress, 0), CGFloat(last))
+        let i = Int(p.rounded(.down)), f = p - CGFloat(i)
+        let a = TourBeat(rawValue: i) ?? .hello, b = TourBeat(rawValue: min(i + 1, last)) ?? .connect
+        let aHangs = place(a, compact: compact).bubbleTop != nil, bHangs = place(b, compact: compact).bubbleTop != nil
+        guard aHangs || bHangs else { return (nil, nil) }
+        return (aHangs ? b : (bHangs ? a : (f < 0.5 ? a : b)), aHangs ? a : b)
     }
 
     var body: some View {
-        let s = spot
+        let s = Self.spot(progress, in: size, compact: compact)
+        let who = Self.speakers(progress, compact: compact)
+        let underLine = who.under.map(say) ?? (says, lineKey), hungLine = who.hung.map(say) ?? (says, lineKey)
         TimelineView(.animation(minimumInterval: 1 / 30, paused: !animating)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            let bob = reduceMotion ? 0 : sin(t * 1.3) * 5
-            let sway = reduceMotion ? 0 : sin(t * 0.8) * 2
+            // Smaller than they were (#489, Matt: his motion was too big): a float of `bob` points and a one-degree sway.
+            let bob = reduceMotion ? 0 : sin(t * 1.3) * Double(Self.bob)
+            let sway = reduceMotion ? 0 : sin(t * 0.8) * 1
             ZStack {
                 BotFaceView(spec: BotLookSpec.vory, size: s.size, active: true,
                             gaze: lookingDown ? CGPoint(x: 0, y: 0.6) : .zero,
                             mood: BotFaceView.Mood(profile: "vory-tour", state: .guide, squint: squint))
+                    #if DEBUG
+                    // Inside his lean, float and hop: where they put him, as drawn.
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TourView.space)) } action: { TourGapProbe.face = $0 }
+                    #endif
                     .rotationEffect(.degrees(lean + sway))
                     .offset(y: bob)
                     .keyframeAnimator(initialValue: CGFloat(0), trigger: hop) { face, y in
                         face.offset(y: reduceMotion ? 0 : y)
                     } keyframes: { _ in
+                        // Up and back without a bounce: the bouncy landing dipped him below his place, into his bubble.
                         KeyframeTrack {
-                            SpringKeyframe(-18, duration: 0.18)
-                            SpringKeyframe(0, duration: 0.42, spring: .bouncy)
+                            SpringKeyframe(-12, duration: 0.18)
+                            SpringKeyframe(0, duration: 0.42, spring: .smooth)
                         }
                     }
                     .accessibilityLabel("Vory")
                     .position(x: s.x, y: s.faceY)
-                // Hung from its top, so a second line grows down, as it did under him.
-                // Hung from its top in a frame tall enough for the largest text the tour allows, so a longer line grows
-                // down rather than being cut; its end is measured for what sits under it.
-                VoryTypedBubble(text: says, key: lineKey, reduceMotion: reduceMotion, tail: s.tail)
-                    .padding(.horizontal, 24)
-                    .accessibilityLabel(says)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TourView.space)).maxY } action: { bubbleBottom = $0 }
+                // Under him, its tail pointing up at him; its height is measured for what sits under it.
+                bubble(underLine, tail: 1, shows: s.underShows)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TourView.space)).height } action: { bubbleHeight = $0 }
+                    #if DEBUG
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TourView.space)) } action: { TourGapProbe.bubble = $0 }
+                    #endif
                     .frame(width: size.width, height: Self.bubbleRoom, alignment: .top)
-                    .position(x: s.x, y: s.bubbleTop + Self.bubbleRoom / 2)
+                    .position(x: s.x, y: s.under + Self.bubbleRoom / 2)
+                // Where the bots beat hangs it, with no tail (it pointed up at nothing).
+                bubble(hungLine, tail: 0, shows: s.hungShows)
+                    #if DEBUG
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TourView.space)) } action: { TourGapProbe.hung = $0 }
+                    #endif
+                    .frame(width: size.width, height: Self.bubbleRoom, alignment: .top)
+                    .position(x: s.x, y: s.hung + Self.bubbleRoom / 2)
             }
             .frame(width: size.width, height: size.height)
         }
-        // The lag behind the finger: his place eases after the scroll rather than sticking to it.
-        .animation(reduceMotion ? nil : .interpolatingSpring(stiffness: 120, damping: 16), value: progress)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("onboarding.vory")
+        // Where his bubble ends, for the page's words and the chat under it: from the one bubble's place, as before.
+        .onChange(of: s.top + bubbleHeight, initial: true) { _, end in bubbleBottom = end }
+        #if DEBUG
+        .onChange(of: s.hungShows > 0, initial: true) { _, on in TourGapProbe.hungShows = on }
+        .onAppear { TourGapProbe.layers += 1 }
+        .onDisappear { TourGapProbe.layers -= 1 }
+        #endif
+    }
+
+    /// His bubble, hung from its top in a frame tall enough for the largest text the tour allows, so a longer line grows
+    /// down rather than being cut. VoiceOver reads the one showing.
+    private func bubble(_ line: (text: String, key: String), tail: CGFloat, shows: CGFloat) -> some View {
+        VoryTypedBubble(text: line.text, key: line.key, reduceMotion: reduceMotion, tail: tail)
+            .padding(.horizontal, 24)
+            .accessibilityLabel(line.text)
+            .fixedSize(horizontal: false, vertical: true)
+            .opacity(shows)
+            .accessibilityHidden(shows < 0.5)
     }
 }
 
@@ -913,6 +1063,92 @@ private struct TourGlow: View {
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+#endif
+
+#if DEBUG && os(iOS)
+/// DEBUG, for the tour's gate (#489, Matt: Vory sometimes overlapped his bubble): with `-vory-tour-gap-probe`, the
+/// least room seen between Vory's face, where his float, lean and hop put it, and his bubble, while the bubble hangs
+/// under him: a 1 pt element ("debug.tourgap") whose value is "least=<points> samples=<count>" (negative: they met).
+@MainActor
+enum TourGapProbe {
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-tour-gap-probe")
+    private(set) static var least = CGFloat.greatestFiniteMagnitude
+    private(set) static var samples = 0
+    static var face = CGRect.null { didSet { due() } }
+    /// The bubble under him, and the one the bots beat hangs above him, with whether that one shows.
+    static var bubble = CGRect.null { didSet { due() } }
+    static var hung = CGRect.null { didSet { due() } }
+    static var hungShows = false { didSet { due() } }
+    /// Vory's layers on screen (more than one would mix their frames here), and the least room's two frames.
+    static var layers = 0
+    private(set) static var worst = "none"
+    private static var pending = false
+    /// Every sample, to set against a recording of the screen (tmp/tourgap.csv in the app's container): the time, which
+    /// bubble, his face's top and bottom, the bubble's, the room, and the layers on screen.
+    private static var rows: [String] = []
+    private static var started = false
+
+    /// Once a frame, after all of them have reported: they report one after another, and a face that had moved against
+    /// the bubble's frame from before read as a meeting.
+    private static func due() {
+        guard isOn, !pending else { return }
+        pending = true
+        Task { @MainActor in pending = false; note() }
+    }
+
+    /// The room between his face and the bubble under him, and the bubble hung above him while it shows, where they
+    /// share a column.
+    private static func note() {
+        guard !face.isNull else { return }
+        func column(_ r: CGRect) -> Bool { !r.isNull && face.minX < r.maxX && r.minX < face.maxX }
+        func record(_ room: CGFloat, _ kind: String, _ r: CGRect) {
+            rows.append(String(format: "%.3f,%@,%.1f,%.1f,%.1f,%.1f,%.1f,%d", Date().timeIntervalSince1970, kind, face.minY, face.maxY,
+                               r.minY, r.maxY, room, layers))
+            if rows.count >= 200 { flush() }
+            guard room < least else { return }
+            least = room
+            worst = String(format: "%@:face%.0f-%.0f:bubble%.0f-%.0f:t%.3f", kind, face.minY, face.maxY, r.minY, r.maxY,
+                           Date().timeIntervalSince1970)
+        }
+        if column(bubble) { record(bubble.minY - face.maxY, "under", bubble); samples += 1 }
+        if hungShows, column(hung) { record(face.minY - hung.maxY, "hung", hung) }
+    }
+
+    /// A moment to line the log up with a recording by: the page dots change with it.
+    static func event(_ name: String) {
+        guard isOn else { return }
+        rows.append(String(format: "%.3f,event,%@", Date().timeIntervalSince1970, name))
+    }
+
+    static func flush() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tourgap.csv")
+        if !started { started = true; try? FileManager.default.removeItem(at: url) }
+        guard !rows.isEmpty else { return }
+        let text = Data((rows.joined(separator: "\n") + "\n").utf8)
+        rows.removeAll()
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(text); try? h.close() } else { try? text.write(to: url) }
+    }
+
+    final class ReadoutView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.tourgap" } set {} }
+        override var accessibilityLabel: String? { get { "Tour gap" } set {} }
+        override var accessibilityValue: String? {
+            get {
+                MainActor.assumeIsolated {
+                    TourGapProbe.flush()
+                    return String(format: "least=%.1f samples=%d reduceMotion=%d layers=%d worst=%@", TourGapProbe.samples > 0 ? TourGapProbe.least : 0,
+                           TourGapProbe.samples, UIAccessibility.isReduceMotionEnabled ? 1 : 0, TourGapProbe.layers, TourGapProbe.worst)
+                }
+            }
+            set {}
+        }
+    }
+    struct Readout: UIViewRepresentable {
+        func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
+        func updateUIView(_ v: ReadoutView, context: Context) {}
     }
 }
 #endif
