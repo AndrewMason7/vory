@@ -41,8 +41,19 @@ import Testing
             #expect(!c.items.isEmpty, "\(chat.title) opened empty")
             #expect(c.resumeError == nil, "\(chat.title): \(c.resumeError ?? "")")
         }
+        // The long chat opens whole: all its exchanges, none left to load in (#491).
         let long = try await rt.openChat(storedID: DemoContent.longChatID, title: nil, profile: "beacon", waitForResume: true)
-        #expect(long.items.count > 150)
+        #expect(long.items.filter { if case .user = $0.kind { true } else { false } }.count == DemoContent.maxExchanges)
+    }
+
+    /// No demo chat is longer than four exchanges (#491): a longer one jumped while its older rows loaded in, and the
+    /// window that loads them as you scroll (#345) is for real chats.
+    @Test func everyChatHoldsAtMostFourExchanges() {
+        #expect(DemoContent.maxExchanges == 4)
+        for chat in DemoContent.chats {
+            let asked = chat.rows().filter { $0.role == "user" }.count
+            #expect((1...DemoContent.maxExchanges).contains(asked), "\(chat.title): \(asked) exchanges")
+        }
     }
 
     @Test func projectsTheBoardAndThePictureLoad() async throws {

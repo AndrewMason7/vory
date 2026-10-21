@@ -81,6 +81,9 @@ enum DemoContent {
     }
 
     static let longChatID = "20261012_070000_beacon"
+    /// Every demo chat holds at most this many exchanges (a message and its reply), so it opens at its end in one go,
+    /// with nothing older to load in under the reader (#491).
+    static let maxExchanges = 4
     static let botChatID = "20261013_221000_gizmo1"
 
     static let chats: [Chat] = [
@@ -89,7 +92,7 @@ enum DemoContent {
              pinned: true, started: 5_400, active: 4_900, rows: { packingRows }),
         Chat(id: longChatID, title: "Morning checks on the home servers", bot: "beacon",
              preview: "All services up on nas-01; two package updates are waiting.", source: "cron", cwd: "/home/demo/homelab",
-             pinned: false, started: 25 * 900 + 600, active: 600, rows: { digestRows(rounds: 25) }),
+             pinned: false, started: Double(maxExchanges) * 900 + 600, active: 600, rows: { digestRows(rounds: maxExchanges) }),
         Chat(id: "20261013_203000_gizmo0", title: "Why is the NAS slow tonight?", bot: "gizmo",
              preview: "The nightly backup and a disk scrub started at the same time.", source: "ios", cwd: "/home/demo/homelab",
              pinned: false, started: 50_400, active: 49_200, rows: { nasRows }),
@@ -143,8 +146,8 @@ enum DemoContent {
         Row(role: "assistant", text: "Done. It's on your list with sunscreen added under Clothes. Have a great trip!", at: 420),
     ] }
 
-    /// The long chat: a morning check every day, each with its reasoning, three to five tool calls and a long
-    /// digest (headings, a list, a table, a code block, and a chart every fifth day).
+    /// The long chat: a morning check each day (four of them, #491), each with its reasoning, three to five tool calls and
+    /// a long digest (headings, a list, a table, a code block). The latest is nas-01's, with a chart, as the preview says.
     static func digestRows(rounds: Int) -> [Row] {
         let hosts = ["nas-01", "pi-kitchen", "media-box", "router", "printer", "backup-01"]
         let tools: [(String, String)] = [("terminal", "systemctl status --failed"), ("search files", "auth.log failed password"),
@@ -152,7 +155,7 @@ enum DemoContent {
         var out: [Row] = []
         for r in 0..<rounds {
             let t0 = Double(r) * 900
-            let h = hosts[r % hosts.count]
+            let h = hosts[(rounds - 1 - r) % hosts.count]
             out.append(Row(role: "user", text: "Morning check on \(h). Anything I should know?", at: t0))
             out.append(Row(role: "assistant", text: "Looking at \(h) now.",
                            reasoning: "Start with the failed services on \(h), then the login attempts, then the disk, and compare with yesterday before writing it up.", at: t0 + 5))
@@ -160,7 +163,7 @@ enum DemoContent {
                 let (name, ctx) = tools[(r + k) % tools.count]
                 out.append(Row(role: "tool", text: k == 0 ? "0 failed units" : "done", name: name, context: ctx, at: t0 + 10 + Double(k)))
             }
-            let chart = r % 5 == 4 ? "\n\nTraffic over the last day:\nMEDIA:/home/demo/images/traffic-\(h).png" : ""
+            let chart = r == rounds - 1 ? "\n\nTraffic over the last day:\nMEDIA:/home/demo/images/traffic-\(h).png" : ""
             out.append(Row(role: "assistant", text: """
                 ## Daily check: \(h)
 
