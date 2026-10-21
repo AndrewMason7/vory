@@ -45,6 +45,17 @@ import Testing
         Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
     }
 
+    /// The Keychain as the test host has it. The unsigned Mac test host (CODE_SIGNING_ALLOWED=NO) has no Keychain
+    /// entitlement, and every call fails with errSecMissingEntitlement (-34018): there the checks run on the Keychain's
+    /// in-memory store (`Keychain.memoryOnly`), which the app's own reads and writes go through too, so a test reads what
+    /// it wrote. A signed host (the iOS simulator) keeps the real one. Returns the setting to put back.
+    private static func useWorkingKeychain() -> Bool {
+        let was = Keychain.memoryOnly
+        let probe = "dev.vory.tests.demotrace.probe"
+        if (try? Keychain.set(Data([1]), account: probe)) == nil { Keychain.memoryOnly = true } else { Keychain.delete(account: probe) }
+        return was
+    }
+
     /// Every key of the defaults that names the demo's gateway or one of its chats.
     private static func demoKeys(_ ids: [String]) -> [String] {
         let ids = ids.filter { !$0.isEmpty }.map { $0.uppercased() }
@@ -100,6 +111,8 @@ import Testing
     }
 
     @Test func aDemoUsedAndLeftLeavesNoTraceAndSendsNothingAnywhere() async throws {
+        let keychainWas = Self.useWorkingKeychain()
+        defer { Keychain.memoryOnly = keychainWas }
         // A clean start, as on a new device: what an earlier run (or an older build) left for the demo would hide a
         // write of this one's, its key already there with the same ids (#493: how the cache of the demo's chat list
         // got past this test).
@@ -260,6 +273,8 @@ import Testing
     /// models (iCloud would get them), the pin and scheduled-task refusals by its id, its secrets, its Companion's and a
     /// sign-in remembered for it. A gateway's own entries stay.
     @Test func theSweepTakesTheDemosEntriesInsideValuesAndTheKeychain() throws {
+        let keychainWas = Self.useWorkingKeychain()
+        defer { Keychain.memoryOnly = keychainWas }
         let suite = "dev.vory.tests.demotrace." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -312,6 +327,8 @@ import Testing
     /// Home's month reaches the widgets' snapshot from a gateway only, never from the demo (#493): the demo's numbers
     /// stayed on the saved gateway's widget after leaving it.
     @Test func homesNumbersReachTheWidgetsFromAGatewayOnly() async throws {
+        let keychainWas = Self.useWorkingKeychain()
+        defer { Keychain.memoryOnly = keychainWas }
         let before = WidgetSnapshot.load()
         defer { if let before { before.save() } else { Keychain.delete(account: WidgetSnapshot.account) } }
         WidgetSnapshot(gatewayName: "Home", connectionID: UUID().uuidString, profile: "default", needsAttention: 0, chats: [], contextPercent: nil).save()
@@ -331,6 +348,8 @@ import Testing
     /// The looks the extensions and the Watch read are never copied while the demo runs (#494): its colours come first
     /// then, and its bots' names went along.
     @Test func theLooksMirrorWaitsOutTheDemo() throws {
+        let keychainWas = Self.useWorkingKeychain()
+        defer { Keychain.memoryOnly = keychainWas }
         func now() throws -> Data {
             let e = JSONEncoder(); e.outputFormatting = .sortedKeys
             return try e.encode(BotLooks.load())
