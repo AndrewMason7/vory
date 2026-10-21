@@ -4,6 +4,7 @@ import VoryCore
 /// What to check when connecting, signing in, the Companion or notifications go wrong. Plain
 /// lists, one section per symptom, written for someone standing at a gateway they run themselves.
 struct TroubleshootingView: View {
+    @Environment(AppModel.self) private var model
     private struct Topic: Identifiable {
         let id: String
         let title: String
@@ -77,6 +78,20 @@ struct TroubleshootingView: View {
                 Text("Still stuck? Take a screenshot in the app to send it through TestFlight, or write to matt@vory.dev with what the connection test showed.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            #if os(iOS)
+            // The first launch's tour again (#487), on a test build only (`TourReplay`): nothing in the app changes.
+            if model.tourReplayAllowed {
+                Section {
+                    Button { model.replayingTour = true } label: {
+                        Label("Replay the welcome tour", systemImage: "sparkles")
+                    }
+                    .accessibilityHint("Shows the first launch's tour again, over the app as it is.")
+                    .accessibilityIdentifier("troubleshooting.replayTour")
+                } footer: {
+                    Text("Test builds only. Your gateways, chats and settings stay as they are.")
+                }
+            }
+            #endif
         }
         .untitledPage()
     }

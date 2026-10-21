@@ -330,12 +330,25 @@ final class AppModel {
         }
         // A runtime started away (a launch in the background) is in front once the app is.
         AwayAtLaunch.clearOnActive { [weak self] in self?.runtime }
+        // Whether this is a test build, for the tour's replay (#487): asked once.
+        Task { [weak self] in
+            let allowed = await TourReplay.allowedHere()
+            self?.tourReplayAllowed = allowed
+        }
         #endif
     }
 
     var hasConnections: Bool { !store.connections.isEmpty || store.demo != nil }
 
     // MARK: Demo mode (#392)
+
+    // MARK: The welcome tour again (#487)
+
+    /// Whether this build offers "Replay the welcome tour" (Settings › Troubleshooting): a test build only, TestFlight's
+    /// or Xcode's, never the App Store's (`TourReplay.allowedHere`). False until the App Store has said, and if it can't.
+    var tourReplayAllowed = false
+    /// The tour is being replayed over the app (`TourReplayView`).
+    var replayingTour = false
 
     /// Whether "Try a demo" can start it here: always, unless the demo is already running. Onboarding (#388) and the first
     /// screen's button ask this and call `startDemo()`, and nothing else of the demo.

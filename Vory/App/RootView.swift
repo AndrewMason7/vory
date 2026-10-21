@@ -61,6 +61,12 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.lock.isLocked)
+        #if os(iOS)
+        // The welcome tour again, over the app as it is (#487, Settings › Troubleshooting, test builds only).
+        .fullScreenCover(isPresented: Binding(get: { model.replayingTour }, set: { model.replayingTour = $0 })) {
+            TourReplayView().withAppModel()
+        }
+        #endif
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
         .background { TouchSignpostProbe().frame(width: 0, height: 0) }
         // The fold and the camera, for every floating piece below (Step D).
@@ -71,6 +77,8 @@ struct RootView: View {
             if VoiceOverOracle.isOn { VoiceOverOracle.Probe().frame(width: 1, height: 1).allowsHitTesting(false) }
             // `-vory-card-probe`: where a toggled card's top was at each frame, for the card checks (#437).
             if CardMotionProbe.isOn { CardMotionProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            // `-vory-app-fingerprint`: what a tour replay must leave as it was, for its no-trace test (#487).
+            if AppFingerprint.isOn { AppFingerprint.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
             // `-vory-coldopen-probe`: how the thread moved as the last chat opened, for the open checks (#449).
             if ColdOpenProbe.isOn { ColdOpenProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
         }

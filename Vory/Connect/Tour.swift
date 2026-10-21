@@ -11,14 +11,17 @@ import VoryCore
 /// shows the app as it is. Beats 3 and 4 are a real chat with Sprout on the tour's own demo (`TourChat`), never the
 /// app's gateway in use; nothing here touches a gateway, and the demo bots' looks are never saved.
 struct TourView: View {
-    /// Restore from iCloud (beat 1).
-    var onRestore: () -> Void
+    /// Restore from iCloud (beat 1). Not offered when nil (a replay: the gateways are here).
+    var onRestore: (() -> Void)?
     /// Connect your gateway (beat 6): the gateway form.
     var onConnect: () -> Void
     /// Try a demo (beat 6), where Demo mode offers it.
     var onDemo: (() -> Void)?
     /// Straight to the last beat (a restore that brought no gateway).
     var startAtConnect = false
+    /// A replay over the running app (#487, `TourReplayView`): Skip closes it rather than going to the last beat, and
+    /// the last beat has Done.
+    var onClose: (() -> Void)? = nil
 
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
@@ -259,12 +262,19 @@ struct TourView: View {
             HStack {
                 Spacer()
                 if current != .connect {
-                    Button("Skip") { go(to: .connect) }
+                    Button("Skip") { if let onClose { onClose() } else { go(to: .connect) } }
                         .font(.subheadline.weight(.medium))
                         .buttonStyle(.glass)
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityLabel("Skip the tour")
                         .accessibilityIdentifier("onboarding.skip")
+                } else if let onClose {
+                    Button("Done", action: onClose)
+                        .font(.subheadline.weight(.medium))
+                        .buttonStyle(.glass)
+                        .accessibilityShowsLargeContentViewer()
+                        .accessibilityLabel("Done with the tour")
+                        .accessibilityIdentifier("onboarding.done")
                 }
             }
             .padding(.horizontal, 20).padding(.top, 8)
@@ -507,7 +517,7 @@ struct VoryTourLayer: View {
 /// 1. Hello: Vory out of the launch screen into the glow, the line under him, and the two ways in.
 private struct TourHelloBeat: View {
     var onStart: () -> Void
-    var onRestore: () -> Void
+    var onRestore: (() -> Void)?
     /// Vory's bubble ends here and the tour's controls start there: the page's words and buttons stay between.
     var below: CGFloat = 0
     var above: CGFloat = 0
@@ -526,14 +536,16 @@ private struct TourHelloBeat: View {
                     .accessibilityShowsLargeContentViewer()
                     .accessibilityHint("Starts a short tour.")
                     .accessibilityIdentifier("onboarding.getStarted")
-                    Button(action: onRestore) {
-                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline)
-                            .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    if let onRestore {
+                        Button(action: onRestore) {
+                            Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline)
+                                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        }
+                        .buttonStyle(.glass)
+                        .accessibilityShowsLargeContentViewer()
+                        .accessibilityHint("Brings back the gateways you saved on another device.")
+                        .accessibilityIdentifier("onboarding.restore")
                     }
-                    .buttonStyle(.glass)
-                    .accessibilityShowsLargeContentViewer()
-                    .accessibilityHint("Brings back the gateways you saved on another device.")
-                    .accessibilityIdentifier("onboarding.restore")
                 }
             }
             .frame(maxWidth: 380)
