@@ -38,6 +38,8 @@ struct StatusView: View {
                     let s = rt.socketState
                     row("Gateway", light: s.isOpen ? .good : (isFailed(s) ? .bad : .warn),
                         detail: s.isOpen ? "Connected to \(rt.connection.name)" : gatewayDetail(s, rt)) { GatewaysView() }
+                    // No sign-in for the demo (#494): it has none, and its form could remember one under the demo's id.
+                    if !rt.isEphemeral {
                     #if os(macOS)
                     // A sheet on the Mac, as the sidebar's gateway opens it (judgement call #13).
                     Button { signingIn = true } label: { HStack { rowLabel("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(.rect) }
@@ -47,6 +49,7 @@ struct StatusView: View {
                     #else
                     row("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)) { GatewayFormView(existing: rt.connection).pushedPage(keepsOwnBar: true) }
                     #endif
+                    }
                 } else {
                     row("Gateway", light: .off, detail: model.activationError ?? "No gateway connected") { GatewaysView() }
                 }

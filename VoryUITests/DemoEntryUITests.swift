@@ -47,8 +47,9 @@ final class DemoEntryUITests: XCTestCase {
     }
 
     /// The demo offers no Companion (#494): neither the prompt nor Settings' card. Both used themselves up in the demo,
-    /// and the person's own gateway, added after it, was never offered them. Started as if never offered.
-    func testTheDemoOffersNoCompanion() throws {
+    /// and the person's own gateway, added after it, was never offered them. Started as if never offered. Nor a sign-in
+    /// in Status: the demo has none, and its form could remember one under the demo's id.
+    func testTheDemoOffersNoCompanionOrSignIn() throws {
         guard let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty else {
             throw XCTSkip("HERMES_E2E_BUNDLE not set")
         }
@@ -72,7 +73,13 @@ final class DemoEntryUITests: XCTestCase {
         settings.tap()
         XCTAssertTrue(text("Vory demo").firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(text("Unlock Vory's full potential").firstMatch.exists, "Settings offered the Companion for the demo")
-        app.buttons["settings.leaveDemo"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["onboarding.getStarted"].firstMatch.waitForExistence(timeout: 30))
+
+        let status = app.buttons["settings.row.status"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 10), "no Status in Settings")
+        status.tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Gateway:'")).firstMatch.waitForExistence(timeout: 10), "Status did not open")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Sign-in'")).firstMatch.exists, "Status offered a sign-in for the demo")
+        // The demo is never kept, so the next launch starts without it.
+        app.terminate()
     }
 }
