@@ -35,6 +35,15 @@ struct ConversationView: View {
     @State private var listReach: CGFloat = 0
     /// The dock went up for an open list: it stays up until the list closes.
     @State private var liftHeldForList = false
+    /// The header's bottom in the window: the morph bar's chat row (its space starts the bar's padding under the safe
+    /// area's top) on a narrow window, this view's own header on a wide one; 0 until measured.
+    private var chatHeaderBottom: CGFloat {
+        if MorphTopBar.active(model) {
+            let row = MorphState.shared.chatRowBottom
+            return row > 0 ? windowGeometry.safeArea.top + TopBarRoom.barPadding + row : 0
+        }
+        return headerBottom
+    }
     private var foldLift: CGFloat {
         guard dockSlotBottom > 0, dockHeight > 0 else { return 0 }
         let bottom = dockSlotBottom - barReserve
@@ -243,6 +252,7 @@ struct ConversationView: View {
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
             dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
+                .environment(\.chatHeaderBottom, chatHeaderBottom)
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockSlotBottom = $0 }
                 .onPreferenceChange(ComposerListReach.self) { listReach = $0 }
                 .onChange(of: listReach > 0) { _, open in if !open { liftHeldForList = false } }

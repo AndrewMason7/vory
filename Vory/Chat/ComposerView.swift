@@ -106,6 +106,8 @@ struct ComposerView: View {
     /// The fold of a partly open Duo, when it runs across the window above the composer (a
     /// laptop pose): the lists that grow up from the field stop under it (Step D).
     @Environment(\.reservedRegions) private var regions
+    /// The chat's header's bottom in the window (ConversationView), for the + panel's cap.
+    @Environment(\.chatHeaderBottom) private var chatHeaderBottom
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var composerFrame = CGRect.zero
     /// How far a list growing up from `y` (window space) may reach before the fold: nil with
@@ -901,7 +903,7 @@ struct ComposerView: View {
     private var attachCap: CGFloat {
         #if os(iOS)
         guard composerFrame.minY > 0 else { return 400 }
-        let room = composerFrame.minY - windowGeometry.safeArea.top - 60 - 10
+        let room = AttachPanel.room(cardTop: composerFrame.minY, safeTop: windowGeometry.safeArea.top, headerBottom: chatHeaderBottom)
         // Under a fold, no 180 pt floor: it won over the fold (the 10-12 round). The panel
         // stands 10 pt above the card.
         return roomUnderFold(from: composerFrame.minY - 10).map { min(room, $0) } ?? max(180, room)
@@ -1093,4 +1095,10 @@ extension EnvironmentValues {
 struct ComposerListReach: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+extension EnvironmentValues {
+    /// The bottom of the chat's header in window space, 0 until measured (ConversationView): the morph bar's chat row
+    /// on a narrow window, the chat's own header on a wide one.
+    @Entry var chatHeaderBottom: CGFloat = 0
 }

@@ -123,6 +123,9 @@ private struct MorphPageActions: ViewModifier {
     /// this much (`TopBarRoom`, #340). Kept, not cleared, over a chat or a pushed page, so a root page coming back has
     /// its room at once.
     var rootRowBottom: CGFloat = 0
+    /// The bottom of a chat's row (Back, the title pill, More) in the bar's space, for what may grow up under it (the
+    /// + panel's cap, `AttachPanel.room`).
+    var chatRowBottom: CGFloat = 0
     /// A swipe back to a tab's root page is under way (its root probe saw it start). Only that
     /// swipe, or a chat's, is the bar's to follow: a swipe from a page three deep back to the one
     /// under it moved the bar to the root's title and left it there, over a page still pushed
@@ -549,6 +552,11 @@ struct MorphTopBar: View {
             guard !state.scrubbing else { return }
             let bottom = f.values.map(\.maxY).max() ?? 0
             if abs(bottom - state.rootRowBottom) > 0.5 { state.rootRowBottom = bottom }
+        }
+        .onChange(of: chatFrames, initial: true) { _, f in
+            guard !state.scrubbing else { return }
+            let bottom = f.values.map(\.maxY).max() ?? 0
+            if bottom > 0, abs(bottom - state.chatRowBottom) > 0.5 { state.chatRowBottom = bottom }
         }
         // Initial too: the bar is made afresh when a wide window narrows again.
         .onChange(of: model.selectedTab, initial: true) { _, tab in
