@@ -106,16 +106,20 @@ final class TourReplayUITests: XCTestCase {
         checkUnchanged(before, "no replay, 30 s")
     }
 
-    func testSkipComesBackWithTheAppAsItWas() throws {
+    func testSkipGoesToTheLastPageAndDoneComesBackWithTheAppAsItWas() throws {
         try launch()
         openTroubleshooting(); pause(2)
         let before = fingerprint()
         startReplay()
         shot("487-replay-1")
         app.buttons["onboarding.getStarted"].firstMatch.tap(); pause(1.5)
+        // Skip goes to the last page, as on a first launch (#492); Done there comes back.
         app.buttons["onboarding.skip"].firstMatch.tap(); pause(1.5)
-        backOnTroubleshooting("Skip")
-        checkUnchanged(before, "Skip")
+        XCTAssertTrue(app.buttons["onboarding.done"].firstMatch.waitForExistence(timeout: 5), "a replay's Skip did not go to the last page")
+        XCTAssertTrue(app.buttons["onboarding.addGateway"].firstMatch.isHittable, "a replay's Skip did not go to the last page")
+        app.buttons["onboarding.done"].firstMatch.tap(); pause(1.5)
+        backOnTroubleshooting("Skip then Done")
+        checkUnchanged(before, "Skip then Done")
     }
 
     /// Through every beat, the tour's own chat sent and its card answered, then Done on the last.

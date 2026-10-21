@@ -19,8 +19,8 @@ struct TourView: View {
     var onDemo: (() -> Void)?
     /// Straight to the last beat (a restore that brought no gateway).
     var startAtConnect = false
-    /// A replay over the running app (#487, `TourReplayView`): Skip closes it rather than going to the last beat, and
-    /// the last beat has Done.
+    /// A replay over the running app (#487, `TourReplayView`): the last beat has Done, which closes it. Skip goes to
+    /// the last beat, as on a first launch (#492).
     var onClose: (() -> Void)? = nil
 
     @Environment(AppModel.self) private var model
@@ -306,7 +306,9 @@ struct TourView: View {
             HStack {
                 Spacer()
                 if current != .connect {
-                    Button("Skip") { if let onClose { onClose() } else { go(to: .connect) } }
+                    // To the last beat, in a replay too (#492, Matt: a replay's Skip closed it rather than going to the
+                    // last page); a replay's Done is there.
+                    Button("Skip") { go(to: .connect) }
                         .font(.subheadline.weight(.medium))
                         .buttonStyle(.glass)
                         .accessibilityShowsLargeContentViewer()

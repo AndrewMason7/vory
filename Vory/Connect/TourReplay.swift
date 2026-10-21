@@ -25,7 +25,8 @@ enum TourReplay {
 
 #if os(iOS)
 /// The tour over the running app (#487). It runs on its own demo as on a first launch and leaves the app as it was:
-/// Skip, or Done on the last beat, comes back to where you were; Connect your gateway opens the gateway form, and
+/// Skip goes to the last beat as on a first launch (#492), and Done there comes back to where you were; Connect your
+/// gateway opens the gateway form, and
 /// leaving the form (Cancel, or Save) comes back too; Try a demo closes it and starts the demo, whose Leave demo
 /// brings the gateway back (not offered while the demo already runs). Restore from iCloud is not offered: this
 /// device's gateways are here, and a second import over them is the last thing a replay should do.
