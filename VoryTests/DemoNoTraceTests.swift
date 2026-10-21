@@ -229,6 +229,33 @@ import Testing
         #expect(defaults.object(forKey: demoKey) == nil && !FileManager.default.fileExists(atPath: folder.path))
     }
 
+    /// What an older build kept for the demo inside the app's values and in the Keychain goes too (#494): its favourite
+    /// models (iCloud would get them), the pin and scheduled-task refusals by its id, its secrets, its Companion's and a
+    /// sign-in remembered for it. A gateway's own entries stay.
+    @Test func theSweepTakesTheDemosEntriesInsideValuesAndTheKeychain() throws {
+        let suite = "dev.vory.tests.demotrace." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let demo = GatewayConnection.demoID.uuidString, own = UUID().uuidString
+        defaults.set(#"{"\#(demo)":[{"p":"default","m":"demo/assistant"}],"\#(own)":[{"p":"work","m":"lab/large"}]}"#, forKey: "models.favourites")
+        defaults.set([demo, own], forKey: "vory.pins.refused")
+        defaults.set([demo: "0.9", own: ""], forKey: "vory.cron.createRefused")
+        DemoTraces.sweep(defaults: defaults, caches: nil)
+        let favourites = try #require(defaults.string(forKey: "models.favourites"))
+        #expect(!favourites.contains(demo) && favourites.contains(own), "favourites: \(favourites)")
+        #expect(defaults.stringArray(forKey: "vory.pins.refused") == [own])
+        #expect(defaults.dictionary(forKey: "vory.cron.createRefused") as? [String: String] == [own: ""])
+
+        let store = ConnectionStore(defaults: defaults, connections: [])
+        store.remembered = RememberedSignInVault(backend: MemoryRememberedSignInBackend())
+        try store.remembered.remember(RememberedSignIn(provider: "basic", username: "u", password: "p", gateway: try GatewayURL.normalize("https://127.0.0.1:1")), for: GatewayConnection.demoID)
+        try Keychain.set(Data("x".utf8), account: "secrets." + demo)
+        try Keychain.set(Data("x".utf8), account: "companion-secrets." + demo)
+        DemoTraces.sweepKeychain(store: store)
+        #expect(!store.remembered.contains(GatewayConnection.demoID), "a sign-in remembered for the demo stayed")
+        #expect(Keychain.get(account: "secrets." + demo) == nil && Keychain.get(account: "companion-secrets." + demo) == nil)
+    }
+
     /// A demo's scratch folder left by an app that ended in the demo is taken away at the next launch (#494), unless a
     /// demo runs, and not one written in the last hour (a test build's temporary folder can be another copy's).
     @Test func theLaunchSweepTakesAStaleDemoFolder() throws {

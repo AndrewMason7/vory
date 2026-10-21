@@ -380,6 +380,7 @@ final class AppModel {
         ComposerDrafts.forgetDemo()
         await deactivate()
         DemoTraces.sweep()
+        DemoTraces.sweepKeychain(store: store)
         store.leaveDemo()
         if let c = store.active { await activate(c) }
         // The extensions' and the Watch's copy of the looks, the person's own again (#494).

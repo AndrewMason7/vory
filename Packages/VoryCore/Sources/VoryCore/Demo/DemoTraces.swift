@@ -14,6 +14,7 @@ public enum DemoTraces {
                                                 temporary: URL = FileManager.default.temporaryDirectory, now: Date = Date()) {
         guard store.demo == nil else { return }
         sweep(defaults: defaults, caches: caches)
+        sweepKeychain(store: store)
         // A demo's scratch folder its runtime never stopped to take away (#494: the app ended in the demo). Not one
         // written in the last hour: a test build's temporary folder can be another copy's too, its demo running.
         let fm = FileManager.default
@@ -33,5 +34,31 @@ public enum DemoTraces {
         if let caches {
             try? FileManager.default.removeItem(at: caches.appending(path: "transcripts/\(id)", directoryHint: .isDirectory))
         }
+        // Inside three of the app's values, the demo's entry an older build kept (#494): its favourite models (a JSON
+        // object by gateway id, which iCloud would get), the gateways that refused a pin (a list of ids) and those that
+        // refused a scheduled task's create (by id). Rewritten only when the demo's entry is there.
+        if let json = defaults.string(forKey: "models.favourites"), let data = json.data(using: .utf8),
+           var map = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], map[id] != nil {
+            map[id] = nil
+            if map.isEmpty { defaults.removeObject(forKey: "models.favourites") }
+            else if let out = try? JSONSerialization.data(withJSONObject: map, options: .sortedKeys) {
+                defaults.set(String(decoding: out, as: UTF8.self), forKey: "models.favourites")
+            }
+        }
+        if let ids = defaults.stringArray(forKey: "vory.pins.refused"), ids.contains(id) {
+            defaults.set(ids.filter { $0 != id }, forKey: "vory.pins.refused")
+        }
+        if var refused = defaults.dictionary(forKey: "vory.cron.createRefused"), refused[id] != nil {
+            refused[id] = nil
+            defaults.set(refused, forKey: "vory.cron.createRefused")
+        }
+    }
+
+    /// The Keychain's twins (#494): secrets kept under the demo's id, its Companion's, and a sign-in remembered for it.
+    @MainActor public static func sweepKeychain(store: ConnectionStore) {
+        let id = GatewayConnection.demoID
+        Keychain.delete(account: "secrets." + id.uuidString)
+        Keychain.delete(account: "companion-secrets." + id.uuidString)
+        if store.remembered.contains(id) { _ = store.remembered.forget(id) }
     }
 }
