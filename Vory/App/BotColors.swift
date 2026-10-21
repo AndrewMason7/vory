@@ -245,10 +245,12 @@ private struct StillBlink: ViewModifier {
 }
 
 /// Copies the bot colours, avatar choices and photo thumbnails into the shared keychain
-/// (`BotLooks`) for the notification extensions.
+/// (`BotLooks`) for the notification extensions. Never while the demo runs (#494): its looks come first while it does,
+/// and its bots' names would go to the extensions and the Watch; leaving it copies the person's own again.
 @MainActor
 enum BotLooksMirror {
     static func mirror() {
+        guard !DemoLooks.isOn else { return }
         // The all-bots glass setting is baked in here, for every profile the gateway knows, so
         // the extensions (which only read this mirror) draw the same bot as the app.
         var avatars = BotAvatarStore.stored()

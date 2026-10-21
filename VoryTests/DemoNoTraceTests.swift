@@ -248,6 +248,23 @@ import Testing
         #expect(WidgetSnapshot.load()?.usage != nil, "a gateway's numbers did not reach the widgets")
     }
 
+    /// The looks the extensions and the Watch read are never copied while the demo runs (#494): its colours come first
+    /// then, and its bots' names went along.
+    @Test func theLooksMirrorWaitsOutTheDemo() throws {
+        func now() throws -> Data {
+            let e = JSONEncoder(); e.outputFormatting = .sortedKeys
+            return try e.encode(BotLooks.load())
+        }
+        let before = Keychain.get(account: BotLooks.account)
+        defer { if let before { try? Keychain.set(before, account: BotLooks.account) } else { Keychain.delete(account: BotLooks.account) } }
+        BotLooks(colors: ["default": "#112233"], avatars: ["default": "initial"]).save()
+        let planted = try now()
+        DemoLooks.set(on: true)
+        defer { DemoLooks.set(on: false) }
+        BotLooksMirror.mirror()
+        #expect(try now() == planted, "the looks were copied while the demo ran")
+    }
+
     @Test func homesVisitMarkIsNeverTheDemos() {
         #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
         #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)
