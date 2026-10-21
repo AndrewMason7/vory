@@ -312,13 +312,63 @@ final class PushRegistrar: PushRegistrationSyncing {
         }
     }
 
-    func removeRegistration(runtime: GatewayRuntime) async {
-        await PushRelay.unregister()
+    /// Takes this device's registration away from one gateway: its device file there, and the relay's record when no
+    /// other gateway of the person's own is left to send through it (`relayForgets`). `everywhere`: this device is to take
+    /// pushes from no gateway now (notifications turned off, the app reset), so the relay forgets it whatever is saved.
+    func removeRegistration(runtime: GatewayRuntime, everywhere: Bool) async {
+        if Self.relayForgets(everywhere: everywhere, otherOwnGateways: ownGateways(besides: runtime.connection.id)) {
+            await unregisterFromRelay()
+        }
         guard let home = runtime.profileHome else { return }
         let path = "\(home)/push/devices/\(installID).json"
         let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/files", json: ["path": .string(path), "recursive": false])
         if lastRegistrationPath == path { lastRegistrationPath = nil; registeredAt = nil }
     }
+
+    /// Settings' Notifications toggle: on registers this device with the relay and the open gateway; off takes it off
+    /// every gateway, the relay with them, whether a gateway is open or not (#509; with none open, off left the relay
+    /// holding the token).
+    func notificationsTurned(on: Bool, runtime: GatewayRuntime?) async {
+        guard on else { await removeEverywhere(runtime: runtime); return }
+        guard let runtime else { return }
+        await registerWithRelay()
+        await syncRegistration(runtime: runtime)
+    }
+
+    /// This device is to take pushes from no gateway any more (notifications turned off, the app reset, #509): the open gateway's device file goes,
+    /// and the relay forgets the install whether a gateway is open or not. With none open, the relay kept this device's
+    /// token after the reset, and an old gateway's Companion could go on pushing to it. The relay needs only the install's
+    /// id and secret, so call this before the Keychain is wiped.
+    func removeEverywhere(runtime: GatewayRuntime?) async {
+        if let runtime { await removeRegistration(runtime: runtime, everywhere: true) } else { await unregisterFromRelay() }
+    }
+
+    private func unregisterFromRelay() async {
+        await PushRelay.unregister()
+        // Registered again at the next foreground, not up to a day later (`refreshRelayIfStale`).
+        relayRegisteredAt = nil
+    }
+
+    /// Whether the relay forgets this install as one gateway's registration goes (#509). The relay keeps one record per
+    /// install, and every gateway with this device's file sends through it: taken away with one gateway's removal (or its
+    /// Companion's), the other gateways' pushes stopped. It goes with the last of the person's gateways only, or when the
+    /// device is to take pushes from none.
+    nonisolated static func relayForgets(everywhere: Bool, otherOwnGateways: Bool) -> Bool { everywhere || !otherOwnGateways }
+
+    /// Whether a gateway of the person's own other than `id` is saved. A removed gateway is still saved when its
+    /// registration goes.
+    private func ownGateways(besides id: UUID) -> Bool {
+        var ids = AppModel.shared.store.connections.map(\.id)
+        #if DEBUG
+        if let saved = Self.ownGatewaysForTests { ids = saved }
+        #endif
+        return ids.contains { $0 != id }
+    }
+    #if DEBUG
+    /// The tests' list of the person's saved gateways (#509), so the relay checks run the same whatever gateways the test
+    /// host has kept. On CUT-SWEEP §1.
+    nonisolated(unsafe) static var ownGatewaysForTests: [UUID]?
+    #endif
 }
 
 extension Notification.Name {

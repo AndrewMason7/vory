@@ -608,7 +608,7 @@ final class AppModel {
     func resetApp(eraseCloud: Bool) async {
         let sync = CloudSync.shared
         sync.suspended = true
-        if let rt = runtime { await push.removeRegistration(runtime: rt) }
+        await push.removeEverywhere(runtime: runtime)
         await deactivate()
         for c in store.connections { store.delete(id: c.id) }
         if eraseCloud { sync.eraseCloud() } else { sync.removeOwnDeviceEntry() }
@@ -639,7 +639,7 @@ final class AppModel {
 
     func deleteConnection(_ id: UUID) async {
         if runtime?.connection.id == id {
-            if let rt = runtime { await push.removeRegistration(runtime: rt) }
+            if let rt = runtime { await push.removeRegistration(runtime: rt, everywhere: false) }
             await deactivate()
         }
         store.delete(id: id)

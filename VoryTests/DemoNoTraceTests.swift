@@ -11,14 +11,14 @@ import Testing
 /// sign-in's) and none its own sessions had to refuse.
 @MainActor
 @Suite(.serialized) struct DemoNoTraceTests {
-    /// Every request the shared session is asked for while the demo runs, recorded and failed.
+    /// Every request the shared session is asked for while the demo runs, recorded ("<method> <URL>") and failed.
     final class SharedSessionWatch: URLProtocol, @unchecked Sendable {
         private static let lock = NSLock()
         nonisolated(unsafe) private static var urls: [String] = []
         static var seen: [String] { lock.withLock { urls } }
         static func reset() { lock.withLock { urls = [] } }
         override class func canInit(with request: URLRequest) -> Bool {
-            lock.withLock { urls.append(request.url?.absoluteString ?? "no URL") }
+            lock.withLock { urls.append("\(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "no URL")") }
             return true
         }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -508,6 +508,81 @@ import Testing
         await push.registerForRemoteNotificationsIfAuthorized()
         try? await Task.sleep(for: .milliseconds(500))
         #expect(toRelay().isEmpty, "with no gateway of the person's own the relay was asked: \(toRelay())")
+    }
+
+    /// The relay forgets this device with the last of the person's gateways only (#509). Its record is one per install,
+    /// and every gateway with this device's file sends through it: removing one of two gateways leaves it (the other's
+    /// pushes go on) and keeps the day's registration; removing the last takes it away and clears that, so the next
+    /// foreground registers again rather than up to a day later. Notifications turned off and the app reset take it away
+    /// whatever is saved, with no gateway open too. Debug builds have no relay, so the test sets one (`PushRelay.testURL`, an `.invalid` host the
+    /// watch catches).
+    @Test func theRelayForgetsThisDeviceWithItsLastGatewayOnly() async throws {
+        #expect(!PushRegistrar.relayForgets(everywhere: false, otherOwnGateways: true))
+        #expect(PushRegistrar.relayForgets(everywhere: false, otherOwnGateways: false))
+        #expect(PushRegistrar.relayForgets(everywhere: true, otherOwnGateways: true))
+
+        PushRelay.testURL = URL(string: "https://relay.test.invalid")
+        let push = AppModel.shared.push
+        let tokenBefore = push.deviceToken, relayAtBefore = push.relayRegisteredAt, relayErrorBefore = push.relayError
+        URLProtocol.registerClass(SharedSessionWatch.self)
+        defer {
+            URLProtocol.unregisterClass(SharedSessionWatch.self)
+            PushRelay.testURL = nil; PushRegistrar.ownGatewaysForTests = nil; PushRegistrar.ownGatewayForTests = nil
+            push.deviceToken = tokenBefore; push.relayRegisteredAt = relayAtBefore; push.relayError = relayErrorBefore
+        }
+        try #require(PushRelay.isConfigured, "no relay: the check would never see the relay path run")
+        func toRelay(_ method: String) -> [String] {
+            SharedSessionWatch.seen.filter { $0.hasPrefix(method + " ") && $0.contains("relay.test.invalid") }
+        }
+        let store = ConnectionStore(defaults: UserDefaults(suiteName: "dev.vory.tests.relay." + UUID().uuidString)!, connections: [])
+        func gateway(_ name: String) throws -> GatewayRuntime {
+            GatewayRuntime(connection: GatewayConnection(name: name, gateway: try GatewayURL.normalize("https://127.0.0.1:1"), authMode: .sessionToken), store: store)
+        }
+        let a = try gateway("a"), b = try gateway("b")
+        let registered = Date()
+
+        // One of two removed: the relay keeps this device, and the day's registration stands.
+        PushRegistrar.ownGatewaysForTests = [a.connection.id, b.connection.id]
+        push.relayRegisteredAt = registered
+        SharedSessionWatch.reset()
+        await push.removeRegistration(runtime: a, everywhere: false)
+        #expect(toRelay("DELETE").isEmpty, "removing one of two gateways took this device off the relay: the other's pushes stop")
+        #expect(push.relayRegisteredAt == registered)
+
+        // The last removed: the relay forgets this device, and the next foreground registers it again.
+        PushRegistrar.ownGatewaysForTests = [b.connection.id]
+        SharedSessionWatch.reset()
+        await push.removeRegistration(runtime: b, everywhere: false)
+        #expect(!toRelay("DELETE").isEmpty, "removing the last gateway left this device on the relay: \(SharedSessionWatch.seen)")
+        #expect(push.relayRegisteredAt == nil, "the day's registration stood: the next foreground would not register for up to 24 h")
+        PushRegistrar.ownGatewayForTests = true
+        push.deviceToken = String(repeating: "0a", count: 32)
+        SharedSessionWatch.reset()
+        await push.refreshRelayIfStale()
+        #expect(!toRelay("POST").isEmpty, "the foreground after did not register again: \(SharedSessionWatch.seen)")
+
+        // Notifications off: the relay forgets this device with another gateway still saved.
+        PushRegistrar.ownGatewaysForTests = [a.connection.id, b.connection.id]
+        push.relayRegisteredAt = registered
+        SharedSessionWatch.reset()
+        await push.notificationsTurned(on: false, runtime: a)
+        #expect(!toRelay("DELETE").isEmpty, "notifications off left this device on the relay")
+        #expect(push.relayRegisteredAt == nil)
+
+        // Notifications turned off with no gateway open (the toggle's step): the relay forgets this device all the same.
+        push.relayRegisteredAt = registered
+        SharedSessionWatch.reset()
+        await push.notificationsTurned(on: false, runtime: nil)
+        #expect(!toRelay("DELETE").isEmpty, "notifications off with no gateway open left this device on the relay")
+        #expect(push.relayRegisteredAt == nil)
+
+        // The app reset with no gateway open (`resetApp`'s step, not resetApp itself, which would wipe the test host): the
+        // same.
+        push.relayRegisteredAt = registered
+        SharedSessionWatch.reset()
+        await push.removeEverywhere(runtime: nil)
+        #expect(!toRelay("DELETE").isEmpty, "a reset with no gateway open left this device on the relay")
+        #expect(push.relayRegisteredAt == nil)
     }
 
     @Test func homesVisitMarkIsNeverTheDemos() {

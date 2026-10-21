@@ -407,11 +407,7 @@ struct NotificationsView: View {
             Section {
                 Toggle("Notifications", isOn: $notificationsOn)
                     .onChange(of: notificationsOn) { _, on in
-                        Task {
-                            guard let rt = model.runtime else { return }
-                            if on { await push.registerWithRelay(); await push.syncRegistration(runtime: rt) }
-                            else { await push.removeRegistration(runtime: rt) }
-                        }
+                        Task { await push.notificationsTurned(on: on, runtime: model.runtime) }
                     }
             } footer: {
                 Text(notificationsOn ? "\(DeviceWords.this.capitalized) is registered with the gateway for approvals, questions, finished turns and errors while Vory is closed." : "Off: \(DeviceWords.this) is removed from the gateway's device list, so the Companion sends it nothing. Turn it on to register again.")

@@ -1141,7 +1141,7 @@ final class PushSetupModel {
     /// its setup. The next Configure is a clean install.
     func uninstall(runtime rt: GatewayRuntime, model: AppModel) async {
         let _: JSONValue? = try? await rt.api.send("POST", "/api/dashboard/agent-plugins/vory-push/disable", body: EmptyBody())
-        await model.push.removeRegistration(runtime: rt)
+        await model.push.removeRegistration(runtime: rt, everywhere: false)
         let cmd = installCommand(for: rt) + " --uninstall"
         if let chat = try? await rt.newChat() {
             await chat.send("Run this exact command in the terminal and show me its full output: `\(cmd)`. It stops the Vory companion service and deletes its files. If it fails, tell me the error verbatim.")
