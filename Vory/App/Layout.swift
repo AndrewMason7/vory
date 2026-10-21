@@ -145,11 +145,22 @@ enum FoldAvoidance {
 struct ReservedRegions: Equatable {
     var divisions: [CGRect] = []
     var occlusions: [CGRect] = []
-    /// The window can fold: it reports a division, active or not (an open Duo, flat or half
-    /// open). Layouts that must not reflow at every hinge move key on this, not on a fold.
+    /// The window can fold up its middle: it reports a division running up the window, active
+    /// or not (the open Duo on its side, flat or half open like a book). Layouts that must not
+    /// reflow at every hinge move key on this, not on the fold being there (`foldsUp`).
     var foldable = false
-    /// Apple's margin for interactive content beside a region.
-    static let margin: CGFloat = 8
+
+    /// Whether any of `divisions` (active or not, window space) runs up a window of `size` and
+    /// crosses it: a fold across the window (the laptop pose, the open Duo upright) runs between
+    /// rows and does not count, nor does one outside the window (the closed Duo, if it reports one).
+    static func foldsUp(_ divisions: [CGRect], in size: CGSize) -> Bool {
+        let window = CGRect(origin: .zero, size: size)
+        return divisions.contains { $0.height >= $0.width && $0.intersects(window) }
+    }
+    /// Room we keep beyond a region's frame for interactive content. 0: the Duo reports each region with Apple's
+    /// margin already in its frame (the probe, 2026-10-20: the fold a 40 pt band, 20 pt either side of the hinge
+    /// line, `margins` 20/20), so the 8 pt this was counted it twice.
+    static let margin: CGFloat = 0
     var isEmpty: Bool { divisions.isEmpty && occlusions.isEmpty }
     var all: [CGRect] { divisions + occlusions }
     /// A fold that runs across the window (a laptop pose): top and bottom halves.
@@ -196,10 +207,11 @@ struct ReservedRegions: Equatable {
 }
 
 /// Home's six tiles (DashboardView): three to a row, two even rows, on a phone, an iPad and the
-/// Mac; two to a row on a window that can fold (the open Duo), so a fold up the middle falls
-/// between them and never through one (the Checker's call, Duo plan section 6). Keyed to the
-/// window being foldable, not to the fold being there, so the tiles don't reflow at every
-/// hinge move; a fold up the window counts too, in case a flat Duo reports no division.
+/// Mac; two to a row on a window that can fold up its middle (the open Duo on its side), so the
+/// fold falls between them and never through one (the Checker's call, Duo plan section 6). Keyed
+/// to the window being foldable that way, not to the fold being there, so the tiles don't reflow
+/// at every hinge move; an active fold up the window counts too, in case a flat Duo reports no
+/// division. A fold across the window runs between rows: three stay.
 enum HomeTiles {
     static func columns(regions: ReservedRegions) -> Int {
         #if os(macOS)
@@ -241,7 +253,7 @@ struct ReservedRegionsReader<Content: View>: View {
                 let regions = ReservedRegions(
                     divisions: proxy.reservedRegions(kind: .division).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
                     occlusions: proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
-                    foldable: !proxy.reservedRegions(kind: .division, options: .includeInactive).isEmpty)
+                    foldable: ReservedRegions.foldsUp(proxy.reservedRegions(kind: .division, options: .includeInactive).map(\.frame), in: proxy.size))
                 content().environment(\.reservedRegions, regions)
             }
         }

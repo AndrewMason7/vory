@@ -92,6 +92,7 @@ struct RootView: View {
                     let g = windowGeometry
                     Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@  hidden %@ kb %@ open %@ hiders %d mw %@ v %@ row %.0f room %.0f", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no", model.tabBarHidden ? "yes" : "no", model.keyboardUp ? "yes" : "no", model.chatsPathOpen ? "yes" : "no", model.tabBarHiders[model.selectedTab] ?? 0, model.wideLayout ? "yes" : "no", model.tabBarVertical ? "yes" : "no", MorphState.shared.rootRowBottom, TopBarRoom.inset(barsVertical: model.tabBarVertical, barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)))
                         .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
+                        .accessibilityIdentifier("geometry.window")
                         // Below the morph bar's chat row (its capsules sit 30 pt lower since
                         // 2026-10-12): at 40 the probe sat over Back and a UI test's tap missed.
                         .padding(.top, 150).allowsHitTesting(false)
@@ -447,6 +448,8 @@ private struct RegionsProbe: View {
             let all = proxy.reservedRegions(kind: .division, options: .includeInactive) + proxy.reservedRegions(kind: .occlusion, options: .includeInactive)
             Text((all.isEmpty ? ["no regions"] : all.map(line)).joined(separator: "\n") + String(format: "\nwin %.0fx%.0f kb %.0f", proxy.size.width, proxy.size.height, keyboard))
                 .font(.caption2.monospaced()).padding(4).background(.mint.opacity(0.9)).foregroundStyle(.black)
+                // The fold's frame for the pose tests (FoldPoseUITests), read off this text.
+                .accessibilityIdentifier("geometry.regions")
                 .position(x: min(proxy.size.width - 130, 160), y: 250)
         }
     }

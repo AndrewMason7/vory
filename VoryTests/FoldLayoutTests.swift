@@ -7,25 +7,28 @@ import Testing
 /// up the window, how a floating piece steps off the fold, and Home's tiles on a window that folds.
 /// Window space throughout: the open Duo's 669 x 951 window upright (the laptop pose folds it
 /// across) and 951 x 669 on its side (the book pose folds it up the middle).
-/// Expected values are typed CGFloat: an untyped sum on the right of `#expect`'s `==` is an Int
-/// there, and 206.0 against 206 compared false.
+/// Expected values are CGFloat (`m` makes each sum one): an untyped sum on the right of `#expect`'s
+/// `==` is an Int there, and 206.0 against 206 compared false.
 @Suite struct FoldLayoutTests {
-    /// A fold across the window (laptop): a 20 pt band at y 466 to 486.
-    let laptop = ReservedRegions(divisions: [CGRect(x: 0, y: 466, width: 669, height: 20)])
-    /// A fold up the window (book): a 20 pt band at x 466 to 486.
-    let book = ReservedRegions(divisions: [CGRect(x: 466, y: 0, width: 20, height: 669)])
+    /// The fold across the window as the Duo reports it in the laptop pose (the probe, 2026-10-20): a 40 pt band at y 456
+    /// to 496, the hinge line at 476 with Apple's 20 pt margin either side already in the frame.
+    let laptop = ReservedRegions(divisions: [CGRect(x: 0, y: 456, width: 669, height: 40)])
+    /// The fold up the window in the book pose: x 456 to 496.
+    let book = ReservedRegions(divisions: [CGRect(x: 456, y: 0, width: 40, height: 669)])
     let none = ReservedRegions()
+    /// Our own margin beyond the frame (0 since the probe: the frame carries Apple's).
+    let m = ReservedRegions.margin
 
     // MARK: The room under a fold
 
     @Test func underAFoldAcrossTheWindowAListMayGrowUpToTheFoldLessTheMargin() {
-        #expect(laptop.room(under: 700) == CGFloat(700 - 486 - 8))
+        #expect(laptop.room(under: 700) == 700 - 496 - m)
     }
 
     @Test func noFloorCrossesTheFold() {
         // The 10-12 round: the + panel took its 180 pt floor with about 60 pt of room and opened
         // across the fold. Room under the fold is what is there, down to none at all.
-        #expect(laptop.room(under: 554) == 60)
+        #expect(laptop.room(under: 556 + m) == 60)
         #expect(laptop.room(under: 490) == 0)
     }
 
@@ -41,15 +44,15 @@ import Testing
     func dock(bottom: CGFloat) -> CGRect { CGRect(x: 0, y: bottom - 70, width: 669, height: 70) }
 
     @Test func aDockOnTheFoldLiftsToTheMarginAboveIt() {
-        // The keyboard has pushed the dock onto the fold: its bottom ends 8 pt above the fold.
+        // The keyboard has pushed the dock onto the fold: its bottom ends the margin above the fold's frame.
         let lift = laptop.dockLift(dock: dock(bottom: 520))
-        #expect(lift == CGFloat(520 - 466 + 8))
-        #expect(dock(bottom: 520).maxY - lift == CGFloat(466 - 8))
+        #expect(lift == 520 - 456 + m)
+        #expect(dock(bottom: 520).maxY - lift == 456 - m)
     }
 
     @Test func aDockJustAboveTheFoldMovesUpToTheMargin() {
-        #expect(laptop.dockLift(dock: dock(bottom: 462)) == 4)
-        #expect(laptop.dockLift(dock: dock(bottom: 458)) == 0)
+        #expect(laptop.dockLift(dock: dock(bottom: 460)) == 4 + m)
+        #expect(laptop.dockLift(dock: dock(bottom: 456 - m)) == 0)
     }
 
     @Test func aDockUnderTheFoldStaysWithNoListOpen() {
@@ -57,24 +60,24 @@ import Testing
     }
 
     @Test func aListThatFitsUnderTheFoldLeavesTheDockWhereItIs() {
-        // The "/" list's top at 600: well under the fold's 486 plus the margin.
+        // The "/" list's top at 600: well under the fold's 496 plus the margin.
         #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 600) == 0)
     }
 
     @Test func aListThatWouldCrossTheFoldLiftsTheDockOverIt() {
         // The + panel at full size would reach up to y 400, across the fold: the dock goes over
-        // the fold (its bottom 8 pt above it) while the panel is open.
+        // the fold (its bottom the margin above it) while the panel is open.
         let lift = laptop.dockLift(dock: dock(bottom: 917), listTop: 400)
-        #expect(lift == CGFloat(917 - 466 + 8))
+        #expect(lift == 917 - 456 + m)
         // Its top reaching to the margin under the fold is already too far.
-        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 493) > 0)
-        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 494) == 0)
+        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 495 + m) > 0)
+        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 496 + m) == 0)
     }
 
     @Test func aLiftForAnOpenListHoldsUntilTheListCloses() {
         // Lifted, the list gets the whole room above and reports a different reach: held, the
         // dock stays up rather than dropping back under it.
-        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 600, held: true) == CGFloat(917 - 466 + 8))
+        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 600, held: true) == 917 - 456 + m)
         // Closed (no list), the hold no longer counts.
         #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: nil, held: true) == 0)
     }
@@ -129,18 +132,36 @@ import Testing
 
     // MARK: Home's tiles
 
-    @Test func homesTilesGoTwoToARowOnAWindowThatCanFold() {
-        // The open Duo flat (an inactive division) and in either half-open pose: two to a row. The Mac (this suite
-        // runs there too) keeps three whatever it is handed.
+    @Test func homesTilesGoTwoToARowOnAWindowThatFoldsUpItsMiddle() {
+        // The open Duo on its side, flat (an inactive division up the window) or half open like a book: two to a row.
+        // The Mac (this suite runs there too) keeps three whatever it is handed.
         #if os(macOS)
         let folding = 3
         #else
         let folding = 2
         #endif
-        #expect(HomeTiles.columns(regions: ReservedRegions(foldable: true)) == folding)
+        let side = CGSize(width: 951, height: 669)
+        let flatOnItsSide = ReservedRegions(foldable: ReservedRegions.foldsUp([CGRect(x: 456, y: 0, width: 40, height: 669)], in: side))
+        #expect(HomeTiles.columns(regions: flatOnItsSide) == folding)
+        var bookOpen = book; bookOpen.foldable = true
+        #expect(HomeTiles.columns(regions: bookOpen) == folding)
+        // An active fold up the window counts on its own too (a flat Duo that reports no division).
         #expect(HomeTiles.columns(regions: book) == folding)
-        var laptopOpen = laptop; laptopOpen.foldable = true
-        #expect(HomeTiles.columns(regions: laptopOpen) == folding)
+    }
+
+    @Test func homesTilesStayThreeWhereTheFoldRunsAcross() {
+        // The open Duo upright, flat (an inactive division across) or half open like a laptop: the fold runs between rows.
+        let upright = CGSize(width: 669, height: 951)
+        let across = [CGRect(x: 0, y: 456, width: 669, height: 40)]
+        #expect(!ReservedRegions.foldsUp(across, in: upright))
+        #expect(HomeTiles.columns(regions: ReservedRegions(foldable: ReservedRegions.foldsUp(across, in: upright))) == 3)
+        var laptopOpen = laptop; laptopOpen.foldable = ReservedRegions.foldsUp(laptop.divisions, in: upright)
+        #expect(HomeTiles.columns(regions: laptopOpen) == 3)
+    }
+
+    @Test func aDivisionOutsideTheWindowDoesNotCount() {
+        // The closed Duo, should it report the inner display's fold: outside its 466 x 678 window.
+        #expect(!ReservedRegions.foldsUp([CGRect(x: 700, y: 0, width: 20, height: 951)], in: CGSize(width: 466, height: 678)))
     }
 
     @Test func homesTilesStayThreeToARowOnAnIPad() {
