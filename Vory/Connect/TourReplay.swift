@@ -92,6 +92,21 @@ enum AppFingerprint {
         // The widgets' gateway and chats, not their times (rewritten as the app runs).
         let w = WidgetSnapshot.load()
         out.append("widgets=\(hash([w?.gatewayName ?? "", w?.connectionID ?? "", w?.profile ?? "", (w?.chats ?? []).map(\.id).joined(separator: ",")].joined(separator: "|")))")
+        // With `-vory-notify-readout`: the system's notification question, as the registrar last read it (refreshed for
+        // the next read), for a tour replayed in the demo, which must not raise it (#501 asks on the demo's own first
+        // message). Opt-in, as a refresh between two reads would change it for every other test.
+        if ProcessInfo.processInfo.arguments.contains("-vory-notify-readout") {
+            let status: String = switch model.push.authorization {
+            case .notDetermined: "notDetermined"
+            case .denied: "denied"
+            case .authorized: "authorized"
+            case .provisional: "provisional"
+            case .ephemeral: "ephemeral"
+            @unknown default: "unknown"
+            }
+            out.append("notify=\(status)")
+            Task { await model.push.refreshAuthorization() }
+        }
         return out.sorted()
     }
 

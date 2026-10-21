@@ -201,6 +201,33 @@ final class TourReplayUITests: XCTestCase {
         backOnTroubleshooting("Done in the demo")
     }
 
+    /// A tour replayed with Demo mode on raises no notification question (#501 asks on the demo's own first message, not
+    /// the tour's): no Springboard alert at the tour's Send or after its card, and the question still unanswered after.
+    /// Needs the demo copy freshly installed, its question unanswered.
+    func testAReplayInTheDemoAsksForNoNotifications() throws {
+        try launch("light", ["-vory-demo", "-vory-notify-readout"])
+        _ = fingerprint(); pause(1)
+        XCTAssertEqual(fingerprint()["notify"], "notDetermined", "the notification question was already answered on this install")
+        openTroubleshooting()
+        startReplay()
+        app.buttons["onboarding.getStarted"].firstMatch.tap(); pause(1.5)
+        app.buttons["onboarding.continue"].firstMatch.tap()
+        XCTAssertTrue(any("onboarding.chatDock").waitForExistence(timeout: 20), "no tour chat")
+        pause(2)
+        app.buttons["composer.send"].firstMatch.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = app.buttons["Allow once"].firstMatch
+        XCTAssertTrue(allow.waitForExistence(timeout: 40), "no card in the tour")
+        XCTAssertFalse(springboard.alerts.firstMatch.exists, "a system question came up at the tour's Send: \(springboard.alerts.firstMatch.label)")
+        allow.tap(); pause(4)
+        XCTAssertFalse(springboard.alerts.firstMatch.exists, "a system question came up after the tour's card: \(springboard.alerts.firstMatch.label)")
+        toConnectFromHere()
+        app.buttons["onboarding.done"].firstMatch.tap(); pause(1.5)
+        backOnTroubleshooting("Done in the demo")
+        _ = fingerprint(); pause(1)
+        XCTAssertEqual(fingerprint()["notify"], "notDetermined", "the notification question was asked during the tour")
+    }
+
     func testTroubleshootingAndEveryBeatOfTheReplayPassTheAudit() throws {
         for scheme in ["light", "dark"] {
             try launch(scheme)
