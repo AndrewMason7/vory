@@ -62,11 +62,16 @@ struct TourEverywhere: View {
     var size: CGSize
     var reduceMotion: Bool
     var live: Bool
+    /// Vory's bubble ends here and the tour's controls start there: the frames and their words stay between.
+    var below: CGFloat = 0
+    var above: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 12) {
             ZStack {
                 frame(place)
+                    // Pictures of a device as it looks: at its default text size, whatever the tour's.
+                    .dynamicTypeSize(.large)
                     .id(place)
                     // The last frame goes before the next comes, so the two never show at once.
                     .transition(reduceMotion ? .opacity
@@ -90,8 +95,8 @@ struct TourEverywhere: View {
         }
         .padding(.horizontal, 24)
         // Where the tour's chat sat on beats 3 and 4: under Vory and his bubble, over Continue and the dots.
-        .padding(.top, size.height * 0.30)
-        .padding(.bottom, 112)
+        .padding(.top, max(size.height * 0.30, below + 10))
+        .padding(.bottom, above > 0 ? size.height - above + 10 : 112)
         // Pictures of the app, not the app: no tap, no link.
         .allowsHitTesting(false)
         .environment(\.openURL, OpenURLAction { _ in .discarded })

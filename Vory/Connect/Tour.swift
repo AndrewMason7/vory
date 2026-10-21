@@ -24,6 +24,9 @@ struct TourView: View {
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    /// The person's text size, before the tour's cap: at the accessibility sizes Vory takes his compact places.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var compact: Bool { dynamicTypeSize.isAccessibilitySize }
     /// The tour on screen (not covered by the gateway form, the app in front): Vory's float and the bots' orbit run
     /// only then (the battery rule).
     @State private var onScreen = false
@@ -42,8 +45,19 @@ struct TourView: View {
     /// Beat 4's mention is due (a moment after the answer): the message bar types it in.
     @State private var mentionDue = false
     @State private var mentionTimer: Task<Void, Never>?
+    /// Where Vory's bubble ends and where Continue and the dots start, in the tour's space: the chat and the first and
+    /// last beats keep between them, whatever the text size makes them.
+    @State private var bubbleBottom: CGFloat = 0
+    @State private var controlsTop: CGFloat = 0
     /// Beat 5's place on show: each in turn, until its line has been read (`TourPlace.dwell`).
     @State private var place: TourPlace = TourPlace.all(pad: DeviceWords.device == "iPad")[0]
+
+    /// The tour's own words and buttons, and Vory's bubble, grow no larger than this (the planner's call, 2026-10-20):
+    /// past it, Vory, his bubble, the pages and the buttons ran over each other. Its buttons show the Large Content
+    /// Viewer; VoiceOver reads all of it whole; the app's chat inside it keeps every size.
+    static let largestText: DynamicTypeSize = .accessibility2
+    /// The tour's own space, where the bubble's end and the controls' start are measured.
+    nonisolated static let space = "tour"
 
     private var current: TourBeat { page ?? .hello }
     private var places: [TourPlace] { TourPlace.all(pad: DeviceWords.device == "iPad") }
@@ -64,6 +78,7 @@ struct TourView: View {
                     LazyHStack(spacing: 0) {
                         ForEach(TourBeat.allCases) { beat in
                             beatPage(beat, size: geo.size)
+                                .dynamicTypeSize(...Self.largestText)
                                 .containerRelativeFrame([.horizontal, .vertical])
                                 .id(beat)
                         }
@@ -79,8 +94,10 @@ struct TourView: View {
                 }
                 // Beats 3 and 4's chat, over their pages: it comes and goes with them.
                 if let chat = tourChat?.chat {
+                    // The app's own chat keeps every text size; its room comes from what's around it as measured.
                     TourChatLayer(chat: chat, progress: reduceMotion ? CGFloat(current.rawValue) : progress, size: geo.size,
-                                  origin: geo.frame(in: .global).origin, mention: mentionDue)
+                                  origin: geo.frame(in: .global).origin, mention: mentionDue,
+                                  room: TourChatLayer.Room(top: bubbleBottom, bottom: controlsTop))
                         .id(ObjectIdentifier(chat))
                     TourChatWatch(chat: chat) { chatMoved(to: $0) }
                         .id(ObjectIdentifier(chat))
@@ -90,13 +107,16 @@ struct TourView: View {
                               says: line.text(for: current), lineKey: line.key(for: current), reduceMotion: reduceMotion,
                               animating: animating, lookingDown: current == .connect,
                               squint: current.showsChat && chatPhase == .working,
-                              hop: current == .everywhere ? place.rawValue : 0)
+                              hop: current == .everywhere ? place.rawValue : 0, bubbleBottom: $bubbleBottom, compact: compact)
+                    .dynamicTypeSize(...Self.largestText)
                     .allowsHitTesting(false)
                     // The person typing in the tour's chat: the chat takes the room, and Vory steps aside until they're done.
                     .opacity(typingInChat ? 0 : 1)
                     .animation(.easeOut(duration: 0.2), value: typingInChat)
                 controls
+                    .dynamicTypeSize(...Self.largestText)
             }
+            .coordinateSpace(.named(Self.space))
         }
         // The keyboard (beat 3's message bar) moves nothing but the chat, which rises over it.
         .ignoresSafeArea(.keyboard)
@@ -211,18 +231,18 @@ struct TourView: View {
     @ViewBuilder private func beatPage(_ beat: TourBeat, size: CGSize) -> some View {
         switch beat {
         case .hello:
-            TourHelloBeat(onStart: { go(to: .bots) }, onRestore: onRestore)
+            TourHelloBeat(onStart: { go(to: .bots) }, onRestore: onRestore, below: bubbleBottom, above: controlsTop)
         case .bots:
-            TourBotsBeat(centre: VoryTourLayer.anchor(for: .bots, in: size), live: current == .bots && animating, reduceMotion: reduceMotion) {
+            TourBotsBeat(centre: VoryTourLayer.anchor(for: .bots, in: size, compact: compact), live: current == .bots && animating, reduceMotion: reduceMotion) {
                 line.botTapped()
             }
         case .chat, .approval:
             // The chat itself is on its own layer over these two pages (`TourChatLayer`).
             Color.clear
         case .everywhere:
-            TourEverywhere(place: place, size: size, reduceMotion: reduceMotion, live: onScreen && current == .everywhere)
+            TourEverywhere(place: place, size: size, reduceMotion: reduceMotion, live: onScreen && current == .everywhere, below: bubbleBottom, above: controlsTop)
         case .connect:
-            TourConnectBeat(onConnect: onConnect, onDemo: onDemo)
+            TourConnectBeat(onConnect: onConnect, onDemo: onDemo, below: bubbleBottom, above: controlsTop)
         }
     }
 
@@ -242,6 +262,7 @@ struct TourView: View {
                     Button("Skip") { go(to: .connect) }
                         .font(.subheadline.weight(.medium))
                         .buttonStyle(.glass)
+                        .accessibilityShowsLargeContentViewer()
                         .accessibilityLabel("Skip the tour")
                         .accessibilityIdentifier("onboarding.skip")
                 }
@@ -256,12 +277,14 @@ struct TourView: View {
                         Text("Continue").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
                     .buttonStyle(.glassProminent)
+                    .accessibilityShowsLargeContentViewer()
                     .accessibilityIdentifier("onboarding.continue")
                     .frame(maxWidth: 380)
                 }
                 TourDots(page: current, count: TourBeat.allCases.count) { go(to: $0) }
             }
             .padding(.horizontal, 24).padding(.bottom, 16)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.space)).minY } action: { controlsTop = $0 }
         }
     }
 }
@@ -380,22 +403,35 @@ struct VoryTourLayer: View {
     var squint = false
     /// A change hops him (beat 5's places, as he goes from one to the next).
     var hop = 0
+    /// Where his bubble ends, in the tour's space.
+    @Binding var bubbleBottom: CGFloat
+    /// His smaller, higher places, for the accessibility text sizes (`place(_:compact:)`).
+    var compact = false
+
+    /// The bubble's frame: the most it can grow to, from its top.
+    static let bubbleRoom: CGFloat = 420
 
     /// His place and size on each beat, as fractions of the screen and points; `bubbleTop`, a fraction of the height,
     /// where his bubble's top sits when it isn't just under him. On the bots beat it's above the orbit: under him, the
     /// bots circling him crossed it.
     struct Place { var x: CGFloat; var y: CGFloat; var size: CGFloat; var bubbleTop: CGFloat? = nil }
-    static func place(_ beat: TourBeat) -> Place {
-        switch beat {
-        case .hello: return Place(x: 0.5, y: 0.30, size: 150)
-        case .bots: return Place(x: 0.5, y: 0.42, size: 92, bubbleTop: 0.12)
-        case .chat, .approval, .everywhere: return Place(x: 0.5, y: 0.13, size: 64)
-        case .connect: return Place(x: 0.5, y: 0.28, size: 112)
+    /// `compact`: at the accessibility text sizes he's smaller and higher, so his bubble and the page's words and buttons
+    /// fit under him on the smallest phone.
+    static func place(_ beat: TourBeat, compact: Bool = false) -> Place {
+        switch (beat, compact) {
+        case (.hello, false): return Place(x: 0.5, y: 0.30, size: 150)
+        case (.hello, true): return Place(x: 0.5, y: 0.13, size: 84)
+        case (.bots, false): return Place(x: 0.5, y: 0.42, size: 92, bubbleTop: 0.12)
+        case (.bots, true): return Place(x: 0.5, y: 0.50, size: 64, bubbleTop: 0.10)
+        case (.chat, false), (.approval, false), (.everywhere, false): return Place(x: 0.5, y: 0.13, size: 64)
+        case (.chat, true), (.approval, true), (.everywhere, true): return Place(x: 0.5, y: 0.08, size: 44)
+        case (.connect, false): return Place(x: 0.5, y: 0.28, size: 112)
+        case (.connect, true): return Place(x: 0.5, y: 0.12, size: 72)
         }
     }
 
-    static func anchor(for beat: TourBeat, in size: CGSize) -> CGPoint {
-        let p = place(beat)
+    static func anchor(for beat: TourBeat, in size: CGSize, compact: Bool = false) -> CGPoint {
+        let p = place(beat, compact: compact)
         return CGPoint(x: p.x * size.width, y: p.y * size.height)
     }
 
@@ -411,7 +447,7 @@ struct VoryTourLayer: View {
         let last = CGFloat(TourBeat.allCases.count - 1)
         let p = min(max(progress, 0), last)
         let i = Int(p.rounded(.down)), f = p - CGFloat(i)
-        let a = Self.place(TourBeat(rawValue: i) ?? .hello), b = Self.place(TourBeat(rawValue: min(i + 1, Int(last))) ?? .connect)
+        let a = Self.place(TourBeat(rawValue: i) ?? .hello, compact: compact), b = Self.place(TourBeat(rawValue: min(i + 1, Int(last))) ?? .connect, compact: compact)
         func mix(_ u: CGFloat, _ v: CGFloat) -> CGFloat { u + (v - u) * f }
         func under(_ p: Place) -> CGFloat { Self.faceY(p, in: size) + p.size * 0.38 }
         let top = mix(Self.bubbleTop(a, in: size), Self.bubbleTop(b, in: size))
@@ -448,11 +484,15 @@ struct VoryTourLayer: View {
                     .accessibilityLabel("Vory")
                     .position(x: s.x, y: s.faceY)
                 // Hung from its top, so a second line grows down, as it did under him.
+                // Hung from its top in a frame tall enough for the largest text the tour allows, so a longer line grows
+                // down rather than being cut; its end is measured for what sits under it.
                 VoryTypedBubble(text: says, key: lineKey, reduceMotion: reduceMotion, tail: s.tail)
                     .padding(.horizontal, 24)
                     .accessibilityLabel(says)
-                    .frame(width: size.width, height: 160, alignment: .top)
-                    .position(x: s.x, y: s.bubbleTop + 80)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TourView.space)).maxY } action: { bubbleBottom = $0 }
+                    .frame(width: size.width, height: Self.bubbleRoom, alignment: .top)
+                    .position(x: s.x, y: s.bubbleTop + Self.bubbleRoom / 2)
             }
             .frame(width: size.width, height: size.height)
         }
@@ -468,30 +508,35 @@ struct VoryTourLayer: View {
 private struct TourHelloBeat: View {
     var onStart: () -> Void
     var onRestore: () -> Void
+    /// Vory's bubble ends here and the tour's controls start there: the page's words and buttons stay between.
+    var below: CGFloat = 0
+    var above: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 14) {
-            Spacer()
+        TourColumn(top: below, bottom: above) {
             Text("Your Hermes agents, on \(DeviceWords.your).")
                 .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             GlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {
                     Button(action: onStart) {
                         Text("Get Started").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glassProminent)
+                    .accessibilityShowsLargeContentViewer()
                     .accessibilityHint("Starts a short tour.")
                     .accessibilityIdentifier("onboarding.getStarted")
                     Button(action: onRestore) {
-                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline)
+                            .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glass)
+                    .accessibilityShowsLargeContentViewer()
                     .accessibilityHint("Brings back the gateways you saved on another device.")
                     .accessibilityIdentifier("onboarding.restore")
                 }
             }
             .frame(maxWidth: 380)
-            Spacer().frame(height: 64)
         }
         .padding(.horizontal, 28)
     }
@@ -558,7 +603,13 @@ struct TourChatLayer: View {
     var origin: CGPoint
     /// Beat 4's mention is due: the message bar types it in.
     var mention = false
+    /// What's around the chat, as measured: the chat sits between them.
+    var room = Room()
     @Environment(\.windowGeometry) private var windowGeometry
+
+    /// Where Vory's bubble ends (the chat starts under it) and where Continue and the dots start (the chat ends over
+    /// them), in the tour's space; 0 when not yet measured.
+    struct Room: Equatable { var top: CGFloat = 0; var bottom: CGFloat = 0 }
 
     /// Where the chat is across the pages, in widths from its place: in from the right with beat 3, still through
     /// beat 4, out to the left after it. In view while under one width.
@@ -571,7 +622,7 @@ struct TourChatLayer: View {
 
     var body: some View {
         let slide = Self.slide(progress)
-        let frame = Self.frame(in: size, keyboardTop: keyboardTop)
+        let frame = Self.frame(in: size, keyboardTop: keyboardTop, room: room)
         if abs(slide) < 1 {
             // Its own view, so the swipe moving it doesn't redraw the thread.
             TourChatCard(chat: chat, mention: mention)
@@ -587,16 +638,17 @@ struct TourChatLayer: View {
         return keyboard.isNull ? nil : keyboard.minY - origin.y
     }
 
-    /// Where the chat sits, top to bottom: under Vory and his bubble and over Continue and the dots; with the keyboard
-    /// up, from under Skip to just over the keyboard, Vory stepping aside meanwhile (`TourView`). Lifted whole, it
-    /// went up over Vory and his bubble.
-    static func frame(in size: CGSize, keyboardTop: CGFloat?) -> CGRect {
+    /// Where the chat sits, top to bottom: under Vory and his bubble and over Continue and the dots, as measured, so at
+    /// any text size Continue never covers its Send; with the keyboard up, from under Skip to just over the keyboard, Vory
+    /// stepping aside meanwhile (`TourView`). Lifted whole, it went up over Vory and his bubble.
+    static func frame(in size: CGSize, keyboardTop: CGFloat?, room: Room = Room()) -> CGRect {
         if let keyboardTop {
             let top: CGFloat = 60
             return CGRect(x: 0, y: top, width: size.width, height: max(160, keyboardTop - 8 - top))
         }
-        let top = size.height * 0.30
-        return CGRect(x: 0, y: top, width: size.width, height: max(280, size.height - top - 112))
+        let top = max(size.height * 0.30, room.top > 0 ? room.top + 10 : 0)
+        let bottom = room.bottom > 0 ? room.bottom - 12 : size.height - 112
+        return CGRect(x: 0, y: top, width: size.width, height: max(160, bottom - top))
     }
 }
 
@@ -616,28 +668,33 @@ private struct TourChatCard: View {
     var body: some View {
         // The header above the thread, not over it: in this small frame the thread ran under the pill with nothing behind
         // it (the app's chat has the bar's glass there), and its words read as overlapping. Nothing sits under the pill.
-        VStack(spacing: 0) {
-            ChatHeader(chat: chat, showBack: false, showsActions: false,
-                       onBack: {}, onProfile: {}, onRename: {}, onContext: {}, onNewChat: {}, onClose: {})
-                .padding(.top, 10).padding(.bottom, 4)
-            ZStack(alignment: .bottom) {
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                ChatHeader(chat: chat, showBack: false, showsActions: false,
+                           onBack: {}, onProfile: {}, onRename: {}, onContext: {}, onNewChat: {}, onClose: {})
+                    .padding(.top, 10).padding(.bottom, 4)
                 TranscriptView(chat: chat, dockTop: dockTop, fallbackInset: dockHeight, topInset: 0,
                                keyboardFloors: false, bandFade: Self.topFade)
-                BottomDock(chat: chat, text: $text, quote: $quote, namespace: dockSpace)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
-                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("onboarding.chatDock")
+                    // The thread fades out under the header rather than cut through a line; at rest its first row starts
+                    // below the fade.
+                    .mask {
+                        VStack(spacing: 0) {
+                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.topFade)
+                            Rectangle()
+                        }
+                    }
             }
-            // The thread fades out under the header rather than cut through a line; at rest its first row starts below
-            // the fade.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.topFade)
-                    Rectangle()
-                }
-            }
+            BottomDock(chat: chat, text: $text, quote: $quote, namespace: dockSpace)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0 { dockHeight = $0 } }
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("onboarding.chatDock")
         }
+        // The message bar stays at the card's foot at any text size: where the card's content is taller than its room
+        // (the largest text on a small phone), it runs off the top, under the header, and Send and the card's answers
+        // stay in view; centred, it ran off both ends, under Continue.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+        .clipped()
         .background(Color(.systemBackground))
         .clipShape(.rect(cornerRadius: 32))
         .overlay { RoundedRectangle(cornerRadius: 32).strokeBorder(Color.primary.opacity(0.1)) }
@@ -687,18 +744,22 @@ private struct TourChatWatch: View {
 private struct TourConnectBeat: View {
     var onConnect: () -> Void
     var onDemo: (() -> Void)?
+    /// Vory's bubble ends here and the tour's controls start there: the page's words and buttons stay between.
+    var below: CGFloat = 0
+    var above: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 14) {
-            Spacer()
+        TourColumn(top: below, bottom: above) {
             Text("You\u{2019}ll need a Hermes gateway running on a computer you own.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             GlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {
                     Button(action: onConnect) {
                         Text("Connect your gateway").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glassProminent)
+                    .accessibilityShowsLargeContentViewer()
                     .accessibilityHint("Opens the form for your gateway\u{2019}s address.")
                     .accessibilityIdentifier("onboarding.addGateway")
                     if let onDemo {
@@ -706,25 +767,65 @@ private struct TourConnectBeat: View {
                             Text("Try a demo").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                         }
                         .buttonStyle(.glass)
+                        .accessibilityShowsLargeContentViewer()
                         .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                         .accessibilityIdentifier("onboarding.tryDemo")
                         Text("Demo bots stay on this device and go away when you connect.")
                             .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
             .frame(maxWidth: 380)
             Link("New to Hermes? Start here.", destination: URL(string: "https://vory.dev/setup")!)
                 .font(.subheadline)
+                // A finger's height to hit: the line alone was 18 points.
+                .frame(minHeight: 44)
+                .contentShape(.rect)
                 .accessibilityLabel("New to Hermes? Start here. Opens the setup guide in Safari.")
                 .accessibilityIdentifier("onboarding.setupHelp")
-            Spacer().frame(height: 40)
         }
         .padding(.horizontal, 28)
     }
 }
 
 // MARK: Pieces
+
+/// A page's own words and buttons, at the foot of the room between Vory's bubble and the tour's controls (the dots), in
+/// the tour's space; where they need more than that room (the largest text on a small phone) they scroll in it rather
+/// than run under either.
+private struct TourColumn<Content: View>: View {
+    var top: CGFloat
+    var bottom: CGFloat
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        GeometryReader { geo in
+            // The scroll's edges sit a little outside the room, so the glass buttons' rims and shadows aren't cut; a
+            // row scrolled up under the top fades out.
+            let edge: CGFloat = 10
+            let from = top + 12 - edge, to = (bottom > 0 ? bottom - 12 : geo.size.height - 64) + edge
+            let room = max(0, to - from)
+            ScrollView(.vertical) {
+                VStack(spacing: 14) { content }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, edge)
+                    .frame(minHeight: room, alignment: .bottom)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicators(.hidden)
+            .defaultScrollAnchor(.bottom)
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: edge)
+                    Rectangle()
+                }
+            }
+            .frame(width: geo.size.width, height: room)
+            .position(x: geo.size.width / 2, y: from + room / 2)
+        }
+    }
+}
 
 /// The page dots: where you are, a tap on one to go there; one element for VoiceOver, swiped up or down to move.
 private struct TourDots: View {
@@ -733,13 +834,16 @@ private struct TourDots: View {
     var go: (TourBeat) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        // Each dot in a slot a finger can take, the gap between dots inside the slots, so they stand where they did; the
+        // dots alone were 7 points, and the row too short for the audit's hit region.
+        HStack(spacing: 0) {
             ForEach(TourBeat.allCases) { beat in
                 Circle().fill(Color.primary.opacity(beat == page ? 0.85 : 0.22)).frame(width: 7, height: 7)
+                    .frame(width: 15, height: 28)
+                    .contentShape(.rect)
                     .onTapGesture { go(beat) }
             }
         }
-        .padding(.vertical, 6)
         .accessibilityElement()
         .accessibilityLabel("Page \(page.rawValue + 1) of \(count)")
         .accessibilityAdjustableAction { direction in
