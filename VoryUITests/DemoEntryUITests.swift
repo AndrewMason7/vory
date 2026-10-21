@@ -74,8 +74,12 @@ final class DemoEntryUITests: XCTestCase {
         XCTAssertTrue(text("Vory demo").firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(text("Unlock Vory's full potential").firstMatch.exists, "Settings offered the Companion for the demo")
 
+        // Status is in the App section, below the fold: a row of a lazy list is only there once scrolled to.
         let status = app.buttons["settings.row.status"].firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 10), "no Status in Settings")
+        for _ in 0..<8 where !(status.exists && status.isHittable && status.frame.maxY < app.windows.firstMatch.frame.maxY - 120) {
+            app.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(status.waitForExistence(timeout: 5), "no Status in Settings")
         status.tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Gateway:'")).firstMatch.waitForExistence(timeout: 10), "Status did not open")
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Sign-in'")).firstMatch.exists, "Status offered a sign-in for the demo")
