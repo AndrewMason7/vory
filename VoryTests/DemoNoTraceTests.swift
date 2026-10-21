@@ -312,6 +312,18 @@ import Testing
         #expect(prefs.projectFilter == "mine" && prefs.collapsedRaw == "a" && prefs.archivedRoomsRaw == "r1", "leaving the demo did not bring the person's own back")
     }
 
+    #if os(iOS)
+    /// Nothing of a demo chat is kept as the app leaves the screen (#494): the record of the chat to reopen held the demo's
+    /// chat under its gateway's id until the next launch. A gateway's chat is kept as before.
+    @Test func theChatOnScreenIsNotKeptForTheDemo() throws {
+        let store = ConnectionStore(defaults: UserDefaults(suiteName: "dev.vory.tests.demotrace." + UUID().uuidString)!, connections: [])
+        let demo = GatewayRuntime(connection: .demo, store: store, transport: .demo(DemoGateway(pace: .quick)))
+        #expect(AppRestore.kept(id: DemoContent.botChatID, chat: nil, runtime: demo) == nil, "a demo chat was kept to reopen")
+        let own = GatewayRuntime(connection: GatewayConnection(name: "own", gateway: try GatewayURL.normalize("https://127.0.0.1:1"), authMode: .sessionToken), store: store)
+        #expect(AppRestore.kept(id: "20261013_101500_abc123", chat: nil, runtime: own)?.storedID == "20261013_101500_abc123")
+    }
+    #endif
+
     @Test func homesVisitMarkIsNeverTheDemos() {
         #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
         #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)
