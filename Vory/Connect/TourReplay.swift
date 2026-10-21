@@ -77,6 +77,11 @@ enum AppFingerprint {
         out.append("gateways=\(hash(gateways))")
         out.append("inUse=\(model.store.activeConnectionID?.uuidString ?? "none")")
         out.append("demo=\(model.isInDemo)")
+        // Every setting keyed by the demo's connection: once the demo is left there must be none, whatever a run before
+        // left (#493: its chat list's cache stayed, and a before-and-after match didn't show it).
+        let demoID = GatewayConnection.demoID.uuidString
+        let demoKeys = UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.contains(demoID) }.sorted()
+        out.append("demoKeys=\(demoKeys.isEmpty ? "none" : demoKeys.joined(separator: ","))")
         let chats = (model.runtime?.chats ?? []).compactMap(\.storedID).sorted().joined(separator: ",")
         out.append("chats=\(hash(chats))")
         // The looks by bot, in a fixed order (a dictionary's own order changes from one read to the next).

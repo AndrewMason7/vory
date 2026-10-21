@@ -187,6 +187,8 @@ final class TourReplayUITests: XCTestCase {
         XCTAssertTrue(leave.waitForExistence(timeout: 10), "no Leave demo on Settings")
         leave.tap(); pause(3)
         checkUnchanged(before, "Try a demo then Leave demo")
+        // Nothing of the demo's is left under its connection, whatever was there before the replay (#493).
+        XCTAssertEqual(fingerprint()["demoKeys"], "none", "a setting of the demo's survived Leave demo")
     }
 
     /// With the demo already on, the replay's last beat does not offer it again.
