@@ -75,22 +75,28 @@ final class PushedPageBackUITests: XCTestCase {
         pause(2)
         walkTheTree()
         shot("pushed-back-env")
-        // #481: in a phone-style window (the tab bar along the bottom; not the closed Duo's strip, which this fixes) the
-        // walk also brings the system's own Back, under the bar's. Strict: once #481 is fixed, this flags itself.
-        guard !tabBarIsVertical else { checkOneBack("page.back", "API Keys"); return }
-        let options = XCTExpectedFailure.Options()
-        options.issueMatcher = { $0.compactDescription.contains("the system's own Back is there too") || $0.compactDescription.contains("another Back outside the bar's") }
-        XCTExpectFailure("#481: the iPhone's walk brings the system's Back under the bar's", options: options) {
-            checkOneBack("page.back", "API Keys")
-        }
+        checkOneBack("page.back", "API Keys")
     }
 
-    /// The tab bar stands on a side edge, where the system's bars stand in a strip (the closed Duo): its tabs share a column.
-    private var tabBarIsVertical: Bool {
-        let tabs = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'tab.'"))
-            .allElementsBoundByIndex.filter { $0.exists }.map { $0.frame }
-        guard let first = tabs.first, tabs.count > 1 else { return false }
-        return tabs.allSatisfy { abs($0.midX - first.midX) < 4 }
+    /// The pages with a search field always shown (Config, API Keys, Skills, Sessions): SwiftUI put the page's own Back
+    /// back when something walked the tree, under the bar's, for VoiceOver to find (#481). The pages without one never
+    /// had it.
+    func testPagesWithASearchFieldHaveOneBackAfterAWalk() throws {
+        for id in ["config", "env", "skills", "sessions"] {
+            try launch(tab: "settings")
+            if app.windows.firstMatch.frame.width > 700 { throw XCTSkip("the bar is the narrow window's") }
+            XCTAssertTrue(any("settings.row.profile").waitForExistence(timeout: 30), "no Settings rows")
+            let row = any("settings.row.\(id)")
+            let limit = app.windows.firstMatch.frame.maxY - 150
+            for _ in 0..<14 where !(row.exists && row.isHittable && row.frame.maxY < limit) { app.swipeUp(velocity: .slow); pause(0.8) }
+            guard row.exists && row.isHittable else { XCTFail("no \(id) row"); continue }
+            row.tap()
+            guard any("page.back").waitForExistence(timeout: 10) else { XCTFail("\(id): no Back"); continue }
+            pause(2)
+            walkTheTree()
+            shot("pushed-back-search-\(id)")
+            checkOneBack("page.back", id)
+        }
     }
 
     func testAChatHasOneBackAfterAWalk() throws {
@@ -138,6 +144,29 @@ final class PushedPageBackUITests: XCTestCase {
         XCTAssertFalse(any("chat.back").exists, "a chat: the swipe did not go back")
         XCTAssertTrue(chat.waitForExistence(timeout: 5), "a chat: not back on the list")
         shot("pushed-back-swipe-chat")
+    }
+
+    /// The pages with a search field always shown hide their Back SwiftUI's way (#481), which in a navigation stack can
+    /// switch off the swipe back: each still goes back on a swipe let go past the middle, and stays on one let go early.
+    func testTheSearchPagesStillSwipeBack() throws {
+        for id in ["config", "env", "skills", "sessions"] {
+            try launch(tab: "settings")
+            if app.windows.firstMatch.frame.width > 700 { throw XCTSkip("the bar is the narrow window's") }
+            XCTAssertTrue(any("settings.row.profile").waitForExistence(timeout: 30), "no Settings rows")
+            let row = any("settings.row.\(id)")
+            let limit = app.windows.firstMatch.frame.maxY - 150
+            for _ in 0..<14 where !(row.exists && row.isHittable && row.frame.maxY < limit) { app.swipeUp(velocity: .slow); pause(0.8) }
+            guard row.exists && row.isHittable else { XCTFail("no \(id) row"); continue }
+            row.tap()
+            guard any("page.back").waitForExistence(timeout: 10) else { XCTFail("\(id): no Back"); continue }
+            pause(1.5)
+            for (dx, back) in [(0.2, false), (0.8, true)] {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+                    .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: 0.5)), withVelocity: .slow, thenHoldForDuration: 0.3)
+                pause(1.5)
+                XCTAssertEqual(!any("page.back").exists, back, "\(id): a swipe let go at \(Int(dx * 100))% \(back ? "did not go back" : "went back")")
+            }
+        }
     }
 
     /// Where the bar gives the system's Back back: on a wide window (the iPad's two columns) a pushed page has exactly
