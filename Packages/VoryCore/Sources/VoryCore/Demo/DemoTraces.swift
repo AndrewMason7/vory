@@ -10,9 +10,18 @@ public enum DemoTraces {
     /// At launch, unless the demo is already the gateway in use (a test build's `-vory-demo`): nothing is taken from
     /// under a demo that runs. Leaving the demo sweeps in any case (`sweep`).
     @MainActor public static func sweepAtLaunch(store: ConnectionStore, defaults: UserDefaults = .standard,
-                                                caches: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first) {
+                                                caches: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+                                                temporary: URL = FileManager.default.temporaryDirectory, now: Date = Date()) {
         guard store.demo == nil else { return }
         sweep(defaults: defaults, caches: caches)
+        // A demo's scratch folder its runtime never stopped to take away (#494: the app ended in the demo). Not one
+        // written in the last hour: a test build's temporary folder can be another copy's too, its demo running.
+        let fm = FileManager.default
+        for name in (try? fm.contentsOfDirectory(atPath: temporary.path)) ?? [] where name.hasPrefix("vory-demo-") {
+            let folder = temporary.appending(path: name, directoryHint: .isDirectory)
+            let written = (try? fm.attributesOfItem(atPath: folder.path))?[.modificationDate] as? Date ?? .distantPast
+            if now.timeIntervalSince(written) > 3600 { try? fm.removeItem(at: folder) }
+        }
     }
 
     public static func sweep(defaults: UserDefaults = .standard,

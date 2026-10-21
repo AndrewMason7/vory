@@ -229,6 +229,32 @@ import Testing
         #expect(defaults.object(forKey: demoKey) == nil && !FileManager.default.fileExists(atPath: folder.path))
     }
 
+    /// A demo's scratch folder left by an app that ended in the demo is taken away at the next launch (#494), unless a
+    /// demo runs, and not one written in the last hour (a test build's temporary folder can be another copy's).
+    @Test func theLaunchSweepTakesAStaleDemoFolder() throws {
+        let suite = "dev.vory.tests.demotrace." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let temporary = FileManager.default.temporaryDirectory.appending(path: suite, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let stale = temporary.appending(path: "vory-demo-stale", directoryHint: .isDirectory)
+        let fresh = temporary.appending(path: "vory-demo-fresh", directoryHint: .isDirectory)
+        let other = temporary.appending(path: "vory-voice", directoryHint: .isDirectory)
+        for f in [stale, fresh, other] { try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true) }
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: stale.path)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: other.path)
+
+        let running = ConnectionStore(defaults: defaults, connections: [])
+        running.activeConnectionID = GatewayConnection.demoID
+        DemoTraces.sweepAtLaunch(store: running, defaults: defaults, caches: nil, temporary: temporary)
+        #expect(FileManager.default.fileExists(atPath: stale.path), "the sweep took a folder while a demo ran")
+
+        DemoTraces.sweepAtLaunch(store: ConnectionStore(defaults: defaults, connections: []), defaults: defaults, caches: nil, temporary: temporary)
+        #expect(!FileManager.default.fileExists(atPath: stale.path), "a stale demo folder stayed")
+        #expect(FileManager.default.fileExists(atPath: fresh.path), "a demo folder written in the last hour was taken")
+        #expect(FileManager.default.fileExists(atPath: other.path), "a folder not the demo's was taken")
+    }
+
     /// Home's month reaches the widgets' snapshot from a gateway only, never from the demo (#493): the demo's numbers
     /// stayed on the saved gateway's widget after leaving it.
     @Test func homesNumbersReachTheWidgetsFromAGatewayOnly() async throws {
