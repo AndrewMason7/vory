@@ -62,7 +62,7 @@ final class WatchChatFeed {
     @ObservationIgnored private var liveRetryAt = Date.distantPast
     @ObservationIgnored private var wakes: AsyncStream<WatchFeedTrigger>.Continuation?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
-    /// The wake that tries the live path again after an attach failed (`WatchFeedRules.liveRetryWake`).
+    /// The wake that tries the live path again with the socket up (`WatchFeedRules.liveRetryWake`).
     @ObservationIgnored private var liveRetryTask: Task<Void, Never>?
     @ObservationIgnored private var followTask: Task<Void, Never>?
     @ObservationIgnored private var liveDebounce: Task<Void, Never>?
@@ -133,8 +133,11 @@ final class WatchChatFeed {
         case .live:
             if let c = chat { syncLive(c) }
         case .throughPhone, .offline:
-            await refreshThroughPhone(rt)
-            observeSocket()
+            // Off the socket, its coming back is a trigger too, watched from before the read (`WatchFeedSocketWatch`).
+            let model = model
+            await WatchFeedSocketWatch.across({ model.socketUsable }, read: { await refreshThroughPhone(rt) }) { [weak self] in
+                Task { @MainActor in self?.wake(.liveChanged) }
+            }
         }
         schedulePoll()
         scheduleFollow()
@@ -152,11 +155,11 @@ final class WatchChatFeed {
                 chat = live
                 route = .live
             } else {
-                liveRetryAt = Date().addingTimeInterval(30)
+                liveRetryAt = WatchFeedRules.retryAfterFailedAttach(now: Date())
             }
         }
         if route == .live, let c = chat, c.resumeError != nil, !c.isResuming {
-            liveRetryAt = Date().addingTimeInterval(30)
+            liveRetryAt = WatchFeedRules.retryAfterFailedAttach(now: Date())
             route = .throughPhone
         }
         if route == .live, chat == nil || !model.socketUsable { route = .throughPhone }
@@ -185,13 +188,6 @@ final class WatchChatFeed {
             _ = c.resumeError; _ = c.isResuming; _ = c.banner
             _ = model.socketUsable
         } onChange: { [weak self] in
-            Task { @MainActor in self?.wake(.liveChanged) }
-        }
-    }
-
-    /// Off the socket, its coming back is a trigger too: the live path is tried again.
-    private func observeSocket() {
-        withObservationTracking { _ = model.socketUsable } onChange: { [weak self] in
             Task { @MainActor in self?.wake(.liveChanged) }
         }
     }
@@ -263,8 +259,9 @@ final class WatchChatFeed {
         }
     }
 
-    /// One wake when the live path may be tried again, while the chat is on the phone path only because an attach
-    /// failed and the socket is up (`WatchFeedRules.liveRetryWake`); none on the live path or with the socket down.
+    /// One wake when the live path may be tried again, while the chat is on the phone path with the socket up
+    /// (`WatchFeedRules.liveRetryWake`): when an attach failed, after its wait; otherwise at once. None on the live path
+    /// or with the socket down.
     private func scheduleLiveRetry() {
         guard let wait = WatchFeedRules.liveRetryWake(route: route, socketUsable: model.socketUsable, retryAt: liveRetryAt, now: Date()) else {
             liveRetryTask?.cancel(); liveRetryTask = nil
@@ -337,7 +334,7 @@ final class WatchChatFeed {
                 problem = WatchFeedProblem.from(why)
                 throw WatchFeedSendError(why)
             }
-            liveRetryAt = Date().addingTimeInterval(30)
+            liveRetryAt = WatchFeedRules.retryAfterFailedAttach(now: Date())
             route = .throughPhone
             gate.reseed()
         }

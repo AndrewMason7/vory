@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import VoryCore
 
@@ -69,9 +70,59 @@ import Testing
         // On the live path, or offline: nothing to retry.
         #expect(WatchFeedRules.liveRetryWake(route: .live, socketUsable: true, retryAt: later, now: now) == nil)
         #expect(WatchFeedRules.liveRetryWake(route: .offline, socketUsable: true, retryAt: later, now: now) == nil)
-        // No retry pending (none failed, or it is due and the read about to happen tries it).
-        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: .distantPast, now: now) == nil)
-        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: now, now: now) == nil)
+    }
+
+    /// On the phone path with the socket up and no retry pending, the live path is tried at once. The socket had opened
+    /// while the phone path's read was out: its change went by unseen, and the Watch stayed on the phone path with the
+    /// socket up for as long as the chat was open (a test that broke the socket and let it come back, 2026-10-20).
+    @Test func thePhonePathWithTheSocketUpAndNoRetryPendingTriesTheLivePathAtOnce() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: .distantPast, now: now) == 0)
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: now, now: now) == 0)
+        // A retry pending still waits for it.
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: now.addingTimeInterval(12), now: now) == 12)
+        // The socket down: no wake, its coming back wakes the chat.
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: false, retryAt: .distantPast, now: now) == nil)
+    }
+
+    /// The try at once can't become a loop: one that fails waits its 30 seconds, one that works leaves the phone path.
+    @Test func aTryAtOnceThatFailsWaitsItsThirtySecondsAndOneThatWorksNeedsNoWake() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let retryAt = WatchFeedRules.retryAfterFailedAttach(now: now)
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: retryAt, now: now) == 30)
+        #expect(WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: true, retryAt: retryAt, now: now.addingTimeInterval(0.5)) == 29.5)
+        #expect(WatchFeedRules.liveRetryWake(route: .live, socketUsable: true, retryAt: .distantPast, now: now) == nil)
+    }
+
+    /// Over a run of reads a second apart, every try at once failing: one wake at once when the socket comes up, then
+    /// the 30-second waits; the socket going down and up again within a wait brings no second one.
+    @Test func aSocketComingUpGivesAtMostOneWakeAtOnce() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var retryAt = Date.distantPast, atOnce: [Int] = []
+        for (second, up) in [false, false, true, true, true, false, true, true].enumerated() {
+            let now = start.addingTimeInterval(TimeInterval(second))
+            guard let wait = WatchFeedRules.liveRetryWake(route: .throughPhone, socketUsable: up, retryAt: retryAt, now: now) else { continue }
+            if wait == 0 { atOnce.append(second); retryAt = WatchFeedRules.retryAfterFailedAttach(now: now) }
+        }
+        #expect(atOnce == [2])
+    }
+
+    /// The socket coming up while the phone path's read is out wakes the chat, once (`WatchFeedSocketWatch`): watched
+    /// only after the read, as it was, that change went by unseen and the chat stayed on the phone path.
+    @MainActor @Test func aSocketThatComesUpWhileThePhoneReadIsOutStillWakesTheChatOnce() async {
+        let socket = FakeSocket(), wakes = Count()
+        await WatchFeedSocketWatch.across({ socket.up }, read: {
+            await Task.yield()
+            socket.up = true
+            await Task.yield()
+            socket.up = false
+            socket.up = true
+        }, changed: { wakes.add() })
+        #expect(wakes.value == 1)
+        // Nothing changed during the read: no wake.
+        let still = Count()
+        await WatchFeedSocketWatch.across({ socket.up }, read: { await Task.yield() }, changed: { still.add() })
+        #expect(still.value == 0)
     }
 
     @Test func aFirstReadAnnouncesNothing() {
@@ -191,4 +242,15 @@ import Testing
         #expect(question.clarify?.question == "Which branch?")
         #expect(WatchFeedRules.cards(from: [["method": "approval"]]).isEmpty)
     }
+}
+
+/// The Watch's socket, for `WatchFeedSocketWatch`.
+@MainActor @Observable private final class FakeSocket { var up = false }
+
+/// A wake count the watch's `changed` can add to from anywhere.
+private final class Count: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func add() { lock.lock(); n += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
 }

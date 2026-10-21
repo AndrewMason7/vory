@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// How the Watch reaches a chat: its own socket, the iPhone (HTTP relayed, chat ops answered by the phone), or neither.
 public enum WatchFeedRoute: String, Sendable, Equatable {
@@ -79,14 +80,23 @@ public enum WatchFeedRules {
         route == .throughPhone && working ? workingPollSeconds : nil
     }
 
-    /// Seconds until the live path is tried again after an attach failed (`retryAt`), or nil for no wake. Only on the
-    /// phone path with the socket up: nothing else wakes a chat there at rest (no poll, and the socket, already open,
-    /// no longer changes), so it stayed on the phone path, every read waking the iPhone, until something happened to
-    /// wake it. In any other state nil: the live path needs no retry, and a socket coming back wakes the chat itself.
+    /// Seconds until the live path is tried again, or nil for no wake. Only on the phone path with the socket up: nothing
+    /// else wakes a chat there at rest (no poll, and the socket, already open, no longer changes), so it stayed on the
+    /// phone path, every read waking the iPhone, until something happened to wake it. After an attach failed, at
+    /// `retryAt`; with no retry pending, at once: the socket opened after the read chose the phone path, and its change
+    /// went by unseen (it opened while the read was out, and the chat stayed on the phone path with the socket up). In
+    /// any other state nil: the live path needs no retry, and a socket coming back wakes the chat itself.
     public static func liveRetryWake(route: WatchFeedRoute, socketUsable: Bool, retryAt: Date, now: Date) -> TimeInterval? {
-        guard route == .throughPhone, socketUsable, retryAt > now else { return nil }
-        return retryAt.timeIntervalSince(now)
+        guard route == .throughPhone, socketUsable else { return nil }
+        return max(0, retryAt.timeIntervalSince(now))
     }
+
+    /// How long a chat whose live attach failed waits before the socket is tried again, instead of flipping between the
+    /// two paths.
+    public static let liveRetrySeconds: TimeInterval = 30
+
+    /// When the live path is tried again after an attach failed at `now`.
+    public static func retryAfterFailedAttach(now: Date) -> Date { now.addingTimeInterval(liveRetrySeconds) }
 
     /// Whether a trigger reads the chat again. The phone path reads on every one. The live path has the socket, so only
     /// opening, coming forward (a socket may have dropped meanwhile) and its own changes count. Offline, anything that
@@ -191,4 +201,15 @@ public struct WatchFollow: Sendable, Equatable {
     public mutating func renew(now: Date = Date()) { until = now.addingTimeInterval(WatchFeedRules.followSeconds) }
     public mutating func end() { until = nil }
     public func isActive(now: Date = Date()) -> Bool { until.map { now < $0 } ?? false }
+}
+
+/// The phone path's read with the Watch's socket watched across it (#387): the socket changing while the read is out
+/// wakes the chat as much as a change after it. Watched only after the read, a socket that opened meanwhile went by
+/// unseen, and the chat stayed on the phone path with the socket up.
+public enum WatchFeedSocketWatch {
+    /// Watches `isUp`, then runs `read`. `changed` is called once, on the first change from the moment of the call.
+    @MainActor public static func across(_ isUp: () -> Bool, read: () async -> Void, changed: @escaping @Sendable () -> Void) async {
+        withObservationTracking { _ = isUp() } onChange: { changed() }
+        await read()
+    }
 }
