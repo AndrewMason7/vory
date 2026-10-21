@@ -290,6 +290,28 @@ import Testing
         #expect(UserDefaults.standard.string(forKey: key) == "work")
     }
 
+    /// The chat list's filter by project, folded projects and archived rooms are the demo's while it runs (#494): kept,
+    /// they left the person's list filtered to a project they don't have. Leaving it brings the person's own back.
+    @Test func theChatListsProjectFilterIsTheDemosForItsLife() {
+        let prefs = ChatListPrefs.shared
+        let keys = ["chats.filter.project", "chats.byProject.collapsed", "chats.archivedRooms"]
+        let before = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer {
+            prefs.inDemo = false
+            for (k, v) in zip(keys, before) { if let v { UserDefaults.standard.set(v, forKey: k) } else { UserDefaults.standard.removeObject(forKey: k) } }
+        }
+        prefs.inDemo = false
+        prefs.projectFilter = "mine"; prefs.collapsedRaw = "a"; prefs.archivedRoomsRaw = "r1"
+        prefs.inDemo = true
+        #expect(prefs.projectFilter == "" && prefs.collapsedRaw == "" && prefs.archivedRoomsRaw == "", "the demo's list took the person's filter")
+        prefs.projectFilter = "proj-lake"; prefs.collapsedRaw = "proj-lab"; prefs.archivedRoomsRaw = "room-weekend"
+        #expect(UserDefaults.standard.string(forKey: "chats.filter.project") == "mine", "the demo's filter was kept")
+        #expect(UserDefaults.standard.string(forKey: "chats.byProject.collapsed") == "a")
+        #expect(UserDefaults.standard.string(forKey: "chats.archivedRooms") == "r1")
+        prefs.inDemo = false
+        #expect(prefs.projectFilter == "mine" && prefs.collapsedRaw == "a" && prefs.archivedRoomsRaw == "r1", "leaving the demo did not bring the person's own back")
+    }
+
     @Test func homesVisitMarkIsNeverTheDemos() {
         #expect(HomeVisit.mark(kept: 100, visitStart: 200, inDemo: true) == nil)
         #expect(HomeVisit.mark(kept: 0, visitStart: 200, inDemo: true) == nil)
