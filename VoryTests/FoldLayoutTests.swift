@@ -141,9 +141,9 @@ import Testing
         let folding = 2
         #endif
         let side = CGSize(width: 951, height: 669)
-        let flatOnItsSide = ReservedRegions(foldable: ReservedRegions.foldsUp([CGRect(x: 456, y: 0, width: 40, height: 669)], in: side))
+        let flatOnItsSide = ReservedRegions(upFold: ReservedRegions.upFold([CGRect(x: 456, y: 0, width: 40, height: 669)], in: side))
         #expect(HomeTiles.columns(regions: flatOnItsSide) == folding)
-        var bookOpen = book; bookOpen.foldable = true
+        var bookOpen = book; bookOpen.upFold = book.divisions.first
         #expect(HomeTiles.columns(regions: bookOpen) == folding)
         // An active fold up the window counts on its own too (a flat Duo that reports no division).
         #expect(HomeTiles.columns(regions: book) == folding)
@@ -153,15 +153,37 @@ import Testing
         // The open Duo upright, flat (an inactive division across) or half open like a laptop: the fold runs between rows.
         let upright = CGSize(width: 669, height: 951)
         let across = [CGRect(x: 0, y: 456, width: 669, height: 40)]
-        #expect(!ReservedRegions.foldsUp(across, in: upright))
-        #expect(HomeTiles.columns(regions: ReservedRegions(foldable: ReservedRegions.foldsUp(across, in: upright))) == 3)
-        var laptopOpen = laptop; laptopOpen.foldable = ReservedRegions.foldsUp(laptop.divisions, in: upright)
+        #expect(ReservedRegions.upFold(across, in: upright) == nil)
+        #expect(HomeTiles.columns(regions: ReservedRegions(upFold: ReservedRegions.upFold(across, in: upright))) == 3)
+        var laptopOpen = laptop; laptopOpen.upFold = ReservedRegions.upFold(laptop.divisions, in: upright)
         #expect(HomeTiles.columns(regions: laptopOpen) == 3)
     }
 
     @Test func aDivisionOutsideTheWindowDoesNotCount() {
         // The closed Duo, should it report the inner display's fold: outside its 466 x 678 window.
-        #expect(!ReservedRegions.foldsUp([CGRect(x: 700, y: 0, width: 20, height: 951)], in: CGSize(width: 466, height: 678)))
+        #expect(ReservedRegions.upFold([CGRect(x: 700, y: 0, width: 20, height: 951)], in: CGSize(width: 466, height: 678)) == nil)
+    }
+
+    @Test func homesTwoColumnsStandEitherSideOfTheFold() {
+        // The book pose's Home: the grid at x 129 to 737 (centred in the safe area, off the window's middle); the
+        // fold at 456 to 496 is the gap: the leading column ends at 456, the trailing one starts at 496.
+        let grid = CGRect(x: 129, y: 200, width: 608, height: 300)
+        let s = HomeTiles.split(frame: grid, fold: CGRect(x: 456, y: 0, width: 40, height: 669), minimum: 100)
+        #expect(s?.leading == 327)
+        #expect(s?.gap == 40)
+        #expect(s?.trailing == 241)
+        #expect(grid.minX + (s?.leading ?? 0) == 456)
+        #expect(grid.minX + (s?.leading ?? 0) + (s?.gap ?? 0) == 496)
+    }
+
+    @Test func noFoldThroughTheGridKeepsEvenColumns() {
+        let grid = CGRect(x: 129, y: 200, width: 608, height: 300)
+        #expect(HomeTiles.split(frame: grid, fold: nil, minimum: 100) == nil)
+        // A fold outside the grid, or one that would leave a column under the minimum.
+        #expect(HomeTiles.split(frame: grid, fold: CGRect(x: 800, y: 0, width: 40, height: 669), minimum: 100) == nil)
+        #expect(HomeTiles.split(frame: grid, fold: CGRect(x: 180, y: 0, width: 40, height: 669), minimum: 100) == nil)
+        // Not laid out yet.
+        #expect(HomeTiles.split(frame: .zero, fold: CGRect(x: 456, y: 0, width: 40, height: 669), minimum: 100) == nil)
     }
 
     @Test func homesTilesStayThreeToARowOnAnIPad() {

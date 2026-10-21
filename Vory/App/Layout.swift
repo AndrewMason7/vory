@@ -145,17 +145,20 @@ enum FoldAvoidance {
 struct ReservedRegions: Equatable {
     var divisions: [CGRect] = []
     var occlusions: [CGRect] = []
-    /// The window can fold up its middle: it reports a division running up the window, active
-    /// or not (the open Duo on its side, flat or half open like a book). Layouts that must not
-    /// reflow at every hinge move key on this, not on the fold being there (`foldsUp`).
-    var foldable = false
+    /// The division running up the window, active or not (window space): the open Duo on its
+    /// side, flat or half open like a book. Layouts that must not reflow at every hinge move key
+    /// on this, not on the fold being there (`upFold(_:in:)`).
+    var upFold: CGRect? = nil
+    /// The window can fold up its middle.
+    var foldable: Bool { upFold != nil }
 
-    /// Whether any of `divisions` (active or not, window space) runs up a window of `size` and
-    /// crosses it: a fold across the window (the laptop pose, the open Duo upright) runs between
-    /// rows and does not count, nor does one outside the window (the closed Duo, if it reports one).
-    static func foldsUp(_ divisions: [CGRect], in size: CGSize) -> Bool {
+    /// The first of `divisions` (active or not, the window's own space) that runs up a window of
+    /// `size` and crosses it: a fold across the window (the laptop pose, the open Duo upright)
+    /// runs between rows and does not count, nor does one outside the window (the closed Duo
+    /// reports none, the probe found).
+    static func upFold(_ divisions: [CGRect], in size: CGSize) -> CGRect? {
         let window = CGRect(origin: .zero, size: size)
-        return divisions.contains { $0.height >= $0.width && $0.intersects(window) }
+        return divisions.first { $0.height >= $0.width && $0.intersects(window) }
     }
     /// Room we keep beyond a region's frame for interactive content. 0: the Duo reports each region with Apple's
     /// margin already in its frame (the probe, 2026-10-20: the fold a 40 pt band, 20 pt either side of the hinge
@@ -220,6 +223,28 @@ enum HomeTiles {
         regions.foldable || regions.verticalFold != nil ? 2 : 3
         #endif
     }
+
+    /// The grid's columns for a grid standing at `frame` (window space). Two to a row with a fold up the window
+    /// (active or not) crossing the grid: the leading column ends at the fold's leading edge and the trailing one
+    /// starts at its far edge, so the fold is the gap between them (Home's column is centred in the safe area, which
+    /// a trailing strip moves off the window's middle and the fold). Even columns otherwise, or where a column would
+    /// be under `minimum`.
+    static func items(regions: ReservedRegions, frame: CGRect, spacing: CGFloat, minimum: CGFloat = 100) -> [GridItem] {
+        let n = columns(regions: regions)
+        if n == 2, let s = split(frame: frame, fold: regions.upFold ?? regions.verticalFold, minimum: minimum) {
+            return [GridItem(.fixed(s.leading), spacing: s.gap), GridItem(.fixed(s.trailing))]
+        }
+        return EvenColumns.items(n, spacing: spacing)
+    }
+
+    /// The two columns' widths and the gap between them with `fold` as the gap; nil where the fold doesn't cross the
+    /// grid or a column would be under `minimum`.
+    static func split(frame: CGRect, fold: CGRect?, minimum: CGFloat) -> (leading: CGFloat, gap: CGFloat, trailing: CGFloat)? {
+        guard let fold, frame.width > 0, fold.minX > frame.minX, fold.maxX < frame.maxX else { return nil }
+        let leading = fold.minX - frame.minX, trailing = frame.maxX - fold.maxX
+        guard leading >= minimum, trailing >= minimum else { return nil }
+        return (leading, fold.width, trailing)
+    }
 }
 
 extension EnvironmentValues {
@@ -253,7 +278,8 @@ struct ReservedRegionsReader<Content: View>: View {
                 let regions = ReservedRegions(
                     divisions: proxy.reservedRegions(kind: .division).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
                     occlusions: proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
-                    foldable: ReservedRegions.foldsUp(proxy.reservedRegions(kind: .division, options: .includeInactive).map(\.frame), in: proxy.size))
+                    upFold: ReservedRegions.upFold(proxy.reservedRegions(kind: .division, options: .includeInactive).map(\.frame), in: proxy.size)?
+                        .offsetBy(dx: origin.x, dy: origin.y))
                 content().environment(\.reservedRegions, regions)
             }
         }

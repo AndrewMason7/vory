@@ -43,8 +43,10 @@ struct DashboardView: View {
     @State private var rangeMoved = false
     /// The range moves under the title at the accessibility sizes.
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// A window that can fold: the tiles go two to a row (`HomeTiles`).
+    /// A window that can fold: the tiles go two to a row, either side of the fold (`HomeTiles`).
     @Environment(\.reservedRegions) private var regions
+    /// The tiles' grid in the window, for the fold's place in it.
+    @State private var tilesFrame = CGRect.zero
     /// The gateway the last finished load ran against (see `shouldLoad`).
     @State private var loadedConnection: UUID?
 
@@ -297,7 +299,7 @@ struct DashboardView: View {
             // Three to a row on a phone, an iPad and the Mac: six tiles fill two rows that way,
             // where four left a short second row on the Mac. Two to a row on a window that can
             // fold, so a fold up the middle falls between the tiles (`HomeTiles`, Duo stage 2).
-            LazyVGrid(columns: EvenColumns.items(HomeTiles.columns(regions: regions), spacing: 8), spacing: 8) {
+            LazyVGrid(columns: HomeTiles.items(regions: regions, frame: tilesFrame, spacing: 8), spacing: 8) {
                 tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
                 tile("Messages", Format.count(messages))
                 tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")
@@ -305,6 +307,16 @@ struct DashboardView: View {
                 tile("Peak hour", peakHour ?? "–")
                 tile("Top model", favoriteModel ?? "–")
             }
+            // The grid's full width, whatever its columns add up to: the frame the fold's place is read against
+            // doesn't move with the columns it decides.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(iOS)
+            // Its span across the window only: Home scrolls, and its height and place down the page are no business
+            // of the columns (a full frame changed on every frame of a scroll and re-ran the whole page).
+            .onGeometryChange(for: CGRect.self) { g in
+                let f = g.frame(in: .global); return CGRect(x: f.minX, y: 0, width: f.width, height: 0)
+            } action: { tilesFrame = $0 }
+            #endif
             if full {
                 ActivityGrid(daily: usage?.daily ?? [], sessions: sessions, weeks: 13)
                     .contentShape(.rect)
