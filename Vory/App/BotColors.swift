@@ -250,7 +250,7 @@ private struct StillBlink: ViewModifier {
 @MainActor
 enum BotLooksMirror {
     static func mirror() {
-        guard !DemoLooks.isOn else { return }
+        guard !DemoLooks.isOn else { owedAfterDemo = true; return }
         // The all-bots glass setting is baked in here, for every profile the gateway knows, so
         // the extensions (which only read this mirror) draw the same bot as the app.
         var avatars = BotAvatarStore.stored()
@@ -276,6 +276,18 @@ enum BotLooksMirror {
         #endif
         // A look changed (a photo replaced leaves no setting behind to notice): iCloud gets it.
         CloudSync.shared.looksChanged()
+    }
+
+    /// A copy asked for while the demo ran, and so not made (#494): made when the demo ends (`mirrorIfOwed`).
+    private static var owedAfterDemo = false
+
+    /// After the demo, the copy asked for while it ran, if any. A demo that changed none of the person's looks writes
+    /// nothing as it ends: the copy written on every leave was a first write of their default looks (the copy at launch
+    /// holds stored looks only), which #487's replay check saw as a change the demo made.
+    static func mirrorIfOwed() {
+        guard owedAfterDemo else { return }
+        owedAfterDemo = false
+        mirror()
     }
 
     private static func thumbnail(_ image: UIImage) -> Data? {

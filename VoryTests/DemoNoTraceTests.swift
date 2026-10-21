@@ -369,6 +369,34 @@ import Testing
         defer { DemoLooks.set(on: false) }
         BotLooksMirror.mirror()
         #expect(try now() == planted, "the looks were copied while the demo ran")
+        // The copy held back is made when the demo ends (a change of the person's own looks meanwhile, CloudSync's).
+        DemoLooks.set(on: false)
+        BotLooksMirror.mirrorIfOwed()
+        #expect(try now() != planted, "the copy held back during the demo was not made when it ended")
+    }
+
+    /// A demo that changed none of the person's looks writes nothing to the extensions' copy as it ends (#494): written on
+    /// every leave, it was a first write of their default looks, which #487's replay check saw as the demo's doing. The
+    /// copy stays byte for byte as it was, an absent one absent.
+    @Test func leavingADemoThatChangedNoLookWritesNoCopy() throws {
+        let keychainWas = Self.useWorkingKeychain()
+        defer { Keychain.memoryOnly = keychainWas }
+        let before = Keychain.get(account: BotLooks.account)
+        defer { if let before { try? Keychain.set(before, account: BotLooks.account) } else { Keychain.delete(account: BotLooks.account) } }
+        // Nothing owed from an earlier test, then an absent copy.
+        BotLooksMirror.mirrorIfOwed()
+        Keychain.delete(account: BotLooks.account)
+        DemoLooks.set(on: true)
+        DemoLooks.set(on: false)
+        BotLooksMirror.mirrorIfOwed()
+        #expect(Keychain.get(account: BotLooks.account) == nil, "leaving the demo wrote the looks' copy where there was none")
+        // And a copy that was there stays as it was.
+        BotLooks(colors: ["default": "#445566"], avatars: [:]).save()
+        let kept = Keychain.get(account: BotLooks.account)
+        DemoLooks.set(on: true)
+        DemoLooks.set(on: false)
+        BotLooksMirror.mirrorIfOwed()
+        #expect(Keychain.get(account: BotLooks.account) == kept, "leaving the demo rewrote the looks' copy")
     }
 
     /// A default bot chosen in the demo is the demo's, for its life (#494): the setting is the person's own, kept and

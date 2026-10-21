@@ -393,8 +393,8 @@ final class AppModel {
         DemoTraces.sweepKeychain(store: store)
         store.leaveDemo()
         if let c = store.active { await activate(c) }
-        // The extensions' and the Watch's copy of the looks, the person's own again (#494).
-        BotLooksMirror.mirror()
+        // The extensions' and the Watch's copy of the looks, if a change of the person's own was held back meanwhile (#494).
+        BotLooksMirror.mirrorIfOwed()
     }
 
     #if DEBUG
