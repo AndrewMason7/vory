@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 
 /// The demo's notifications (#501, Matt's call): its first message asks for notification permission, once, as nothing
 /// else in the demo would; with permission, its replies and approvals are local notifications, and Leave demo takes them
@@ -46,7 +47,23 @@ final class DemoNotificationsUITests: XCTestCase {
     /// then Leave demo takes its notifications away, delivered and pending.
     func testTheDemoAsksOnItsFirstMessageAndItsApprovalIsALocalNotificationThatLeavingTakesAway() throws {
         try launch(["-vory-delivered-readout"])
+        let readout = any("debug.delivered")
+        // "delivered/pending/most/read": `read` is the app's own read of the notification settings (-1 until it has come).
+        func parts() -> [Int] { (readout.value as? String ?? "").split(separator: "/").compactMap { Int($0) } }
+        func counts() -> (delivered: Int, pending: Int, most: Int) {
+            let p = parts()
+            return p.count == 4 ? (p[0], p[1], p[2]) : (-1, -1, -1)
+        }
         openChat()
+
+        // The app's own read of the settings first: after a boot the system's first read can take more than ten seconds,
+        // and the question waits for it (seen 2026-10-21: the ask fired on the first message, the read had not returned
+        // ten seconds later). Undetermined, as a fresh install is; then the question must come within ten seconds.
+        XCTAssertTrue(readout.waitForExistence(timeout: 10), "no readout")
+        let settled = Date().addingTimeInterval(60)
+        while (parts().count == 4 ? parts()[3] : -1) < 0, Date() < settled { pause(0.5) }
+        XCTAssertEqual(parts().count == 4 ? parts()[3] : -1, Int(UNAuthorizationStatus.notDetermined.rawValue),
+                       "the settings' read never came, or the question was already answered (readout \(readout.value as? String ?? "none"))")
 
         send("hello")
         let alert = springboard.alerts.firstMatch
@@ -67,13 +84,7 @@ final class DemoNotificationsUITests: XCTestCase {
         let shown = banner.waitForExistence(timeout: 20)
         add({ let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); a.name = "away"; a.lifetime = .keepAlways; return a }())
         app.activate()
-        let readout = any("debug.delivered")
         XCTAssertTrue(readout.waitForExistence(timeout: 10), "no readout")
-        // "delivered/pending/most", the demo's own.
-        func counts() -> (delivered: Int, pending: Int, most: Int) {
-            let parts = (readout.value as? String ?? "").split(separator: "/").compactMap { Int($0) }
-            return parts.count == 3 ? (parts[0], parts[1], parts[2]) : (-1, -1, -1)
-        }
         XCTAssertTrue(shown || counts().most >= 1, "the demo's approval posted no local notification while the app was away (readout \(readout.value as? String ?? "none"))")
 
         // Out of the chat (its bar hides the tabs), then Settings, Leave demo.

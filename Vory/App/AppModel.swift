@@ -327,10 +327,7 @@ final class AppModel {
         // is registered anywhere (`PushRegistrar` refuses the demo).
         NotificationCenter.default.addObserver(forName: .hermesMessageSent, object: nil, queue: .main) { [weak self] n in
             let chat = n.object as? ChatSession
-            Task { @MainActor in
-                guard let self, self.isInDemo, chat?.runtime.isEphemeral == true else { return }
-                await self.askForDemoNotifications()
-            }
+            Task { @MainActor in await self?.messageSent(on: chat) }
         }
         #if os(iOS)
         // Started while the phone was locked (a watch message, a notification, the backup task),
@@ -422,11 +419,33 @@ final class AppModel {
         return c
     }
 
-    /// The system's notification question, while it has not been answered (#501): asked on the demo's first message.
+    /// A message sent (#501): the demo's notification question goes with a message on the app's own demo runtime only. A
+    /// tour replayed while the demo is on runs its chat on an ephemeral runtime of its own, and its Send asked the system's
+    /// question in the middle of the tour.
+    func messageSent(on chat: ChatSession?) async {
+        guard isInDemo, let rt = runtime, let chat, chat.runtime === rt else { return }
+        await askForDemoNotifications()
+    }
+
+    /// The system's notification question, while it has not been answered (#501): asked on the demo's first message. One
+    /// at a time: the settings' read can take seconds (after a boot, more than ten), and a second message sent meanwhile
+    /// found them undetermined too and asked again.
     func askForDemoNotifications() async {
+        guard !askingDemoNotifications else { return }
+        askingDemoNotifications = true
+        defer { askingDemoNotifications = false }
+        #if DEBUG
+        if let ask = Self.demoNotificationsAskForTests { await ask(); return }
+        #endif
         await push.refreshAuthorization()
         if push.authorization == .notDetermined { _ = await push.requestAuthorization() }
     }
+    @ObservationIgnored private var askingDemoNotifications = false
+    #if DEBUG
+    /// The tests' stand-in for the system's question (#501), which in the unit-test host would put an alert up that
+    /// nothing answers; it can take its time, as the system's can. On CUT-SWEEP §1.
+    nonisolated(unsafe) static var demoNotificationsAskForTests: (() async -> Void)?
+    #endif
 
     func activateSavedConnection() async {
         guard !Self.isUnitTestHost else { return }

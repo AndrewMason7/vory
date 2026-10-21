@@ -98,7 +98,11 @@ final class PushRegistrar: PushRegistrationSyncing {
 
     func refreshAuthorization() async {
         authorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        authorizationRead = true
     }
+    /// Whether `authorization` has been read from the system yet (until then it is the default, not the answer). The
+    /// first read after a boot can take more than ten seconds.
+    private(set) var authorizationRead = false
 
     func requestAuthorization() async -> Bool {
         do {
@@ -555,7 +559,7 @@ import SwiftUI
 /// away in the demo, and again after Leave demo. On CUT-SWEEP §1.
 struct DemoDeliveredReadout: View {
     static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-delivered-readout")
-    @State private var value = "-1/-1/0"
+    @State private var value = "-1/-1/0/-1"
     @State private var most = 0
 
     var body: some View {
@@ -567,11 +571,15 @@ struct DemoDeliveredReadout: View {
                     (c.userInfo["hermes"] as? [String: Any])?["connection_id"] as? String == GatewayConnection.demoID.uuidString
                 }
                 while !Task.isCancelled {
+                    // The app's own read of the notification settings, -1 until it has come (the UI test waits for it
+                    // before its first message: after a boot the read can outlast the test's wait for the question).
+                    let push = AppModel.shared.push
+                    let read = push.authorizationRead ? push.authorization.rawValue : -1
                     let center = UNUserNotificationCenter.current()
                     let delivered = await center.deliveredNotifications().filter { demo($0.request.content) }.count
                     let pending = await center.pendingNotificationRequests().filter { demo($0.content) }.count
                     most = max(most, delivered)
-                    value = "\(delivered)/\(pending)/\(most)"
+                    value = "\(delivered)/\(pending)/\(most)/\(read)"
                     try? await Task.sleep(for: .seconds(1))
                 }
             }

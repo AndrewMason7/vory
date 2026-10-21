@@ -538,6 +538,53 @@ import Testing
         #expect(toRelay().isEmpty, "with no gateway of the person's own the relay was asked: \(toRelay())")
     }
 
+    /// The demo's notification question goes with a message on the app's own demo runtime only (#501): a
+    /// tour replayed while the demo is on runs its chat on a runtime of its own (`TourChat`), and its Send asked
+    /// the system's question in the middle of the tour. And one question at a time: the settings' read can take seconds
+    /// (after a boot, more than ten), and a second message meanwhile asked again. The chats are the app's own: the demo
+    /// runtime's (`AppModel.runtime`, as the composer's chat is) and the tour's (`TourChat`, as the tour makes it); the
+    /// message goes through the app's observer of a sent message. The question is the tests' stand-in
+    /// (`demoNotificationsAskForTests`, here as slow as the system's after a boot): the real one would put up an alert the
+    /// host never answers. That it is asked once, while unanswered, is the system's part (DemoNotificationsUITests).
+    @Test func onlyTheDemosOwnMessagesAskForNotificationsOneAtATime() async throws {
+        final class Asks { var n = 0 }
+        let model = AppModel.shared, asks = Asks()
+        AppModel.demoNotificationsAskForTests = { asks.n += 1; try? await Task.sleep(for: .milliseconds(800)) }
+        defer { AppModel.demoNotificationsAskForTests = nil }
+        func sent(_ chat: ChatSession, wait: Double = 0.3) async {
+            NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
+            try? await Task.sleep(for: .seconds(wait))
+        }
+
+        await model.startDemo()
+        let demo = try #require(model.runtime)
+        #expect(model.isInDemo && demo.isEphemeral)
+        // The tour, replayed with the demo on: its chat on a runtime of its own. Its Send asks nothing.
+        let tour = TourChat(pace: .quick, appHasGateway: { model.hasConnections }, appInDemo: { model.isInDemo })
+        await tour.start()
+        let tourChat = try #require(tour.chat)
+        #expect(tourChat.runtime !== demo && tourChat.runtime.isEphemeral)
+        await sent(tourChat, wait: 1)
+        #expect(asks.n == 0, "the tour's message asked the demo's notification question")
+        await tour.stop()
+
+        // The demo's own chat: two messages in a row, the second while the first's question is still under way. One ask.
+        let chat = try await demo.newChat()
+        #expect(chat.runtime === demo)
+        await sent(chat, wait: 0.1)
+        await sent(chat, wait: 1.2)
+        #expect(asks.n == 1, "two messages in a row asked \(asks.n) times")
+        // Once it is over, the next message may ask again (the system's own state then says it is answered).
+        await sent(chat, wait: 1.2)
+        #expect(asks.n == 2)
+
+        await model.endDemo()
+        if model.runtime != nil { await model.deactivate() }
+        // Out of the demo, a message asks nothing.
+        await sent(chat, wait: 0.3)
+        #expect(asks.n == 2)
+    }
+
     /// The relay forgets this device with the last of the person's gateways only (#509). Its record is one per install,
     /// and every gateway with this device's file sends through it: removing one of two gateways leaves it (the other's
     /// pushes go on) and keeps the day's registration; removing the last takes it away and clears that, so the next
