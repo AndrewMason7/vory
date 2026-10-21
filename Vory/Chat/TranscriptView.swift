@@ -227,7 +227,9 @@ struct TranscriptView: View {
                     }
                     if let s = chat.statusLine, chat.isRunning {
                         HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
+                            // The words beside it say what's under way; on its own the spinner was an element with no
+                            // name and a 14-point hit area to the audit.
+                            ProgressView().controlSize(.small).accessibilityHidden(true)
                             #if os(macOS)
                             // The Mac has no header pill over the thread: what the bot is working
                             // on, when the on-device model has written it, sits here with the step.
