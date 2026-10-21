@@ -60,7 +60,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             SettingsList {
-                if search.isEmpty, !setupCardDone, model.runtime != nil, model.push.registeredAt == nil {
+                // A gateway of the person's own only (#494): dismissed in the demo, it never showed for theirs.
+                if search.isEmpty, !setupCardDone, model.runtime.map({ !$0.isEphemeral }) == true, model.push.registeredAt == nil {
                     Section {
                         NavigationLink { CompanionView().pushedPage() } label: {
                             HStack(spacing: 12) {

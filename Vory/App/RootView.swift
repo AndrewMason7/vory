@@ -163,7 +163,7 @@ struct RootView: View {
             }
             #endif
         }
-        .onChange(of: model.hasConnections) { had, has in
+        .onChange(of: model.hasOwnGateway) { had, has in
             if !had, has, !companionPromptShown { companionDue = true; offerCompanion() }
         }
         // One sheet at a time, and none over the lock: the sign-in a restore owes comes first,
@@ -205,7 +205,7 @@ struct RootView: View {
 extension RootView {
     /// Shows the Companion prompt when it is owed and nothing stands in its way.
     private func offerCompanion() {
-        guard companionDue, !companionPromptShown, model.hasConnections, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
+        guard companionDue, !companionPromptShown, model.hasOwnGateway, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
         companionDue = false
         companionPromptShown = true
         Task {

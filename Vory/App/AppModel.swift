@@ -341,6 +341,9 @@ final class AppModel {
     }
 
     var hasConnections: Bool { !store.connections.isEmpty || store.demo != nil }
+    /// A gateway of the person's own (the demo is not one): what the Companion prompt and the notifications card are
+    /// for (#494: the demo used both up, and a gateway added after it was never offered them).
+    var hasOwnGateway: Bool { !store.connections.isEmpty }
 
     // MARK: Demo mode (#392)
 
