@@ -951,7 +951,8 @@ struct ComposerView: View {
             quote = ""
         }
         text = ""
-        if focusesAfterSend { focused = true }
+        // The app's chats keep the cursor for the next message; the tour's and the demo's put the keyboard away.
+        focused = focusesAfterSend
         historyCursor = nil
         NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
         if let prefill = await chat.send(t) { text = prefill }
@@ -1085,8 +1086,12 @@ struct HistorySheet: View {
 }
 
 extension EnvironmentValues {
-    /// Whether a send leaves the cursor in the composer (`ComposerView`); the app's chats do, onboarding's tour doesn't.
+    /// Whether a send leaves the cursor in the composer (`ComposerView`); the app's chats do. Onboarding's tour and Demo
+    /// mode's chats don't: there a send puts the keyboard away (#490), where the next thing to read is the reply.
     @Entry var composerFocusesAfterSend: Bool = true
+    /// The message bar's field takes no typing (onboarding's tour, #490: beat 3's message is ready-made and beat 4's
+    /// mention types itself), so no keyboard comes up for it. VoiceOver reads its words as text, not as a field.
+    @Entry var composerReadOnly: Bool = false
 }
 
 /// How far above the composer's bottom edge its open list (+, "/", "@") reaches at full size,

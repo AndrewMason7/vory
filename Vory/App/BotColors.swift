@@ -105,8 +105,11 @@ struct BotAvatar: View {
     private var effectiveMood: BotFaceView.Mood {
         var m = mood; if m.profile == nil { m.profile = profile }; return m
     }
+    /// The looks of the chat this face is in, where it has its own (`BotLookScope`: the tour's demo over a gateway in use).
+    @Environment(\.botLookScope) private var lookScope
     private var choice: BotAvatarChoice {
         if let override { return override }
+        if let scoped = lookScope?.avatar(for: profile) { return BotAvatarChoice(raw: BotAvatarStore.effective(scoped, glassAll: glassAll)) }
         // The demo's bots wear the demo's looks while it runs (`DemoLooks`), as `BotAvatarStore.choice` has them: read
         // from the stored map here, a live face (working, large, drawn, or just tapped) took the stored body in the
         // demo's colour, and a bot changed shape as it started work.
@@ -151,9 +154,17 @@ struct BotAvatar: View {
     }
 
     var body: some View {
-        let hex = BotColors.hex(for: profile, overrides: overrides)
+        let hex = lookScope?.color(for: profile) ?? BotColors.hex(for: profile, overrides: overrides)
         Group {
-            if choice == .photo, let image = BotAvatarStore.photo(for: profile) {
+            if let scope = lookScope, scope.avatar(for: profile) != nil {
+                // A scoped look (the tour's demo): drawn from its own spec, never the stored look's memoised picture.
+                if restsAsImage {
+                    Image(uiImage: BotAvatarImage.cached(spec: choice.spec(hex: hex), size: size, scheme: colorScheme, closed: eyesShut, keep: true))
+                        .resizable().frame(width: size, height: size)
+                } else {
+                    BotFaceView(spec: choice.spec(hex: hex), size: size, active: active, drawn: drawn, mood: effectiveMood)
+                }
+            } else if choice == .photo, let image = BotAvatarStore.photo(for: profile) {
                 Image(uiImage: image).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
             } else if restsAsImage {
                 Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: colorScheme, closed: eyesShut))

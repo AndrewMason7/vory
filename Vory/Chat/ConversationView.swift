@@ -368,6 +368,9 @@ struct ConversationView: View {
 
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
+            // Demo mode's chats put the keyboard away after a send (#490, Matt: swiping it away was hard); the app's own
+            // chats keep it up for the next message.
+            .environment(\.composerFocusesAfterSend, !chat.runtime.connection.isDemo)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
             // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }

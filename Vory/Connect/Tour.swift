@@ -697,9 +697,12 @@ private struct TourChatCard: View {
                     }
             }
             BottomDock(chat: chat, text: $text, quote: $quote, namespace: dockSpace)
+                // Beat 4 plays itself (#490, Matt: "let's do just plays itself"): once the mention is due, the bar takes
+                // no taps (the field and its list, Send, the rest), and VoiceOver reads it as its words.
+                .allowsHitTesting(!mention)
+                .modifier(TourDockReading(playing: mention, text: text))
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0 { dockHeight = $0 } }
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
-                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("onboarding.chatDock")
         }
         // The message bar stays at the card's foot at any text size: where the card's content is taller than its room
@@ -710,8 +713,13 @@ private struct TourChatCard: View {
         .background(Color(.systemBackground))
         .clipShape(.rect(cornerRadius: 32))
         .overlay { RoundedRectangle(cornerRadius: 32).strokeBorder(Color.primary.opacity(0.1)) }
-        // The tour's Send is a step of it: no keyboard after it, which covered the chat and lifted it over Vory.
+        // The tour's Send is a step of it: no keyboard after it, which covered the chat and lifted it over Vory. Nor
+        // before: the message is ready-made and the mention types itself, so the field takes no typing (#490).
         .environment(\.composerFocusesAfterSend, false)
+        .environment(\.composerReadOnly, true)
+        // The demo's bots in their own looks, here only (#490): over a gateway in use the app's demo looks stay off,
+        // and the list of bots and the thread showed the plain palette faces.
+        .environment(\.botLookScope, .demo)
         .task(id: mention) {
             guard mention, text.isEmpty, let bot = TourChat.mentionBot else { return }
             await typeMention(bot)
@@ -731,9 +739,24 @@ private struct TourChatCard: View {
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
         }
-        try? await Task.sleep(for: .seconds(1.4))
+        try? await Task.sleep(for: .seconds(TourChat.listHold))
         guard !Task.isCancelled, text == shown else { return }
         text = "@\(bot.name) " + TourChat.mentionDraft
+    }
+}
+
+/// The tour's message bar for VoiceOver: while beat 4 plays itself, one piece of text, "Message", with what the bar
+/// shows, rather than a field and buttons that take nothing (#490); otherwise the bar as it is.
+private struct TourDockReading: ViewModifier {
+    var playing: Bool
+    var text: String
+    func body(content: Content) -> some View {
+        // One structure either way: the bar keeps its own state as the beat starts to play.
+        content
+            .accessibilityElement(children: playing ? .ignore : .contain)
+            .accessibilityLabel(playing ? "Message" : "")
+            .accessibilityValue(playing ? text : "")
+            .accessibilityAddTraits(playing ? .isStaticText : [])
     }
 }
 

@@ -1573,9 +1573,14 @@ struct TranscriptRow: View, Equatable {
     var onKeepRunning: () -> Void = {}
     @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
     @AppStorage(ChatStyle.botTint) private var botTint = false
+    /// The looks of the chat this row is in, where it has its own (`BotLookScope`: the tour's demo over a gateway in use).
+    @Environment(\.botLookScope) private var lookScope
     /// The reply bubble's fill: grey, or the bot's colour at a wash.
     private var replyFill: Color {
-        if botTint, let profile { return BotColors.color(for: profile).opacity(scheme == .dark ? 0.22 : 0.16) }
+        if botTint, let profile {
+            let color = lookScope?.color(for: profile).flatMap { Color(hex: $0) } ?? BotColors.color(for: profile)
+            return color.opacity(scheme == .dark ? 0.22 : 0.16)
+        }
         return Color(.systemGray5)
     }
     /// Open states as values with a setter, not Bindings: a Binding made in the parent's body is
@@ -1676,8 +1681,13 @@ struct TranscriptRow: View, Equatable {
                         Color.clear.frame(width: 28, height: 1)
                     } else if botShown {
                         // A finished reply keeps a painted bot: a live one per row is what stuttered.
-                        Image(uiImage: BotAvatarImage.cached(profile: profile, size: 28, scheme: scheme))
-                            .resizable().frame(width: 28, height: 28)
+                        if let scope = lookScope, let raw = scope.avatar(for: profile), let hex = scope.color(for: profile) {
+                            Image(uiImage: BotAvatarImage.cached(spec: BotAvatarChoice(raw: raw).spec(hex: hex), size: 28, scheme: scheme, closed: false, keep: true))
+                                .resizable().frame(width: 28, height: 28)
+                        } else {
+                            Image(uiImage: BotAvatarImage.cached(profile: profile, size: 28, scheme: scheme))
+                                .resizable().frame(width: 28, height: 28)
+                        }
                     } else {
                         Color.clear.frame(width: 28, height: 1)
                     }

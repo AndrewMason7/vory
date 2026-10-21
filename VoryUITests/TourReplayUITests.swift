@@ -88,11 +88,12 @@ final class TourReplayUITests: XCTestCase {
     }
 
     /// The system's audit, as the tour's gate has it (#388): any finding fails but the app's reasoning row's hit region
-    /// (#482).
+    /// (#482, by its exact finding: anything else on that toggle still fails; out when #482 is fixed).
     private func audit(_ where: String) throws {
         try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
             print("REPLAY-AUDIT \(`where`) '\(issue.compactDescription)' label '\(issue.element?.label ?? "")' id '\(issue.element?.identifier ?? "")' frame \(issue.element?.frame ?? .zero)")
-            return issue.auditType == .hitRegion && ["Show reasoning", "Hide reasoning"].contains(issue.element?.label ?? "")
+            return issue.auditType == .hitRegion && issue.compactDescription == "Hit area is too small"
+                && ["Show reasoning", "Hide reasoning"].contains(issue.element?.label ?? "")
         }
     }
 

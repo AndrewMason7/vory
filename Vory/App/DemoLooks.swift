@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import VoryCore
 
 /// The demo's bots' looks and names while the demo runs (#392): each its own body, eyes and colour (`DemoBots`), and
@@ -54,4 +55,26 @@ enum DemoLooks {
             return true
         }
     }
+}
+
+/// The demo's looks for the views of one chat only (#490): onboarding's tour over a gateway in use, whose demo bots would
+/// otherwise wear the plain palette faces, since `DemoLooks` stays off there so that the person's own bots ("default"
+/// among them) never take the demo's looks. Handed down the tour's chat card as `\.botLookScope`; `BotAvatar` and the
+/// thread's painted faces and tints read it first. Nothing is written anywhere, so nothing reaches the stored looks,
+/// iCloud, the extensions or the widgets.
+struct BotLookScope: Equatable, Sendable {
+    let avatars: [String: String]
+    let colors: [String: String]
+
+    /// The demo's bots, each in its own body, eyes and colour (`DemoBots`), as the demo itself has them.
+    static let demo = BotLookScope(
+        avatars: Dictionary(uniqueKeysWithValues: DemoBots.all.map { ($0.name, BotAvatarChoice.studio(shape: $0.shape, eyes: $0.eyes).raw) }),
+        colors: Dictionary(uniqueKeysWithValues: DemoBots.all.map { ($0.name, $0.hex) }))
+
+    func avatar(for profile: String) -> String? { avatars[profile] }
+    func color(for profile: String) -> String? { colors[profile] }
+}
+
+extension EnvironmentValues {
+    @Entry var botLookScope: BotLookScope? = nil
 }

@@ -17,6 +17,15 @@ final class TourChat {
     /// Beat 4's mention, after the answer: Gizmo, the demo's home-server bot, asked to keep an eye on disk space.
     static var mentionBot: DemoBot? { DemoBots.all.first { $0.display == "Gizmo" } }
     static let mentionDraft = "can you keep an eye on disk space?"
+    /// How long the message bar's list of bots stays up, "@Gi" typed, before Gizmo is picked from it. The UI tests hold
+    /// it longer (`-vory-tour-list-hold <seconds>`, DEBUG only): reading the screen there can take two seconds.
+    static var listHold: TimeInterval {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-vory-tour-list-hold"), i + 1 < args.count, let s = TimeInterval(args[i + 1]) { return s }
+        #endif
+        return 1.4
+    }
     /// What the tour's one ask offers: Allow once and Deny, so the real card shows those two (Matt, 2026-10-20). Try a
     /// demo keeps all four.
     static let approvalChoices = ["once", "deny"]
