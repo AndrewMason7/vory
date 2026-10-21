@@ -318,8 +318,18 @@ final class AppModel {
         CloudSync.shared.start(store: store)
         NotificationCenter.default.addObserver(forName: .hermesPushRegistrationNeedsSync, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let rt = self.runtime else { return }
+                guard let self, let rt = self.runtime, !rt.isEphemeral else { return }
                 await self.push.syncRegistration(runtime: rt)
+            }
+        }
+        // The demo asks for notifications on its first message (#501, Matt's call): its replies and approvals are local
+        // notifications, and nothing else in it asks. The system's question only, while it has not been answered; nothing
+        // is registered anywhere (`PushRegistrar` refuses the demo).
+        NotificationCenter.default.addObserver(forName: .hermesMessageSent, object: nil, queue: .main) { [weak self] n in
+            let chat = n.object as? ChatSession
+            Task { @MainActor in
+                guard let self, self.isInDemo, chat?.runtime.isEphemeral == true else { return }
+                await self.askForDemoNotifications()
             }
         }
         #if os(iOS)
@@ -412,6 +422,12 @@ final class AppModel {
         return c
     }
 
+    /// The system's notification question, while it has not been answered (#501): asked on the demo's first message.
+    func askForDemoNotifications() async {
+        await push.refreshAuthorization()
+        if push.authorization == .notDetermined { _ = await push.requestAuthorization() }
+    }
+
     func activateSavedConnection() async {
         guard !Self.isUnitTestHost else { return }
         if let c = store.active { await activate(c) }
@@ -499,7 +515,8 @@ final class AppModel {
         ChatGoals.shared.attach(rt)
         activationError = nil
         await rt.start()
-        await push.registerForRemoteNotificationsIfAuthorized()
+        // The demo registers nowhere (#501, and `PushRegistrar` refuses it too).
+        if !connection.isDemo { await push.registerForRemoteNotificationsIfAuthorized() }
         #if os(iOS)
         WatchSync.shared.push(store: store)
         #endif

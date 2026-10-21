@@ -81,6 +81,7 @@ struct RootView: View {
             if AppFingerprint.isOn { AppFingerprint.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
             // `-vory-coldopen-probe`: how the thread moved as the last chat opened, for the open checks (#449).
             if ColdOpenProbe.isOn { ColdOpenProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            if DemoDeliveredReadout.isOn { DemoDeliveredReadout().frame(width: 1, height: 1).allowsHitTesting(false) }
         }
         #endif
         #if DEBUG

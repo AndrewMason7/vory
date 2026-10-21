@@ -119,7 +119,26 @@ final class PushRegistrar: PushRegistrationSyncing {
         }
     }
 
+    /// Whether this device registers for push at all (#501): only with a gateway of the person's own saved, and never while
+    /// the demo runs. The demo sends nothing anywhere (its replies and approvals are local notifications), and
+    /// notifications allowed in it, with no gateway of the person's own, had every launch after send the token to the
+    /// relay for nothing that could ever be delivered. With a gateway of their own, nothing changes.
+    nonisolated static func mayRegister(inDemo: Bool, hasOwnGateway: Bool) -> Bool { !inDemo && hasOwnGateway }
+    private var mayRegisterNow: Bool {
+        var own = AppModel.shared.hasOwnGateway
+        #if DEBUG
+        if let o = Self.ownGatewayForTests { own = o }
+        #endif
+        return Self.mayRegister(inDemo: AppModel.shared.isInDemo, hasOwnGateway: own)
+    }
+    #if DEBUG
+    /// The tests' say on whether a gateway of the person's own is saved (#501), so the registration checks run the same
+    /// whatever gateways the test host has kept. On CUT-SWEEP §1.
+    nonisolated(unsafe) static var ownGatewayForTests: Bool?
+    #endif
+
     private func registerForRemote() {
+        guard mayRegisterNow else { return }
         #if os(iOS)
         UIApplication.shared.registerForRemoteNotifications()
         #else
@@ -153,7 +172,7 @@ final class PushRegistrar: PushRegistrationSyncing {
     /// With a relay baked into the build, the phone registers itself there; the gateway then only
     /// needs the install id + secret from the device file, never an APNs key.
     func registerWithRelay() async {
-        guard notificationsEnabled, PushRelay.isConfigured, let token = deviceToken else { return }
+        guard notificationsEnabled, PushRelay.isConfigured, mayRegisterNow, let token = deviceToken else { return }
         do {
             try await PushRelay.register(deviceToken: token, platform: Self.platform, bundleID: Bundle.main.bundleIdentifier ?? "", environment: apnsEnvironment, liveActivityToken: nil)
             relayRegisteredAt = Date(); relayError = nil
@@ -233,7 +252,7 @@ final class PushRegistrar: PushRegistrationSyncing {
     }
 
     func syncRegistration(runtime: GatewayRuntime) async {
-        guard notificationsEnabled else { return }
+        guard notificationsEnabled, !runtime.isEphemeral else { return }
         guard let token = deviceToken, let home = runtime.profileHome else { return }
         let path = "\(home)/push/devices/\(installID).json"
         var payload: [String: JSONValue] = [
@@ -339,8 +358,10 @@ enum LocalNotifier {
     /// would arrive as a duplicate.
     /// Only a gateway with the Companion on it sends anything: registered with a gateway that has
     /// none, the phone would have waited for pushes that never come and shown nothing itself.
+    /// Never in the demo (#501): the Companion is the person's gateway's, and its installed version, left from that gateway
+    /// until the next refresh, kept the demo's local notifications from showing.
     @MainActor static var companionDelivers: Bool {
-        AppModel.shared.push.registeredAt != nil && PushRelay.isConfigured && AppModel.shared.companionInstalledVersion != nil
+        !AppModel.shared.isInDemo && AppModel.shared.push.registeredAt != nil && PushRelay.isConfigured && AppModel.shared.companionInstalledVersion != nil
     }
     @MainActor private static func botName(_ chat: ChatSession) -> String {
         chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
@@ -473,3 +494,37 @@ enum LocalNotifier {
         UNUserNotificationCenter.current().add(req)
     }
 }
+
+#if DEBUG && os(iOS)
+import SwiftUI
+
+/// DEBUG, for #501's check: with `-vory-delivered-readout`, a 1 pt element ("debug.delivered") whose value is how many of
+/// the demo's local notifications are delivered and how many are pending, and the most ever delivered at once,
+/// "delivered/pending/most" (by their `hermes.connection_id`), read again every second, in the background too while the
+/// app is kept awake (a notification cleared on the way back counts in "most"). A UI test reads it after sending the app
+/// away in the demo, and again after Leave demo. On CUT-SWEEP §1.
+struct DemoDeliveredReadout: View {
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-delivered-readout")
+    @State private var value = "-1/-1/0"
+    @State private var most = 0
+
+    var body: some View {
+        Text(" ").font(.system(size: 1))
+            .accessibilityIdentifier("debug.delivered")
+            .accessibilityValue(value)
+            .task {
+                func demo(_ c: UNNotificationContent) -> Bool {
+                    (c.userInfo["hermes"] as? [String: Any])?["connection_id"] as? String == GatewayConnection.demoID.uuidString
+                }
+                while !Task.isCancelled {
+                    let center = UNUserNotificationCenter.current()
+                    let delivered = await center.deliveredNotifications().filter { demo($0.request.content) }.count
+                    let pending = await center.pendingNotificationRequests().filter { demo($0.content) }.count
+                    most = max(most, delivered)
+                    value = "\(delivered)/\(pending)/\(most)"
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+    }
+}
+#endif

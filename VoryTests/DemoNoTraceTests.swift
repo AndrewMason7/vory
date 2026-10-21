@@ -138,7 +138,10 @@ import Testing
         let refusedBefore = DemoURLProtocol.refused
         SharedSessionWatch.reset()
         URLProtocol.registerClass(SharedSessionWatch.self)
-        defer { URLProtocol.unregisterClass(SharedSessionWatch.self) }
+        // A relay set, so a registration with it during the demo would be seen (Debug builds have none, #501).
+        PushRelay.testURL = URL(string: "https://relay.test.invalid")
+        defer { URLProtocol.unregisterClass(SharedSessionWatch.self); PushRelay.testURL = nil }
+        try #require(PushRelay.isConfigured, "no relay: a request to it could not be seen")
 
         let suite = "dev.vory.tests.demotrace." + UUID().uuidString
         let store = ConnectionStore(defaults: UserDefaults(suiteName: suite)!, connections: [])
@@ -441,6 +444,70 @@ import Testing
         #expect(!ProfileTab.available(withChat: false, look: false).contains(.look))
         #expect(ProfileTab.available(withChat: false, look: false).first == .instructions)
         #expect(ProfileTab.available(withChat: false) == [.look, .instructions, .model, .display])
+    }
+
+    /// This device registers for push only with a gateway of the person's own saved, and never in the demo (#501).
+    @Test func pushRegistersOnlyWithAGatewayOfThePersonsOwnAndNeverInTheDemo() {
+        #expect(PushRegistrar.mayRegister(inDemo: false, hasOwnGateway: true))
+        #expect(!PushRegistrar.mayRegister(inDemo: true, hasOwnGateway: true))
+        #expect(!PushRegistrar.mayRegister(inDemo: false, hasOwnGateway: false))
+        #expect(!PushRegistrar.mayRegister(inDemo: true, hasOwnGateway: false))
+    }
+
+    /// The demo registers nowhere, and leaving it with no gateway of the person's own registers nowhere either (#501): a
+    /// device token arriving (as after the demo's notification question is answered, or at a later launch), the daily
+    /// relay refresh and the launch's registration send nothing; and the person's Companion does not hold back the demo's
+    /// local notifications. The control first: with a gateway of their own, outside the demo, the same token goes to the
+    /// relay, a request to its host through the shared session. Debug builds have no relay, so the test sets one
+    /// (`PushRelay.testURL`, an `.invalid` host the watch catches) and fails without it.
+    @Test func theDemoRegistersNowhere() async throws {
+        PushRelay.testURL = URL(string: "https://relay.test.invalid")
+        let model = AppModel.shared, push = AppModel.shared.push
+        let tokenBefore = push.deviceToken, relayAtBefore = push.relayRegisteredAt
+        URLProtocol.registerClass(SharedSessionWatch.self)
+        defer {
+            URLProtocol.unregisterClass(SharedSessionWatch.self)
+            PushRelay.testURL = nil; PushRegistrar.ownGatewayForTests = nil
+            push.deviceToken = tokenBefore; push.relayRegisteredAt = relayAtBefore
+        }
+        try #require(PushRelay.isConfigured, "no relay: the check would never see the relay path run")
+        func toRelay() -> [String] { SharedSessionWatch.seen.filter { $0.contains("relay.test.invalid") } }
+        let token = Data((0..<32).map { UInt8($0) })
+
+        // The control: a gateway of the person's own, outside the demo. The token goes to the relay.
+        #expect(!model.isInDemo)
+        PushRegistrar.ownGatewayForTests = true
+        SharedSessionWatch.reset()
+        push.didRegister(token: token)
+        let deadline = Date().addingTimeInterval(5)
+        while toRelay().isEmpty, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        #expect(!toRelay().isEmpty, "the relay was not asked with a gateway of the person's own: the check sees nothing")
+
+        // In the demo: nothing, the person's own gateway or not.
+        await model.startDemo()
+        #expect(model.isInDemo)
+        #expect(!LocalNotifier.companionDelivers, "the person's Companion would hold back the demo's notifications")
+        SharedSessionWatch.reset()
+        push.didRegister(token: token)
+        push.relayRegisteredAt = nil
+        await push.refreshRelayIfStale()
+        await push.registerForRemoteNotificationsIfAuthorized()
+        try? await Task.sleep(for: .milliseconds(500))
+        #expect(toRelay().isEmpty, "the demo asked the relay: \(toRelay())")
+        #expect(SharedSessionWatch.seen.isEmpty, "the demo sent requests: \(SharedSessionWatch.seen)")
+        await model.endDemo()
+        // Leaving brings back the person's gateway, if the host has one; none is left running.
+        if model.runtime != nil { await model.deactivate() }
+
+        // After the demo, with no gateway of the person's own (notifications allowed in the demo, then a launch): nothing.
+        PushRegistrar.ownGatewayForTests = false
+        SharedSessionWatch.reset()
+        push.didRegister(token: token)
+        push.relayRegisteredAt = nil
+        await push.refreshRelayIfStale()
+        await push.registerForRemoteNotificationsIfAuthorized()
+        try? await Task.sleep(for: .milliseconds(500))
+        #expect(toRelay().isEmpty, "with no gateway of the person's own the relay was asked: \(toRelay())")
     }
 
     @Test func homesVisitMarkIsNeverTheDemos() {
