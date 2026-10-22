@@ -202,3 +202,41 @@ class SingleInstanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComplicationPushTests(unittest.TestCase):
+    """#499: the Watch's complication refresh push, through the relay, carries no chat data. What the Companion posts
+    to the relay is captured (no network): the install id, its secret and the push type, and nothing else, so neither
+    the gateway's address nor any title, text or bot name leaves the gateway with it."""
+
+    def test_a_relay_complication_push_carries_no_chat_data(self) -> None:
+        posted: list[dict] = []
+
+        class Answer:
+            status = 200
+            def read(self) -> bytes: return b'{"ok":true}'
+            def __enter__(self): return self
+            def __exit__(self, *a) -> None: return None
+
+        def capture(req, timeout=None):
+            posted.append(json.loads(req.data.decode()))
+            return Answer()
+
+        import urllib.request
+        real = urllib.request.urlopen
+        urllib.request.urlopen = capture
+        try:
+            apns = hermes_push.APNs()
+            apns.dry_run = False
+            device = {"device_id": "watch-1-watch", "platform": "watchos", "bundle_id": "com.vorantx.vory.watchkitapp",
+                      "relay": {"url": "https://relay.test", "install_id": "w1", "secret": "s" * 48}}
+            payload = {"aps": {"content-available": 1}, "hermes": {"kind": "complication", "gateway": "https://gateway.example",
+                                                                   "title": "Rewrite the nightly export job", "bot": "Hermes"}}
+            self.assertTrue(apns.send(device, payload, push_type="complication"))
+        finally:
+            urllib.request.urlopen = real
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(posted[0], {"install_id": "w1", "secret": "s" * 48, "push_type": "complication"})
+        text = json.dumps(posted[0])
+        for word in ("gateway.example", "nightly", "Hermes", "title", "alert", "content_state", "attributes", "enc"):
+            self.assertNotIn(word, text)

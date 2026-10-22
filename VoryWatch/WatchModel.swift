@@ -287,14 +287,29 @@ final class WatchModel {
         // A gateway the phone no longer has (removed there, or the phone was reset) goes here too.
         let incoming = Set(connections.map(\.id.uuidString))
         let previous = Set(UserDefaults.standard.stringArray(forKey: Self.syncedGatewaysKey) ?? [])
-        for id in previous.subtracting(incoming) {
-            guard let uuid = UUID(uuidString: id) else { continue }
+        let removed = previous.subtracting(incoming).compactMap(UUID.init(uuidString:))
+        let gatewaysLeft = store.connections.filter { !removed.contains($0.id) }.count
+        let leaving = WatchPushRules.onGatewayRemoved(gatewaysLeft: gatewaysLeft)
+        var unregistered = false
+        for uuid in removed {
             if let rt = runtime, rt.connection.id == uuid {
-                Task { await rt.stop() }
+                // Its device file goes while the gateway can still be reached, and the relay record with the last
+                // gateway (#499); then the runtime stops.
+                let push = self.push
+                Task {
+                    await push.removeRegistration(runtime: rt, deviceFile: leaving.removeDeviceFile, relay: leaving.unregisterFromRelay)
+                    await rt.stop()
+                }
+                unregistered = leaving.unregisterFromRelay
                 runtime = nil
                 sessions = []
             }
             store.delete(id: uuid)
+        }
+        // The last gateway went while another was running (or none was): the relay record goes all the same.
+        if !removed.isEmpty, leaving.unregisterFromRelay, !unregistered {
+            let push = self.push
+            Task { await push.removeRegistration(runtime: nil, deviceFile: false, relay: true) }
         }
         UserDefaults.standard.set(Array(incoming).sorted(), forKey: Self.syncedGatewaysKey)
         guard !store.connections.isEmpty else { syncStatus = "No gateway on the iPhone yet"; return }
@@ -488,6 +503,16 @@ final class WatchPushRegistrar: PushRegistrationSyncing {
     init() {
         if let s = UserDefaults.standard.string(forKey: "pushInstallID") { installID = s }
         else { let s = UUID().uuidString.lowercased(); UserDefaults.standard.set(s, forKey: "pushInstallID"); installID = s }
+    }
+
+    /// Leaving a gateway (#499, `WatchPushRules.onGatewayRemoved`): this Watch's device file on it, so it stops pushing
+    /// here, and the relay record when it was the last gateway.
+    func removeRegistration(runtime: GatewayRuntime?, deviceFile: Bool, relay: Bool) async {
+        if deviceFile, let runtime, let home = runtime.profileHome {
+            let path = "\(home)/push/devices/\(installID)-watch.json"
+            let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/files", json: ["path": .string(path), "recursive": false])
+        }
+        if relay, PushRelay.isConfigured { await PushRelay.unregister() }
     }
 
     func syncRegistration(runtime: GatewayRuntime) async {
