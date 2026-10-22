@@ -89,7 +89,7 @@ struct ApprovalCardView: View {
         return parts.joined(separator: " ")
     }
 
-    /// One set of names everywhere (judgement call #36): "session" was a word for strangers to puzzle over, and in Vory a
+    /// One set of names everywhere: "session" was a word for strangers to puzzle over, and in Vory a
     /// session is a chat. "Always allow…" asks first (the alert above).
     private func label(_ c: String) -> String {
         switch c { case "once": return "Allow once"; case "session": return "Allow for this chat"; case "always": return "Always allow…"; case "deny": return "Deny"; default: return c.capitalized }

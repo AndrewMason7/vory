@@ -708,7 +708,7 @@ struct ComposerView: View {
             Section("Model") { ModelMenuContent(chat: chat) }
             ReasoningEffortMenu(chat: chat)
         } label: {
-            // Matt's wording (2026-10-10, via the planner): the model's name in the text's own
+            // Matt's wording (2026-10-10): the model's name in the text's own
             // tone, the level after it in a lighter one, no "Reasoning:"; at the accessibility
             // sizes the level stands alone.
             HStack(spacing: 6) {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the demo shows (#392): its bots, chats, projects, files and board, in words the planner and Matt can
+/// What the demo shows (#392): its bots, chats, projects, files and board, in words Matt can
 /// read and change here without touching the gateway's logic (`DemoGateway`). Generic people, places and
 /// machines only, nothing that reads as a real person, no em dashes, and no links but the demo's own
 /// (a picture is a `MEDIA:` path the demo itself serves). Times are offsets back from the moment the demo starts.

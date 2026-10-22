@@ -204,7 +204,7 @@ struct GatewaysView: View {
     @Environment(AppModel.self) private var model
     @State private var showAdd = false
     @State private var pendingDelete: GatewayConnection?
-    /// The gateway whose form is open as a sheet: the Mac's way (judgement call #13).
+    /// The gateway whose form is open as a sheet: the Mac's way.
     @State private var editing: GatewayConnection?
 
     var body: some View {
@@ -230,7 +230,7 @@ struct GatewaysView: View {
                         Spacer()
                         #if os(macOS)
                         // The Mac opens the form as a sheet, as the sidebar's gateway does: pushed,
-                        // its toolbar Back stood beside the form's own Cancel (judgement call #13).
+                        // its toolbar Back stood beside the form's own Cancel.
                         Button { editing = c } label: { Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
                             .buttonStyle(.plain).frame(width: 20)
                             .accessibilityLabel("Edit \(c.name)").accessibilityIdentifier("gateways.edit")

@@ -314,7 +314,7 @@ enum BotLooksMirror {
 
 /// Tells BotAmbient that the page it sits in has landed: its controller's viewDidAppear, after the
 /// push or the sheet has finished, so a waiting arrival (`BotAmbient.markArrival`) plays in full on
-/// a still page (judgement call #16). Nothing waits on a pop back or a sheet shown again.
+/// a still page. Nothing waits on a pop back or a sheet shown again.
 struct ArrivalProbe: View {
     let profile: String
     var body: some View { Probe(profile: profile).frame(width: 0, height: 0).accessibilityHidden(true) }

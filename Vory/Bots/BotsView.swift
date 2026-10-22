@@ -50,7 +50,7 @@ struct BotsView: View {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-vory-shape-grid") { ShapeSeatGrid() }
                 if ProcessInfo.processInfo.arguments.contains("-vory-motion-demo") { MotionDemoView() }
-                // The brief's measuring scene (section 6): six bots on screen, one of them working.
+                // The measuring scene: six bots on screen, one of them working.
                 if ProcessInfo.processInfo.arguments.contains("-vory-motion-bench") { MotionDemoView(bench: true) }
                 #endif
             }

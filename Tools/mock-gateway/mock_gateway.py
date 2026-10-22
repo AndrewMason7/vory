@@ -2139,7 +2139,7 @@ class Gateway:
     async def _morph_turn(self, s: Session, prompt: str) -> None:
         """A staged interrupted change for the bot's motion (1.5 #304): a tool starts and, 0.15 s
         later while the toolbox is still forming, an approval is asked; the tool completes once
-        the approval is answered, then a short reply. For the planner's clip."""
+        the approval is answered, then a short reply. For a review clip."""
         await self.event("message.start", s.sid)
         await self.stream_words(s, "Checking the disk first. ", delay=0.01)
         tool_id = f"t-{uuid.uuid4().hex[:8]}"

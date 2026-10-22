@@ -178,14 +178,14 @@ public final class BotMotionModel {
     public static let orbitLength = 0.68
     public func spin(at t: Double) { orbitStart = t }
 
-    /// A tap's reaction (judgement call #8 (a), the look): a blink and a small bounce, then rest.
+    /// A tap's reaction (the look): a blink and a small bounce, then rest.
     /// One set of numbers: how long it holds the clock, the blink's length, and the squash given
     /// to the body's springs (they bounce it back over the next few tenths).
     public enum Reaction {
         public static let length = 0.42
         public static let blinkLength = 0.16
         public static let squash = 1.1
-        /// A judgement call made while Matt was out: `-vory-tap-reaction-off` leaves a tapped
+        /// `-vory-tap-reaction-off` leaves a tapped
         /// face still (the tap still does what it did).
         public static let off = ProcessInfo.processInfo.arguments.contains("-vory-tap-reaction-off")
         /// Whether a tap plays at all: not off, and the bots not still (Settings › Bots › Style ›

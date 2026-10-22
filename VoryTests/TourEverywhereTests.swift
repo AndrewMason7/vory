@@ -4,11 +4,11 @@ import Testing
 @testable import Vory
 @testable import VoryCore
 
-/// Onboarding's beat 5 (#388, the planner's order of 2026-10-20): the places in turn, each with its line, the iPad
+/// Onboarding's beat 5 (#388, the order of 2026-10-20): the places in turn, each with its line, the iPad
 /// without the Dynamic Island; and the Live Activity it shows, which is Sprout's ask from the demo and nothing else.
 @MainActor
 struct TourEverywhereTests {
-    @Test func thePlacesComeInThePlannersOrder() {
+    @Test func thePlacesComeInTheirOrder() {
         #expect(TourPlace.all(pad: false) == [.island, .lockScreen, .watch, .devices, .homeAway, .iCloud])
         // An iPad has no Dynamic Island.
         #expect(TourPlace.all(pad: true) == [.lockScreen, .watch, .devices, .homeAway, .iCloud])

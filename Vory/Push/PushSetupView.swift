@@ -602,7 +602,7 @@ struct CompanionUpdateRows: View {
 struct RestartCountdownRows: View {
     @Bindable var setup: PushSetupModel
     var runtime: GatewayRuntime
-    /// The gateway form, as a sheet on the Mac (judgement call #13).
+    /// The gateway form, as a sheet on the Mac.
     @State private var signingIn = false
 
     var body: some View {

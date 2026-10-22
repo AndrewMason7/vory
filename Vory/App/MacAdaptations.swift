@@ -276,7 +276,7 @@ extension EnvironmentValues {
 /// A menu item's label with a system symbol. On the iPhone it is `Label(title, systemImage:)`.
 /// On the Mac the symbol comes from `SymbolImages`, drawn once per name: SwiftUI looked every
 /// menu item's symbol up in the asset catalog again each time a toolbar's menus were rebuilt,
-/// some 30 of them each time Chats came back (judgement call #5).
+/// some 30 of them each time Chats came back.
 struct MenuLabel: View {
     private enum Title { case key(LocalizedStringKey), string(String) }
     private let title: Title
@@ -305,7 +305,7 @@ struct MenuLabel: View {
 
 #if os(macOS)
 /// The menus' symbols as images, each drawn once. `defaults write <app id> mac.symbolCache.off
-/// -bool YES` goes back to SwiftUI's own lookup (judgement call #5's way back).
+/// -bool YES` goes back to SwiftUI's own lookup (the way back).
 @MainActor enum SymbolImages {
     static let cached = !UserDefaults.standard.bool(forKey: "mac.symbolCache.off")
     private static var images: [String: NSImage] = [:]

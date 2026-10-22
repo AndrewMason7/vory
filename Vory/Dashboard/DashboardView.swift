@@ -283,7 +283,7 @@ struct DashboardView: View {
     private func overviewCard(full: Bool) -> some View {
         cardBackground(VStack(alignment: .leading, spacing: 12) {
             // The range beside the title where it fits at its own size; on a row of its own under
-            // it at the accessibility sizes, or wherever it does not fit (planner's call #35).
+            // it at the accessibility sizes, or wherever it does not fit.
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 10) { Text("Overview").font(.headline); rangePicker }
             } else {

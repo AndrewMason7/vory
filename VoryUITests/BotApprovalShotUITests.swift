@@ -1,7 +1,7 @@
 import XCTest
 
 /// Pictures of the bot while an approval waits (the exclamation) and while a reply writes (the
-/// bubbles on the header), at full resolution, for the planner and Matt (#304). Skipped unless
+/// bubbles on the header), at full resolution, for review (#304). Skipped unless
 /// HERMES_E2E_URL / HERMES_E2E_TOKEN are set (the mock gateway).
 final class BotApprovalShotUITests: XCTestCase {
     private var app: XCUIApplication!

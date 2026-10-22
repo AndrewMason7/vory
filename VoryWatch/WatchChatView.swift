@@ -16,7 +16,7 @@ struct WatchChatView: View {
     /// What Talk could not do, under the thread until tapped.
     @State private var talkNote: String?
     /// The bottom bar's top edge and the thread's bottom edge, on screen: the room the thread leaves under its last row
-    /// (brief points 1 and 4: the conversation ends above the composer, never under it).
+    /// (the conversation ends above the composer, never under it).
     @State private var barTop: CGFloat = 0
     @State private var threadBottom: CGFloat = 0
     /// The person moved the thread (a scroll, Show earlier) since the first read landed: the late settle leaves it.
@@ -148,8 +148,8 @@ struct WatchChatView: View {
 
     /// While a card waits the bottom bar gives way to it, as the iPhone's dock turns into the card: laid over the
     /// content, the field and Talk covered the card's Allow once at the largest text (41 mm, ax). The bar comes back
-    /// with the answer, the draft kept; it stays while Talk is at work, so a recording can still be stopped (the
-    /// planner, 2026-10-20).
+    /// with the answer, the draft kept; it stays while Talk is at work, so a recording can still be stopped
+    /// (2026-10-20).
     private static let barGivesWayToCards = true
 
     private func barShown(_ feed: WatchChatFeed) -> Bool {
@@ -210,7 +210,7 @@ struct WatchChatView: View {
 
 /// Approval / clarify / secret cards, sized for a wrist, answered through the chat's feed on either path (#387).
 /// An approval's two common answers are big (Allow once in green, Deny in red) and the other two the gateway offers sit
-/// smaller under them, with the names the iPhone uses (judgement call #36); "Always allow…" asks first, as there.
+/// smaller under them, with the names the iPhone uses; "Always allow…" asks first, as there.
 struct WatchCardView: View {
     var feed: WatchChatFeed
     var card: PendingCard

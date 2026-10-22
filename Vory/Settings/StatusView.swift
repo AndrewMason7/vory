@@ -22,7 +22,7 @@ struct StatusView: View {
     @Environment(AppModel.self) private var model
     @State private var setup = PushSetupModel()
     @State private var activitiesAllowed = activitiesEnabled
-    /// The gateway form for signing in, as a sheet on the Mac (judgement call #13).
+    /// The gateway form for signing in, as a sheet on the Mac.
     @State private var signingIn = false
 
     enum Light { case good, warn, bad, off
@@ -41,7 +41,7 @@ struct StatusView: View {
                     // No sign-in for the demo (#494): it has none, and its form could remember one under the demo's id.
                     if !rt.isEphemeral {
                     #if os(macOS)
-                    // A sheet on the Mac, as the sidebar's gateway opens it (judgement call #13).
+                    // A sheet on the Mac, as the sidebar's gateway opens it.
                     Button { signingIn = true } label: { HStack { rowLabel("Sign-in", light: signInLight(s), detail: signInDetail(s, rt)); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(.rect) }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Sign-in: \(signInDetail(s, rt))").accessibilityIdentifier("status.signIn")

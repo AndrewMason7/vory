@@ -63,8 +63,8 @@ struct HandsFreeView: View {
 
     private var mood: BotFaceView.Mood {
         switch state.phase {
-        // Listening and transcribing are the arcs; speaking is the plain bot (the brief's
-        // decision 3: the words are heard, not shown), 1.5 #304.
+        // Listening and transcribing are the arcs; speaking is the plain bot (the
+        // words are heard, not shown), 1.5 #304.
         case .listening, .transcribing: return BotFaceView.Mood(profile: chat.profileName, state: BotFace.motionEngine ? .listening : .idle)
         case .thinking: return BotFaceView.Mood(thinking: true, profile: chat.profileName, state: .thinking)
         case .speaking: return BotFaceView.Mood(profile: chat.profileName, state: BotFace.motionEngine ? .working : .streaming)

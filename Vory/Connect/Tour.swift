@@ -63,7 +63,7 @@ struct TourView: View {
     @State private var waiting: [ShownLine] = []
     private struct ShownLine: Equatable { var beat: TourBeat? = nil; var key = ""; var text = ""; var since = Date.distantPast }
 
-    /// The tour's own words and buttons, and Vory's bubble, grow no larger than this (the planner's call, 2026-10-20):
+    /// The tour's own words and buttons, and Vory's bubble, grow no larger than this (2026-10-20):
     /// past it, Vory, his bubble, the pages and the buttons ran over each other. Its buttons show the Large Content
     /// Viewer; VoiceOver reads all of it whole; the app's chat inside it keeps every size.
     static let largestText: DynamicTypeSize = .accessibility2

@@ -798,7 +798,7 @@ struct InteractivePopEnabler: UIViewControllerRepresentable {
 
 /// Marks a pushed page whose own Cancel is the only way back (`.cancelIsTheWayBack()`): neither
 /// the edge swipe nor the full-screen pan pops it. A hidden child of the page's controller, read
-/// by FullScreenPop. A judgement call made while Matt was out: `-vory-form-swipe-on` lets the
+/// by FullScreenPop. `-vory-form-swipe-on` lets the
 /// swipe pop these pages again.
 struct NoSwipeBackMarker: UIViewControllerRepresentable {
     static let off = ProcessInfo.processInfo.arguments.contains("-vory-form-swipe-on")

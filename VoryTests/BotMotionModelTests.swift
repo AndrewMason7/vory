@@ -159,7 +159,7 @@ import Testing
         return t0
     }
 
-    /// A tap (judgement call #8 (a)): a blink and a small bounce, then rest. The model is unsettled
+    /// A tap: a blink and a small bounce, then rest. The model is unsettled
     /// while it plays, so the face's clock runs, and settled soon after, so it pauses again.
     @Test func aTapBlinksBouncesAndSettles() {
         let m = BotMotionModel(seed: 1)
@@ -203,7 +203,7 @@ import Testing
         #expect(minEye > 0.99 && sy.lo == 1 && sy.hi == 1)
     }
 
-    /// Judgement call #16: a tap whose face is covered (a card's push, Bot info) leaves one
+    /// A tap whose face is covered (a card's push, Bot info) leaves one
     /// arrival for the page that lands; it plays once there and is used up, so a pop back to the
     /// page, a remount or Bot info shown again without a new tap plays nothing. A stale one (the
     /// page never landed) is dropped.

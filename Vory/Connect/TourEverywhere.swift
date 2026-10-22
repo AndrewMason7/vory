@@ -2,7 +2,7 @@
 import SwiftUI
 import VoryCore
 
-/// Beat 5's places, in the planner's order (2026-10-20): where Sprout's ask reaches you (the Dynamic Island, the Lock
+/// Beat 5's places, in order (2026-10-20): where Sprout's ask reaches you (the Dynamic Island, the Lock
 /// Screen, the Watch), then the iPad and the Mac, home and away, and iCloud. Each stays until its line has been read.
 enum TourPlace: Int, CaseIterable, Hashable {
     case island, lockScreen, watch, devices, homeAway, iCloud

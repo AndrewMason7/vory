@@ -536,8 +536,8 @@ private struct GatewayFooter: View {
 }
 
 /// The gateway form as the Mac shows it everywhere: a sheet with its own Cancel and Save (the
-/// sidebar's gateway, Settings › Gateways, Status › Sign-in, Push setup's "Sign in again";
-/// judgement call #13), never pushed beside a toolbar Back.
+/// sidebar's gateway, Settings › Gateways, Status › Sign-in, Push setup's "Sign in again"),
+/// never pushed beside a toolbar Back.
 struct GatewayFormSheet: View {
     var existing: GatewayConnection?
     var body: some View {

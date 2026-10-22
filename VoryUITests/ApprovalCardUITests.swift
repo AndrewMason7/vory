@@ -105,7 +105,7 @@ final class ApprovalCardUITests: XCTestCase {
         title.press(forDuration: 1.0)
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         shot("approval-card-held")
-        // The card's own buttons carry the same names now (judgement call #36), so a menu shows as more of them.
+        // The card's own buttons carry the same names now, so a menu shows as more of them.
         for (item, count) in zip(menuNames, heldBefore) {
             XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", item)).count, count, "a long press opened a menu with \"\(item)\"")
         }

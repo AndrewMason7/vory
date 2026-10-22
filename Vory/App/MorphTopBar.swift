@@ -141,7 +141,7 @@ private struct MorphPageActions: ViewModifier {
     /// (`morphPageActions`); its token keeps a page that left from taking away the next one's.
     struct PageActions { var token: UUID; var actions: [MorphPageAction] }
     var pageActions: [AppModel.AppTab: PageActions] = [:]
-    /// A judgement call made while Matt was out: `-vory-ownbar-off` puts the bar's Back over
+    /// `-vory-ownbar-off` puts the bar's Back over
     /// those pages again, as in (18) and (19).
     static let ownBarOff = ProcessInfo.processInfo.arguments.contains("-vory-ownbar-off")
 
@@ -573,7 +573,7 @@ struct MorphTopBar: View {
             // tab's own only: with a chat left open on Chats (the Overview widget's link goes to
             // Home and leaves it there), a chat pushed on another tab's stack (from a bot's page or
             // its compose) took the bar, and after its Back the chat's bar stayed over the page
-            // (#386, the planner's call #34). On another tab a chat gets the page's own Back.
+            // (#386). On another tab a chat gets the page's own Back.
             if id != nil, model.chatsPathOpen, model.selectedTab == .chats, let c = model.visibleChat, state.chat !== c { state.push(c) }
         }
     }
@@ -1090,7 +1090,7 @@ extension View {
 /// for the chat page"): a soft fill behind the control touched, not its whole shared capsule, and
 /// a slight grow, like the system's glass controls, at touch-down; gone on lift or when the finger
 /// slides off. A fill, never glass taken to 0 (the glass reference). Reduce Motion: the fill
-/// alone. A judgement call made while Matt was out: `-vory-press-style-off` brings back (18)'s
+/// alone. `-vory-press-style-off` brings back (18)'s
 /// plain controls.
 struct MorphPressStyle: ButtonStyle {
     enum Kind {
