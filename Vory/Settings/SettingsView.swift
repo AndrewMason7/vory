@@ -812,7 +812,19 @@ struct AppearanceView: View {
                     layoutRaw = l.encoded
                 }
             } header: {
-                HStack { Text("Tab bar · \(layout.tabs.count) of \(TabLayout.maxTabs)"); Spacer(); EditButton().font(.caption) }
+                HStack {
+                    Text("Tab bar · \(layout.tabs.count) of \(TabLayout.maxTabs)"); Spacer()
+                    // Edit and Done as EditButton had them, at their own size in the header, with a 44 pt hit area of the
+                    // button's own laid over it (the audit's minimum; a frame around EditButton left its own 22 by 14): the
+                    // header keeps its height and the word its place.
+                    let editing = editMode?.wrappedValue.isEditing == true
+                    Text(editing ? "Done" : "Edit").font(.caption).hidden().accessibilityHidden(true)
+                        .overlay {
+                            Button { withAnimation { editMode?.wrappedValue = editing ? .inactive : .active } } label: {
+                                Text(editing ? "Done" : "Edit").font(.caption).frame(minWidth: 44, minHeight: 44).contentShape(.rect)
+                            }
+                        }
+                }
             } footer: {
                 Text(editMode?.wrappedValue.isEditing == true
                      ? "Drag to reorder, swipe or − to remove. Chats and Settings can move but not go."
