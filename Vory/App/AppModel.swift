@@ -757,8 +757,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         BotLooksMirror.mirror()   // so the notification extensions show the right bot from the start
         #if DEBUG
         // Simulator testing: `simctl push` only works once the app has asked for notification permission.
+        // The async form, as PushRegistrar asks: a completion handler written here is the main actor's, and the
+        // system calls it on its own queue, which traps under Swift 6's checks.
         if ProcessInfo.processInfo.arguments.contains("-vory-request-notifications") {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+            Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
         }
         #endif
         return true
