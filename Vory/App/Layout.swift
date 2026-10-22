@@ -186,7 +186,7 @@ struct ReservedRegions: Equatable {
     /// keyboard pushed it there), and when it stands under the fold while an open list (+, "/",
     /// "@") would reach across it: `listTop`, the list's top edge at full size with the dock
     /// unlifted, nil with no list open. `held` keeps a lift made for the list until the list
-    /// closes (the Checker's call: the dock rides above the fold while the list is open), so
+    /// closes (the decision: the dock rides above the fold while the list is open), so
     /// the list's own resizing after the lift cannot drop the dock back under it.
     func dockLift(dock: CGRect, listTop: CGFloat? = nil, held: Bool = false) -> CGFloat {
         guard let fold = horizontalFold, dock.height > 0 else { return 0 }
@@ -211,7 +211,7 @@ struct ReservedRegions: Equatable {
 
 /// Home's six tiles (DashboardView): three to a row, two even rows, on a phone, an iPad and the
 /// Mac; two to a row on a window that can fold up its middle (the open Duo on its side), so the
-/// fold falls between them and never through one (the Checker's call, Duo plan section 6). Keyed
+/// fold falls between them and never through one. Keyed
 /// to the window being foldable that way, not to the fold being there, so the tiles don't reflow
 /// at every hinge move; an active fold up the window counts too, in case a flat Duo reports no
 /// division. A fold across the window runs between rows: three stay.

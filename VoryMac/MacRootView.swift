@@ -130,7 +130,7 @@ private struct MainSplitView: View {
     @State private var appearedAt = Date.distantPast
     /// The rail's other pages, kept mounted once visited (first visit order). See `body`.
     @State private var kept: [AppModel.AppTab] = []
-    /// Judgement call while Matt is away (2026-10-13, vory-ops/JUDGEMENT-CALLS.md): a page left with a
+    /// Decided 2026-10-13: a page left with a
     /// page pushed on it keeps it, as the phone's tabs do. Setting this key (`defaults write <bundle id>
     /// mac.pages.popOnLeave -bool YES`) goes back to 1.5 (18)'s way: a page left is re-created at its
     /// root a moment after the switch, out of sight.

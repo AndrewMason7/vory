@@ -24,8 +24,8 @@ struct ConversationView: View {
     private var barReserve: CGFloat { model.tabBarReserved && !model.tabBarVertical ? VoryTabBar.reservedHeight(in: windowGeometry) : 0 }
     /// The fold of a partly open Duo across the window (a laptop pose): the dock moves up above
     /// it, with Apple's margin, when the keyboard has pushed it onto the fold, and while an open
-    /// list (+, "/", "@") would reach across it from under the fold (Duo stage 2, the Checker's
-    /// call; `ReservedRegions.dockLift`).
+    /// list (+, "/", "@") would reach across it from under the fold (Duo stage 2;
+    /// `ReservedRegions.dockLift`).
     @Environment(\.reservedRegions) private var regions
     /// The bottom of the dock's slot, lift and bar reserve included (window space): the lift
     /// is worked out from where the dock stands unlifted, never from where the lift has put

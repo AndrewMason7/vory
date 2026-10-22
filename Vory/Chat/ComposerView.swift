@@ -120,7 +120,7 @@ struct ComposerView: View {
 
     /// How far above the composer's bottom edge its open list (+, "/", "@") reaches at full
     /// size, 0 with none open: the chat lifts its dock over a fold the list would cross, while
-    /// the list is open (Duo stage 2, the Checker's call).
+    /// the list is open (Duo stage 2).
     private var listReach: CGFloat {
         guard composerFrame.height > 0 else { return 0 }
         let h = composerFrame.height
