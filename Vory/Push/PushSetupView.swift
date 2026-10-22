@@ -90,7 +90,7 @@ struct PushSetupView: View {
 
     var body: some View {
         // The demo (#392) has no Companion or push: they live on a gateway of one's own.
-        if model.isInDemo { DemoNeedsGateway(what: "Notifications and approval cards on the Lock Screen") } else { setupBody }
+        if model.isInDemo { DemoNeedsGateway(description: DemoNeedsGateway.notifications) } else { setupBody }
     }
 
     @ViewBuilder private var setupBody: some View {
@@ -795,7 +795,7 @@ struct CompanionView: View {
 
     var body: some View {
         // The demo (#392) has no Companion or push: they live on a gateway of one's own.
-        if model.isInDemo { DemoNeedsGateway(what: "Notifications and approval cards on the Lock Screen") } else { setupBody }
+        if model.isInDemo { DemoNeedsGateway(description: DemoNeedsGateway.notifications) } else { setupBody }
     }
 
     @ViewBuilder private var setupBody: some View {
