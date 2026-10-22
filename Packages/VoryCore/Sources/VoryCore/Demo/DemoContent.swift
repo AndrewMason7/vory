@@ -374,8 +374,8 @@ enum DemoContent {
             """)
 
     /// A message that asks what's taking the space, or to clean up (or a new chat's second message): it measures, then
-    /// asks once before it deletes anything. Onboarding's beats 3 and 4, Option A as Matt approved it
-    /// (ONBOARDING-COPY-DRAFT.md): the ready-made message is "What's taking up the most space on my server?".
+    /// asks once before it deletes anything. Onboarding's beats 3 and 4, Option A as Matt approved it: the ready-made
+    /// message is "What's taking up the most space on my server?".
     static let cleanup = Turn(
         reasoning: "Measure first, then ask before deleting anything.",
         opening: "",

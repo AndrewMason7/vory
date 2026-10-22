@@ -19,7 +19,7 @@ public enum PushRelay {
     #if DEBUG
     /// A relay for the unit tests to point at (#501): Debug builds have none baked in, so a test that says nothing reaches
     /// the relay would otherwise pass without the relay path ever running. An `.invalid` host, caught by the test's
-    /// URLProtocol before anything leaves the machine. On CUT-SWEEP §1.
+    /// URLProtocol before anything leaves the machine. DEBUG only, checked absent from Release at each cut.
     nonisolated(unsafe) public static var testURL: URL?
     #endif
 

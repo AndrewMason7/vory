@@ -443,7 +443,7 @@ final class AppModel {
     @ObservationIgnored private var askingDemoNotifications = false
     #if DEBUG
     /// The tests' stand-in for the system's question (#501), which in the unit-test host would put an alert up that
-    /// nothing answers; it can take its time, as the system's can. On CUT-SWEEP §1.
+    /// nothing answers; it can take its time, as the system's can. DEBUG only, checked absent from Release at each cut.
     nonisolated(unsafe) static var demoNotificationsAskForTests: (() async -> Void)?
     #endif
 
@@ -456,7 +456,7 @@ final class AppModel {
     /// came back with the host, and its runtime wrote the person's stores (the widgets' snapshot, the chat list's settings
     /// as it switched the demo's off) while the tests read them: the demo's no-trace checks failed on a used simulator and
     /// passed on a fresh one. The UI tests launch the app as itself, which this leaves alone. A test hook, so DEBUG only:
-    /// a Release build never reads the test runner's variable (CUT-SWEEP §1).
+    /// a Release build never reads the test runner's variable (checked at each cut).
     #if DEBUG
     nonisolated static let isUnitTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     #else

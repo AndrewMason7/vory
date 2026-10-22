@@ -137,7 +137,7 @@ final class PushRegistrar: PushRegistrationSyncing {
     }
     #if DEBUG
     /// The tests' say on whether a gateway of the person's own is saved (#501), so the registration checks run the same
-    /// whatever gateways the test host has kept. On CUT-SWEEP §1.
+    /// whatever gateways the test host has kept. DEBUG only, checked absent from Release at each cut.
     nonisolated(unsafe) static var ownGatewayForTests: Bool?
     #endif
 
@@ -370,7 +370,7 @@ final class PushRegistrar: PushRegistrationSyncing {
     }
     #if DEBUG
     /// The tests' list of the person's saved gateways (#509), so the relay checks run the same whatever gateways the test
-    /// host has kept. On CUT-SWEEP §1.
+    /// host has kept. DEBUG only, checked absent from Release at each cut.
     nonisolated(unsafe) static var ownGatewaysForTests: [UUID]?
     #endif
 }
@@ -556,7 +556,7 @@ import SwiftUI
 /// the demo's local notifications are delivered and how many are pending, and the most ever delivered at once,
 /// "delivered/pending/most" (by their `hermes.connection_id`), read again every second, in the background too while the
 /// app is kept awake (a notification cleared on the way back counts in "most"). A UI test reads it after sending the app
-/// away in the demo, and again after Leave demo. On CUT-SWEEP §1.
+/// away in the demo, and again after Leave demo. DEBUG only, checked absent from Release at each cut.
 struct DemoDeliveredReadout: View {
     static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-delivered-readout")
     @State private var value = "-1/-1/0/-1"

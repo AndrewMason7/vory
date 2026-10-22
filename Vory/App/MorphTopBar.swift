@@ -2,7 +2,7 @@
 import SwiftUI
 import VoryCore
 
-// Morph prototype, option A proper (BRIEF-1.5-MORPH, `-vory-morph-root`): the top controls of
+// Morph prototype, option A proper (`-vory-morph-root`): the top controls of
 // the Chats list and of an open chat are drawn here, over the pages and outside every
 // NavigationStack, as three persistent glass capsules in ONE GlassEffectContainer. Each capsule
 // is drawn at the frame interpolated by `t` between its two measured end states (0 the chat's
