@@ -715,6 +715,7 @@ struct AppearanceView: View {
     @AppStorage(ComposeAction.tapKey) private var composeTap = ComposeAction.tapDefault.rawValue
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
     #if os(iOS)
+    @AppStorage(ChatStyle.closeKeyboardAfterSend) private var closeKeyboardAfterSend = false
     @AppStorage(VoryTabBar.showVoiceKey) private var showVoiceButton = true
     @AppStorage(VoryTabBar.showLabelsKey) private var showTabLabels = true
     #endif
@@ -861,8 +862,10 @@ struct AppearanceView: View {
             #if os(iOS)
             Section {
                 Toggle("Return key sends", isOn: $returnSends)
+                Toggle("Close keyboard after sending", isOn: $closeKeyboardAfterSend)
+                    .accessibilityIdentifier("settings.closeKeyboardAfterSend")
             } header: { Text("Composer") } footer: {
-                Text("Off, the on-screen keyboard's Return adds a line, as in Messages, and the arrow sends. On, Return sends. On a hardware keyboard Return sends and Shift-Return adds a line either way; ⌘-Return sends too.")
+                Text("Return key sends: off, the on-screen keyboard's Return adds a line, as in Messages, and the arrow sends; on, Return sends. On a hardware keyboard Return sends and Shift-Return adds a line either way; ⌘-Return sends too. Close keyboard after sending: on, the keyboard goes down when a message goes; off, it stays up for the next one. A tap in the chat closes it either way.")
             }
             Section {
                 Toggle("Tab labels", isOn: $showTabLabels)

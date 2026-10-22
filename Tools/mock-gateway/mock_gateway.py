@@ -2525,6 +2525,16 @@ class Gateway:
             s.inflight = None
             await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
             return
+        if prompt.strip().lower().startswith("short link"):
+            # A short reply that ends on a link (#350's tests): at the thread's end with the keyboard up the link stays in
+            # view, where a long paragraph's link sits above the screen.
+            await self.event("message.start", s.sid)
+            text = "The export finished and every shard matched. The details are on the [status page](https://status.example.com/shards)."
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
         if prompt.strip().lower().startswith("files"):
             # Files handed back by a reply (#309): a PDF on a MEDIA line, a CSV with a space in
             # its name as a markdown link, and a path that only looks like one.

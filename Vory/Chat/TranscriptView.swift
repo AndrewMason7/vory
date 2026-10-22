@@ -277,7 +277,7 @@ struct TranscriptView: View {
                 // land where they belong in every frame and a new row fades in on its own
                 // (`rowView`); what moves the thread is scrolling (`followRows`), which moves
                 // every row together.
-                .background(ScrollViewProbe(metrics: metrics))
+                .background(ScrollViewProbe(metrics: metrics, dockTop: dockTop, headerBottom: headerBottom))
                 }
             }
             .scrollPosition($scrollPosition)
@@ -1148,21 +1148,37 @@ enum TimeLabels {
 /// SwiftUI scroll position, which is what the probe's absence means below.
 private struct ScrollViewProbe: View {
     let metrics: ScrollMetrics
+    var dockTop: CGFloat = 0
+    var headerBottom: CGFloat = 0
     var body: some View { Color.clear }
 }
 #else
-/// Finds the UIKit scroll view behind the thread and hands it to the metrics box.
+/// Finds the UIKit scroll view behind the thread and hands it to the metrics box. It also carries the tap that closes the
+/// on-screen keyboard (#350, `ThreadKeyboardTap`), attached to that scroll view while the thread is in a window, with the
+/// dock's top and the header's bottom it must leave alone.
 private struct ScrollViewProbe: UIViewRepresentable {
     let metrics: ScrollMetrics
-    func makeUIView(context: Context) -> ProbeView { let v = ProbeView(); v.metrics = metrics; v.isUserInteractionEnabled = false; return v }
-    func updateUIView(_ v: ProbeView, context: Context) { v.metrics = metrics }
+    var dockTop: CGFloat = 0
+    var headerBottom: CGFloat = 0
+    func makeUIView(context: Context) -> ProbeView {
+        let v = ProbeView(); v.metrics = metrics; v.keyboardTap = context.coordinator; v.isUserInteractionEnabled = false; return v
+    }
+    func updateUIView(_ v: ProbeView, context: Context) {
+        v.metrics = metrics
+        context.coordinator.dockTop = dockTop
+        context.coordinator.headerBottom = headerBottom
+    }
+    func makeCoordinator() -> ThreadKeyboardTap { ThreadKeyboardTap() }
+    static func dismantleUIView(_ v: ProbeView, coordinator: ThreadKeyboardTap) { coordinator.detach() }
     final class ProbeView: UIView {
         var metrics: ScrollMetrics?
+        weak var keyboardTap: ThreadKeyboardTap?
         override func didMoveToWindow() {
             super.didMoveToWindow()
             var s = superview
             while let x = s, !(x is UIScrollView) { s = x.superview }
             metrics?.scrollView = s as? UIScrollView
+            if window != nil, let sv = s as? UIScrollView { keyboardTap?.attach(to: sv) } else { keyboardTap?.detach() }
         }
     }
 }
@@ -1350,6 +1366,9 @@ enum ChatStyle {
     /// The on-screen keyboard's Return sends (as it did before 1.4) instead of adding a line; off
     /// by default. A hardware keyboard's Return sends and Shift-Return adds a line either way.
     static let returnSends = "chat.returnSends"
+    /// A send puts the on-screen keyboard away (#350); off by default, so a quick follow-up needs no tap. The demo's
+    /// and the tour's chats put it away either way (`ComposerFocusRule`).
+    static let closeKeyboardAfterSend = "chat.closeKeyboardAfterSend"
     static let showReasoning = "chat.showReasoning"
     static let showTurnStats = "chat.showTurnStats"
     /// The message bar's context figure as tokens ("18/200K") instead of a percentage.

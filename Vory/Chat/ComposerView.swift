@@ -46,6 +46,11 @@ struct ComposerView: View {
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
+    #if os(iOS)
+    @AppStorage(ChatStyle.closeKeyboardAfterSend) private var closeKeyboardAfterSend = false
+    #else
+    private let closeKeyboardAfterSend = false
+    #endif
     /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
     /// A drag is over the card (the Mac): the outline says it will take the drop.
     @State private var dropTargeted = false
@@ -951,8 +956,9 @@ struct ComposerView: View {
             quote = ""
         }
         text = ""
-        // The app's chats keep the cursor for the next message; the tour's and the demo's put the keyboard away.
-        focused = focusesAfterSend
+        // The app's chats keep the cursor for the next message unless Close keyboard after sending is on (#350); the
+        // tour's and the demo's put the keyboard away either way.
+        focused = ComposerFocusRule.afterSend(placeKeepsFocus: focusesAfterSend, closeAfterSending: closeKeyboardAfterSend)
         historyCursor = nil
         NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
         if let prefill = await chat.send(t) { text = prefill }

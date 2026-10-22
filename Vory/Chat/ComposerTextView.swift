@@ -633,6 +633,17 @@ final class PasteTextView: UITextView {
     /// An input method is composing in the field (see InputComposition): the keys are its own.
     var isComposing: Bool { InputComposition.isComposing(self) }
 
+    /// VoiceOver's escape (the two-finger Z) closes the on-screen keyboard while it is up (#350), the VoiceOver way to
+    /// what a tap in the chat does; otherwise it goes on to Back. Here on the field, where VoiceOver sits while typing:
+    /// SwiftUI's escape on the thread would always take the gesture, and Back with it.
+    override func accessibilityPerformEscape() -> Bool {
+        guard KeyboardCloseRule.escapeCloses(fieldEditing: isFirstResponder, hardwareKeyboard: KeyboardCloseRule.hardwareKeyboard) else {
+            return super.accessibilityPerformEscape()
+        }
+        resignFirstResponder()
+        return true
+    }
+
     private static let keyActions: Set<Selector> = [
         #selector(arrowUp), #selector(arrowDown), #selector(returnPressed), #selector(shiftReturnPressed),
         #selector(commandReturnPressed), #selector(tabPressed), #selector(escapePressed),
