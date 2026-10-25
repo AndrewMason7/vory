@@ -2031,6 +2031,9 @@ class Gateway:
             await self.event("reasoning.available", s.sid, {"text": text})
 
     async def run_turn(self, s: Session, prompt: str) -> None:
+        # One line per turn: which prompt came in on which session, so a UI test whose turn took another branch than it
+        # asked for (a "steps 8" answered by the default flow) shows what the mock actually read.
+        print(f"turn {s.sid} prompt={prompt[:120]!r}", flush=True)
         s.running = True
         s.turn_started_at = time.time()
         s.inflight = {"user": prompt, "assistant": "", "streaming": True}
