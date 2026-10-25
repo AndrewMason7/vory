@@ -194,8 +194,13 @@ final class KeyboardCloseUITests: XCTestCase {
             XCTFail("the link could not be brought wholly into the band \(Int(bandTop))...\(Int(bandBottom)): it stays at \(link.frame)\(stuck.isEmpty ? "" : "; " + stuck)")
             return
         }
-        print("KEYBOARD-CLOSE link frame \(link.frame) hittable \(link.isHittable) window \(app.windows.firstMatch.frame)")
-        link.tap()
+        // On the link's last line, not the middle of its frame: a link that wraps ("status" ending one line, "page"
+        // starting the next) has a frame round both pieces, and its middle is the plain text between them, where the
+        // tap closed the keyboard and opened nothing. A wrapped link's last line starts at the text's leading edge.
+        let f = link.frame
+        let point = CGPoint(x: f.minX + 10, y: f.maxY - 10)
+        print("KEYBOARD-CLOSE link frame \(f) hittable \(link.isHittable) window \(app.windows.firstMatch.frame) tap \(point)")
+        origin.withOffset(CGVector(dx: point.x, dy: point.y)).tap()
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
         if !safari.wait(for: .runningForeground, timeout: 15) {
             // For the read: whether it opened in a sheet in the app instead, or the tap missed the link.
