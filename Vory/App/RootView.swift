@@ -329,20 +329,21 @@ struct MainTabView: View {
                     if strip >= VoryTabBar.stripItemWidth {
                         // One column with the system's items: their width, their centre line
                         // (measured on the closed Duo: 50 pt wide, centred 48 pt from the edge).
-                        // On the closed display the stack sits at the strip's foot, under the
-                        // page's navigation items; on the open display (wide) it starts at the
-                        // top, under the status items, as Apple orders vertical bars (Matt).
+                        // The stack sits at the strip's foot, under the page's navigation items,
+                        // on the closed display and the open one alike (#516). On the open display
+                        // it stood at the top under a fixed allowance for the status items, and a
+                        // taller status column (an extra pill in it on a real Duo) covered its
+                        // first tabs; at the foot nothing in the status column reaches it.
                         let outer = VoryTabBar.stripCentreFromEdge - VoryTabBar.stripItemWidth / 2
-                        pages.overlay(alignment: wideAlignment(edge)) {
+                        pages.overlay(alignment: edge == .leading ? .bottomLeading : .bottomTrailing) {
                             bar
                                 .frame(width: VoryTabBar.stripItemWidth)
                                 .padding(edge == .leading ? .leading : .trailing, outer)
-                                .padding(.top, model.wideLayout ? VoryTabBar.stripStatusAllowance : 0)
                                 // The overlay already ends above the home-indicator area; the stack
                                 // keeps one group gap over it, no more. Padding it by the inset again
                                 // pushed the stack up until its first tab touched the page's own
                                 // strip items (the list's filter met Home, Matt).
-                                .padding(.bottom, model.wideLayout ? 0 : VoryTabBar.stripGroupGap)
+                                .padding(.bottom, VoryTabBar.stripGroupGap)
                                 .ignoresSafeArea(.container, edges: edge == .leading ? .leading : .trailing)
                         }
                     } else {
@@ -411,16 +412,6 @@ struct MainTabView: View {
     private func leaveForChats() {
         model.composeReturnTab = model.selectedTab == .chats ? nil : model.selectedTab
         model.selectedTab = .chats
-    }
-
-    /// Where the vertical bar stands in the strip: the foot on a closed display, the top on an open one.
-    private func wideAlignment(_ edge: HorizontalEdge) -> Alignment {
-        switch (edge, model.wideLayout) {
-        case (.leading, true): .topLeading
-        case (.leading, false): .bottomLeading
-        case (.trailing, true): .topTrailing
-        case (.trailing, false): .bottomTrailing
-        }
     }
 
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {

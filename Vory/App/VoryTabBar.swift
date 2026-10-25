@@ -82,12 +82,10 @@ struct VoryTabBar: View {
     /// too narrow to hold it): the capsule plus a margin each side.
     static let reservedWidth: CGFloat = 56 + 2 * 10
     /// The system's strip items, measured on the closed iPhone Duo: 50 pt wide, their centre
-    /// line 48 pt in from the window's edge, 10 pt between groups; the status items at the top
-    /// of the strip end about 150 pt down. Ours line up with them (Matt).
+    /// line 48 pt in from the window's edge, 10 pt between groups. Ours line up with them (Matt).
     static let stripItemWidth: CGFloat = 50
     static let stripCentreFromEdge: CGFloat = 48
     static let stripGroupGap: CGFloat = 10
-    static let stripStatusAllowance: CGFloat = 156
     /// The longest the bar group (the capsule and the circles) runs along the bottom: its length on the
     /// widest iPhone, the 17 Pro Max (440 pt wide, less the two 21 pt side margins), so no iPhone
     /// reaches it (the iPhone app is portrait-only). An iPad and the open Duo upright keep the
