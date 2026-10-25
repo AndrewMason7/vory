@@ -84,6 +84,8 @@ struct RootView: View {
             // `-vory-coldopen-probe`: how the thread moved as the last chat opened, for the open checks (#449).
             if ColdOpenProbe.isOn { ColdOpenProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
             if DemoDeliveredReadout.isOn { DemoDeliveredReadout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            // `-vory-morph-frames`: the top bar's capsules as drawn, for the headings and search fields checks (#516).
+            if MorphFramesProbe.isOn { MorphFramesProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
         }
         #endif
         #if DEBUG

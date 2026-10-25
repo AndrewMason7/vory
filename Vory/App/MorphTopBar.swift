@@ -635,7 +635,7 @@ struct MorphTopBar: View {
             // the one modifier so its identity holds.
             // Absent on this page: shrunk to nothing where it was (a view's opacity does not
             // fade glass, so the capsule also drops its glass there, in the one modifier).
-            .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown))
+            .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown, slot: slot))
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
             .animation(.snappy(duration: 0.22), value: selecting)
@@ -1051,6 +1051,8 @@ private struct CapsuleFrame: ViewModifier {
     /// page): the wheel's room goes with the morph. Given in full, a refresh still running as a
     /// chat opened widened its pill to the right, off its words, until the refresh ended.
     var widen: CGFloat = 1
+    /// The capsule's slot, for the DEBUG frames readout (`MorphFramesProbe`).
+    var slot: MorphSlot? = nil
     /// The wheel's side, as PullRefreshWheel's: it grows with the title's type.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
     func body(content: Content) -> some View {
@@ -1058,6 +1060,9 @@ private struct CapsuleFrame: ViewModifier {
         let width = present ? frame.width + (open ? side * 1.4 * widen : 0) : 0
         content
             .frame(width: width, height: present ? frame.height : 0)
+            #if DEBUG
+            .modifier(MorphFramesProbe.Record(slot: slot, present: present))
+            #endif
             // The page's glass under the capsule stays still when it is touched (#344).
             .barShieldShape()
             .clipShape(.capsule)
@@ -1166,6 +1171,48 @@ private struct FaceTapArea: UIViewRepresentable {
         @objc func tapped() { action() }
     }
 }
+
+#if DEBUG
+/// DEBUG `-vory-morph-frames` (#516's checks; DEBUG only, checked absent from Release at each cut): each of the top bar's
+/// capsules as drawn, in the window's space, for the UI tests to hold the page's headings and search fields against. The
+/// capsules are glass shapes, not accessibility elements, and the title's text is narrower than its capsule. Read through
+/// a 1 pt element, "debug.morphframes", whose value is "lead x y w h;mid …;trail …" for the capsules shown.
+enum MorphFramesProbe {
+    nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-morph-frames")
+    @MainActor static var frames: [MorphSlot: CGRect] = [:]
+    @MainActor static var summary: String {
+        MorphSlot.allCases.compactMap { s in
+            frames[s].map { "\(s) \(Int($0.minX.rounded())) \(Int($0.minY.rounded())) \(Int($0.width.rounded())) \(Int($0.height.rounded()))" }
+        }.joined(separator: ";")
+    }
+    struct Record: ViewModifier {
+        let slot: MorphSlot?
+        let present: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if isOn, let slot {
+                content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+                    MorphFramesProbe.frames[slot] = present && f.width > 0 ? f : nil
+                }
+                // A capsule that hides without moving isn't measured again: it leaves the readout at once, so no check
+                // reads a capsule that's gone.
+                .onChange(of: present) { _, shown in if !shown { MorphFramesProbe.frames[slot] = nil } }
+            } else {
+                content
+            }
+        }
+    }
+    final class ReadoutView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.morphframes" } set {} }
+        override var accessibilityLabel: String? { get { "Top bar frames" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { MorphFramesProbe.summary } } set {} }
+    }
+    struct Readout: UIViewRepresentable {
+        func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
+        func updateUIView(_ v: ReadoutView, context: Context) {}
+    }
+}
+#endif
 #else
 import SwiftUI
 import VoryCore

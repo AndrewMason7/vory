@@ -240,6 +240,9 @@ struct DashboardView: View {
             Text(Date(), format: .dateTime.weekday(.wide).month(.wide).day()).font(.subheadline).foregroundStyle(.secondary)
         }
         .padding(.top, 4)
+        // The page's heading for the UI tests that hold it clear of the top bar's capsules (#516).
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.heading")
         .task(id: "\(dayPart)|\(userName)") { await freshenGreeting() }
     }
 
