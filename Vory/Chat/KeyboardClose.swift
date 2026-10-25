@@ -87,7 +87,12 @@ extension UIResponder {
         guard KeyboardCloseRule.tapCloses(y: y, dockTop: dockTop, headerBottom: headerBottom,
                                           fieldEditing: UIResponder.vory_current is UITextInput,
                                           hardwareKeyboard: KeyboardCloseRule.hardwareKeyboard) else { return }
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        // On the next turn, once whatever else took the same tap has acted on the layout it was touched on: closing
+        // the keyboard moves the thread (at its end, down by the keyboard's height), and a link in the last reply,
+        // resolved after the move, was no longer under the finger. The keyboard went and the link didn't open.
+        DispatchQueue.main.async {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
