@@ -271,6 +271,50 @@ final class KeyboardCloseUITests: XCTestCase {
         XCTAssertGreaterThan(app.keyboards.count, 0, "the keyboard went down after Send with the setting off")
     }
 
+    // MARK: #505: a swipe down the thread closes the keyboard, in a chat over the mock and in a Demo mode chat: a fast
+    // swipe on a short thread and a slow drag down into the keyboard on a long one (the issue's report was a demo chat).
+
+    /// A drag down the thread from its upper part into the keyboard, fast or slow, then the keyboard's state settles.
+    private func swipeDown(fast: Bool) {
+        let w = app.windows.firstMatch
+        w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)), withVelocity: fast ? .fast : .slow, thenHoldForDuration: 0)
+        pause(1.2)
+    }
+
+    func testASwipeDownClosesTheKeyboardInAChatOverTheMock() throws {
+        try launch()
+        sendHello()
+        XCTAssertTrue(keyboard(up: true), "no keyboard before the swipe")
+        swipeDown(fast: true)
+        XCTAssertTrue(keyboard(up: false), "a fast swipe down a short thread left the keyboard up")
+        app.terminate()
+        try launch()
+        chatWithCards()
+        swipeDown(fast: false)
+        XCTAssertTrue(keyboard(up: false), "a slow drag down a long thread left the keyboard up")
+    }
+
+    func testASwipeDownClosesTheKeyboardInADemoChat() throws {
+        guard let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty else { throw XCTSkip("HERMES_E2E_BUNDLE not set") }
+        continueAfterFailure = true
+        for (chatTitle, fast) in [("Packing list for the lake weekend", true), ("Morning checks on the home servers", false)] {
+            app = XCUIApplication(bundleIdentifier: bundle)
+            app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats"]
+            app.launch()
+            let chat = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", chatTitle)).firstMatch
+            XCTAssertTrue(chat.waitForExistence(timeout: 30), "no demo chat '\(chatTitle)'")
+            chat.tap(); pause(1.5)
+            XCTAssertTrue(field.waitForExistence(timeout: 20), "no message bar in '\(chatTitle)'")
+            field.tap()
+            XCTAssertTrue(keyboard(up: true), "no keyboard in '\(chatTitle)'")
+            pause(0.8)
+            swipeDown(fast: fast)
+            XCTAssertTrue(keyboard(up: false), "a \(fast ? "fast swipe" : "slow drag") down '\(chatTitle)' left the keyboard up")
+            app.terminate()
+        }
+    }
+
     /// Settings › Appearance with Close keyboard after sending on it passes the audit; every finding is printed.
     func testAppearanceWithTheNewRowPassesTheAudit() throws {
         try launch(["-launchTab", "settings"])
