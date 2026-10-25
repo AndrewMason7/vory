@@ -60,6 +60,9 @@ final class TopBarRoomUITests: XCTestCase {
             let search = app.searchFields.firstMatch
             XCTAssertTrue(search.waitForExistence(timeout: 15), "\(tab): no search field")
             XCTAssertGreaterThanOrEqual(search.frame.minY, bottom, "\(tab): the search field (\(search.frame)) starts under the bar's row (bottom \(bottom))")
+            // And no empty band under the row (Duo stage 2: the open Duo upright once had 66 pt there): the drawer within
+            // 16 pt of the row's bottom, on every device (a phone about 6, the closed Duo 8, the open Duo upright 11).
+            XCTAssertLessThanOrEqual(search.frame.minY - bottom, 16, "\(tab): an empty band of \(Int(search.frame.minY - bottom)) pt under the bar's row")
             XCTAssertTrue(search.isHittable, "\(tab): the search field is not hittable")
             try auditTheTop(tab, from: bottom, down: search.frame.maxY + 4)
             if tab == "chats" {

@@ -86,12 +86,50 @@ enum TopBarRoom {
     static let barPadding: CGFloat = 4
     /// The gap between the row's bottom and the page.
     static let gap: CGFloat = 8
-    static func inset(barsVertical: Bool, barOn: Bool, rowBottom: CGFloat) -> CGFloat {
-        guard barsVertical, barOn, rowBottom > 0 else { return 0 }
-        return (rowBottom + barPadding + gap).rounded()
+    /// The row's room (stage 1's: the row's bottom, in the bar's space, plus the bar's padding and a gap) where nothing
+    /// of the system's keeps the page under the row: where its bars stand vertical in a side strip (the closed iPhone
+    /// Duo, stage 1), or where its status stands in a top corner of the window (`ReservedRegions.statusInCorner`: the
+    /// open Duo upright, flat or half open like a laptop, whose search field stood under the row; the stage 2 probe).
+    /// A phone and an iPad have neither: nothing, unchanged. Worked out from the window's shape alone, never read back
+    /// from the page: a room keyed on what the page measured flapped, stuck, or missed (the stage 2 A/B).
+    /// ASSUMPTION (the one line to change if a device ever breaks it): a status standing in a top corner means the system
+    /// keeps no band of its own under the row.
+    static func inset(barsVertical: Bool, statusInCorner: Bool, barOn: Bool, rowBottom: CGFloat) -> CGFloat {
+        guard barOn, rowBottom > 0 else { return 0 }
+        if barsVertical { return (rowBottom + barPadding + gap).rounded() }
+        return statusInCorner ? cornerRoom : 0
     }
+    /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
+    /// (.avoidHidingContent)`): under a status in a top corner only (#516). There the corner room holds the field under the
+    /// row through the bar's own title band; with the band hidden by an active search the field and its Cancel rode up
+    /// under the row's capsules, and a room changed to follow the search arrived after UIKit had moved the field (the page
+    /// jumped as the search started and ended). Keeping the bar, the field stays where it is and nothing changes late.
+    /// Everywhere else (phones, iPads, the closed Duo) the system's own behaviour, unchanged.
+    static func keepsBarWhileSearching(statusInCorner: Bool) -> Bool { statusInCorner }
+    /// The room under a status in a top corner. ASSUMPTION (iOS 27.1 to 27.2, the open Duo upright and as a laptop): UIKit
+    /// brings the navigation bar's own title band (58 pt) back under the safe area once any additional inset is set, so
+    /// the smallest inset puts the search drawer just under the row: 1 pt leaves it at 141 against the row's 130, where
+    /// 56 (the full room) left it at 196, a 66 pt empty band; with no inset the field stood under the row.
+    /// TopBarRoomUITests holds the drawer within 16 pt of the row, so an iOS that changes this trips a test.
+    static let cornerRoom: CGFloat = 1
+    #if DEBUG
+    /// The room the probe last applied, for the geometry readout, which redraws when it changes.
+    @MainActor static var lastRoom: CGFloat {
+        get { AppliedRoom.shared.room }
+        set { AppliedRoom.shared.room = newValue }
+    }
+    #endif
 }
 
+
+#if DEBUG
+/// DEBUG: the room the top bar's probe last applied (`TopBarRoom.lastRoom`), observed so the geometry readout
+/// (`-vory-geometry-probe`) redraws when it changes rather than showing an old room after a pose change.
+@MainActor @Observable final class AppliedRoom {
+    static let shared = AppliedRoom()
+    var room: CGFloat = -1
+}
+#endif
 
 /// The fold on a partly open iPhone Duo, where it crosses this view's frame (its own
 /// coordinates), with Apple's margins for interactive content included; nil when there is no
@@ -197,6 +235,16 @@ struct ReservedRegions: Equatable {
         return dock.maxY - fold.minY + Self.margin
     }
 
+    /// An active occlusion in the top trailing corner of a window `width` wide: at its top edge, against its right edge
+    /// (in the window's own space, whatever the writing direction), less than half its width and wider than tall (a piece
+    /// of a status, not a strip down the side). The open iPhone Duo's status corner (535, 0, 134 x 82 of 669; the probe).
+    /// Not: a phone's or an iPad's status, one band the window's full width (iOS 27.2); an iPad turned to landscape, whose
+    /// status 27.2 reports as a strip 32 wide and the window's full height against a side; a camera under the top edge;
+    /// an iPad window's own controls, in its top leading corner, should a system report them as an occlusion.
+    func statusInCorner(width: CGFloat) -> Bool {
+        occlusions.contains { $0.minY <= 0.5 && $0.maxX >= width - 0.5 && $0.width < width / 2 && $0.width > $0.height }
+    }
+
     /// The width of the list column in two columns when a fold runs up the window (a book
     /// pose): the column ends at the fold's middle, so the fold is the line between the list
     /// and the chat, as Apple advises, rather than running through the chat. `leading` is the
@@ -249,6 +297,19 @@ enum HomeTiles {
 
 extension EnvironmentValues {
     @Entry var reservedRegions = ReservedRegions()
+    /// The window's status stands in a top corner (`ReservedRegions.statusInCorner`: the open Duo upright), worked out once
+    /// at the root (`StatusCornerEnvironment`), so the tab roots that give the top bar's row its room read one value that
+    /// almost never changes rather than the window's geometry (#516).
+    @Entry var statusInCorner = false
+}
+
+/// Puts `statusInCorner` into the environment from the window's regions and width.
+struct StatusCornerEnvironment: ViewModifier {
+    @Environment(\.reservedRegions) private var regions
+    @Environment(\.windowGeometry) private var windowGeometry
+    func body(content: Content) -> some View {
+        content.environment(\.statusInCorner, regions.statusInCorner(width: windowGeometry.bounds.width))
+    }
 }
 
 /// Reads the window's reserved regions at the root and publishes them (window space) through

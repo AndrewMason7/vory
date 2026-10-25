@@ -70,6 +70,8 @@ struct RootView: View {
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
         .background { TouchSignpostProbe().frame(width: 0, height: 0) }
         // The fold and the camera, for every floating piece below (Step D).
+        // Whether the status stands in a top corner, for the top bar's room on every tab (#516), read here once.
+        .modifier(StatusCornerEnvironment())
         .modifier(ReservedRegionsEnvironment())
         #if DEBUG && os(iOS)
         // `-vory-ax-oracle`: what VoiceOver would stop on, for UI tests (`VoiceOverOracle`, #409).
@@ -91,7 +93,7 @@ struct RootView: View {
             if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
                 VerticalBarEdge { edge in
                     let g = windowGeometry
-                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@  hidden %@ kb %@ open %@ hiders %d mw %@ v %@ row %.0f room %.0f", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no", model.tabBarHidden ? "yes" : "no", model.keyboardUp ? "yes" : "no", model.chatsPathOpen ? "yes" : "no", model.tabBarHiders[model.selectedTab] ?? 0, model.wideLayout ? "yes" : "no", model.tabBarVertical ? "yes" : "no", MorphState.shared.rootRowBottom, TopBarRoom.inset(barsVertical: model.tabBarVertical, barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)))
+                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@  hidden %@ kb %@ open %@ hiders %d mw %@ v %@ row %.0f room %.0f", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no", model.tabBarHidden ? "yes" : "no", model.keyboardUp ? "yes" : "no", model.chatsPathOpen ? "yes" : "no", model.tabBarHiders[model.selectedTab] ?? 0, model.wideLayout ? "yes" : "no", model.tabBarVertical ? "yes" : "no", MorphState.shared.rootRowBottom, TopBarRoom.lastRoom))
                         .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
                         .accessibilityIdentifier("geometry.window")
                         // Below the morph bar's chat row (its capsules sit 30 pt lower since

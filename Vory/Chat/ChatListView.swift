@@ -33,6 +33,8 @@ struct ChatRoute: Hashable, Codable {
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
+    /// The status stands in a top corner: the top bar's row gets its room there, and the search keeps the bar (`TopBarRoom`).
+    @Environment(\.statusInCorner) private var statusInCorner
     /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
     @Environment(\.macPageShown) private var pageShown
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
@@ -212,6 +214,8 @@ struct ChatListView: View {
             // before this iOS, is gone; the field no longer rides in and out with the bar on the
             // way back from a chat.
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            // The bar kept while searching under a status in a top corner, as on the other pages (#516).
+            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner) ? .avoidHidingContent : .automatic)
             .textInputAutocapitalization(.never).autocorrectionDisabled()
             #endif
             // One column on a window wider than a phone (the open Duo upright, 669 pt): the
@@ -236,7 +240,8 @@ struct ChatListView: View {
             // invisible item keeps it at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
             // On the closed Duo the search drawer rode up under the bar's capsules (#340): the stack starts under its row.
-            .background(TopBarRoomProbe(room: TopBarRoom.inset(barsVertical: model.tabBarVertical, barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
+            .background(TopBarRoomProbe(room: TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner,
+                                                               barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
             #endif
             .background(InteractivePopEnabler())
             // The stack's path is watched by whoever owns it (ChatsSplitPage for the model's

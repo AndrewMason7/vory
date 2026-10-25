@@ -66,16 +66,83 @@ import Testing
         #expect(!WindowGeometry.keyboardCarriesOver(from: CGSize(width: 669, height: 951), to: CGSize(width: 951, height: 669)))
     }
 
-    /// #340: the floating top bar's row gets room only where the system's bars stand in a side strip (the closed Duo)
-    /// and the bar is up; the row's bottom (in the bar's space) plus the bar's top padding and a gap.
-    @Test func theTopBarsRowGetsRoomOnlyBesideASideStrip() {
-        #expect(TopBarRoom.inset(barsVertical: true, barOn: true, rowBottom: 44) == 56)
-        #expect(TopBarRoom.inset(barsVertical: true, barOn: true, rowBottom: 41.3) == 53)
-        // Along the bottom (any phone, the open Duo upright), the system keeps its band: no room.
-        #expect(TopBarRoom.inset(barsVertical: false, barOn: true, rowBottom: 44) == 0)
-        // No bar (a wide window: two columns and the system's own bar).
-        #expect(TopBarRoom.inset(barsVertical: true, barOn: false, rowBottom: 44) == 0)
-        // Not measured yet.
-        #expect(TopBarRoom.inset(barsVertical: true, barOn: true, rowBottom: 0) == 0)
+    /// #340: the floating top bar's row gets stage 1's room (the row's bottom, in the bar's space, plus the bar's top
+    /// padding and a gap) where the bars stand vertical (the closed Duo) or the status stands in a top corner (the open
+    /// Duo upright), with the bar up; nowhere else.
+    @Test func theTopBarsRowGetsRoomBesideAStripOrUnderACornerStatus() {
+        #expect(TopBarRoom.inset(barsVertical: true, statusInCorner: true, barOn: true, rowBottom: 44) == 56)
+        #expect(TopBarRoom.inset(barsVertical: false, statusInCorner: true, barOn: true, rowBottom: 44) == TopBarRoom.cornerRoom)
+        #expect(TopBarRoom.cornerRoom == 1)
+        #expect(TopBarRoom.inset(barsVertical: true, statusInCorner: false, barOn: true, rowBottom: 41.3) == 53)
+        // A phone and an iPad: neither, so nothing, unchanged.
+        #expect(TopBarRoom.inset(barsVertical: false, statusInCorner: false, barOn: true, rowBottom: 44) == 0)
+        // No bar (a wide window: the iPad, the open Duo on its side), or the row not measured yet.
+        #expect(TopBarRoom.inset(barsVertical: false, statusInCorner: true, barOn: false, rowBottom: 44) == 0)
+        #expect(TopBarRoom.inset(barsVertical: true, statusInCorner: true, barOn: true, rowBottom: 0) == 0)
+    }
+
+    /// The poses the stage 2 probe read, end to end (the rule and the regions together): the closed Duo, the open Duo
+    /// upright and like a laptop get the room; on its side (flat or like a book) the window is wide and the bar is off; a
+    /// phone with an Island in the middle and an iPad with nothing at the top get none.
+    @Test func theRoomInEachPoseTheProbeRead() {
+        func room(_ occlusions: [CGRect], width: CGFloat, vertical: Bool, barOn: Bool) -> CGFloat {
+            TopBarRoom.inset(barsVertical: vertical, statusInCorner: ReservedRegions(occlusions: occlusions).statusInCorner(width: width), barOn: barOn, rowBottom: 44)
+        }
+        let closed = [CGRect(x: 400, y: 29, width: 37, height: 37), CGRect(x: 382, y: 0, width: 84, height: 170)]
+        let upright = [CGRect(x: 611, y: 677, width: 37, height: 58), CGRect(x: 535, y: 0, width: 134, height: 82)]
+        let side = [CGRect(x: 216, y: 611, width: 58, height: 37), CGRect(x: 867, y: 0, width: 84, height: 120)]
+        #expect(room(closed, width: 466, vertical: true, barOn: true) == 56)
+        #expect(room(upright, width: 669, vertical: false, barOn: true) == 1)   // flat upright, and the laptop pose
+        #expect(room(side, width: 951, vertical: true, barOn: false) == 0)      // flat on its side, and the book pose
+        #expect(room([CGRect(x: 138, y: 11, width: 126, height: 37)], width: 402, vertical: false, barOn: true) == 0)
+        #expect(room([], width: 820, vertical: false, barOn: true) == 0)
+    }
+
+    /// #516: a search keeps the navigation bar while it's presented under a status in a top corner only (the open Duo
+    /// upright), so the field stays under the row with the corner room; everywhere else the system's own behaviour.
+    @Test func aSearchKeepsTheBarOnlyUnderACornerStatus() {
+        #expect(TopBarRoom.keepsBarWhileSearching(statusInCorner: true))
+        #expect(!TopBarRoom.keepsBarWhileSearching(statusInCorner: false))
+        let upright = ReservedRegions(occlusions: [CGRect(x: 611, y: 677, width: 37, height: 58), CGRect(x: 535, y: 0, width: 134, height: 82)])
+        #expect(TopBarRoom.keepsBarWhileSearching(statusInCorner: upright.statusInCorner(width: 669)))
+        let phone = ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 402, height: 54)])
+        #expect(!TopBarRoom.keepsBarWhileSearching(statusInCorner: phone.statusInCorner(width: 402)))
+        let closed = ReservedRegions(occlusions: [CGRect(x: 382, y: 0, width: 84, height: 170)])
+        #expect(!TopBarRoom.keepsBarWhileSearching(statusInCorner: closed.statusInCorner(width: 466)))
+    }
+
+    /// The occlusions the stage 2 probe read, in window space: a corner status counts, a camera under the top edge and a
+    /// Dynamic Island in the middle don't.
+    @Test func aStatusInATopCornerIsSeenFromTheRegions() {
+        // The open Duo upright (669 wide): the status corner, and the camera lower down.
+        let upright = ReservedRegions(occlusions: [CGRect(x: 535, y: 0, width: 134, height: 82), CGRect(x: 611, y: 677, width: 37, height: 58)])
+        #expect(upright.statusInCorner(width: 669))
+        // The closed Duo (466 wide): its strip's top is taller than wide, a strip down the side, not a corner (the closed Duo
+        // gets its room from its vertical bars); its camera at y 29 doesn't count either.
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 382, y: 0, width: 84, height: 170)]).statusInCorner(width: 466))
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 400, y: 29, width: 37, height: 37)]).statusInCorner(width: 466))
+        // A phone's Dynamic Island: in the middle of the top, against neither side.
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 138, y: 11, width: 126, height: 37)]).statusInCorner(width: 402))
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 138, y: 0, width: 126, height: 37)]).statusInCorner(width: 402))
+        // Nothing reported (anything before iOS 27.1).
+        #expect(!ReservedRegions().statusInCorner(width: 1024))
+        // An iPad window's own controls stand in its top leading corner (iPadOS 26 on): were a system to report them as an
+        // occlusion, they'd be wider than tall at the top edge, against a side, under half the width, and must not count:
+        // only the trailing corner does (the open Duo's status at 535 of 669).
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 74, height: 34)]).statusInCorner(width: 744))
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 8, y: 0, width: 80, height: 30)]).statusInCorner(width: 1024))
+        #expect(ReservedRegions(occlusions: [CGRect(x: 535, y: 0, width: 134, height: 82)]).statusInCorner(width: 669))
+        // What iOS 27.2 reports at the top of a phone and an iPad (the readouts, 2026-10-20): one band the window's full
+        // width, never a corner, and so no room: the iPhone 17 Pro, the iPhone SE at the largest text, the iPad Air.
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 402, height: 54)]).statusInCorner(width: 402))
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 375, height: 20)]).statusInCorner(width: 375))
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 820, height: 32)]).statusInCorner(width: 820))
+        // A narrow window (Split View, Stage Manager): the band spans whatever window it is in, so never under half.
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 320, height: 32)]).statusInCorner(width: 320))
+        // The iPad turned to landscape: 27.2 reports its status as a strip 32 wide down a side, the window's full height.
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 32, height: 820)]).statusInCorner(width: 1180))
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 1148, y: 0, width: 32, height: 820)]).statusInCorner(width: 1180))
+        // Such a strip in a narrow window with the bar up gives no room either.
+        #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 32, height: 820)]).statusInCorner(width: 320))
     }
 }
