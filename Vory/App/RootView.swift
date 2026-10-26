@@ -436,6 +436,14 @@ struct MainTabView: View {
 
 
 #if os(iOS)
+/// The hinge's last reading (iOS 27.1, a foldable phone), kept from launch for Settings › Troubleshooting › Screen layout
+/// (#516); nil before one has come, and always on a phone that doesn't fold.
+@MainActor @Observable final class DevicePosture {
+    static let shared = DevicePosture()
+    struct Reading: Equatable { var status: String; var degrees: Double }
+    var last: Reading?
+}
+
 /// The faces blink once as a foldable phone opens (Duo stage 4): the root watches the hinge and the window and stamps
 /// `BotAmbient.opened` when `HingeOpenRule` says (the later of 0.3 s after the hinge leaves closed and the open
 /// display's window; none if that window doesn't come within 2 s). Nothing on a phone that doesn't fold, where no hinge
@@ -462,6 +470,8 @@ struct HingeOpenBlink: ViewModifier {
             content
                 .onHingeChange { old, new in
                     guard let n = new.hinge else { return }
+                    DevicePosture.shared.last = .init(status: n.status == .closed ? "Closed" : n.status == .fullyOpen ? "Open" : n.status == .partiallyOpen ? "Partly open" : "Other",
+                                                      degrees: n.angle.degrees)
                     let before = (rule.leftClosedAt, rule.windowAt)
                     rule.hinge(from: old.hinge.map { Self.status($0.status) }, to: Self.status(n.status), at: Self.now)
                     if before != (rule.leftClosedAt, rule.windowAt) { schedule() }

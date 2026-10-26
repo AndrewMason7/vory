@@ -1,30 +1,9 @@
-import StoreKit
 import SwiftUI
 import VoryCore
 
-/// "Replay the welcome tour" (#487): the first launch's tour again, over the app as it is, from Settings ›
-/// Troubleshooting. Test builds only: the App Store's build never offers it.
-enum TourReplay {
-    /// A Debug build, or one installed from TestFlight (the App Store's sandbox) or by Xcode; never the App Store's.
-    static func allowed(environment: AppStore.Environment?, debug: Bool) -> Bool {
-        debug || environment == .sandbox || environment == .xcode
-    }
-
-    /// This build's answer, asked once at launch. False when the App Store can't say.
-    static func allowedHere() async -> Bool {
-        #if DEBUG
-        return true
-        #else
-        guard let result = try? await AppTransaction.shared else { return false }
-        switch result {
-        case .verified(let t), .unverified(let t, _): return allowed(environment: t.environment, debug: false)
-        }
-        #endif
-    }
-}
-
 #if os(iOS)
-/// The tour over the running app (#487). It runs on its own demo as on a first launch and leaves the app as it was:
+/// "Replay the welcome tour" (#487), from Settings › Troubleshooting on a test build only (`TestBuild`): the tour over
+/// the running app. It runs on its own demo as on a first launch and leaves the app as it was:
 /// Skip goes to the last beat as on a first launch (#492), and Done there comes back to where you were; Connect your
 /// gateway opens the gateway form, and
 /// leaving the form (Cancel, or Save) comes back too; Try a demo closes it and starts the demo, whose Leave demo

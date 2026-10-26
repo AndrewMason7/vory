@@ -4,6 +4,11 @@ import VoryCore
 /// What to check when connecting, signing in, the Companion or notifications go wrong. Plain
 /// lists, one section per symptom, written for someone standing at a gateway they run themselves.
 struct TroubleshootingView: View {
+    /// What a test build adds at the foot of the page, in order (`TestBuild`): every row on the one flag
+    /// (`AppModel.testBuild`), none on any other build.
+    enum TestBuildRow: CaseIterable { case replayTour, screenLayout }
+    static func testBuildRows(testBuild: Bool) -> [TestBuildRow] { testBuild ? TestBuildRow.allCases : [] }
+
     @Environment(AppModel.self) private var model
     private struct Topic: Identifiable {
         let id: String
@@ -79,16 +84,30 @@ struct TroubleshootingView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             #if os(iOS)
-            // The first launch's tour again (#487), on a test build only (`TourReplay`): nothing in the app changes.
-            if model.tourReplayAllowed {
-                Section {
-                    Button { model.replayingTour = true } label: {
-                        Label("Replay the welcome tour", systemImage: "sparkles")
+            // A test build's own rows (`testBuildRows`), all on the one flag; none on the App Store's build.
+            ForEach(Self.testBuildRows(testBuild: model.testBuild), id: \.self) { row in
+                switch row {
+                case .replayTour:
+                    // The first launch's tour again (#487): nothing in the app changes.
+                    Section {
+                        Button { model.replayingTour = true } label: {
+                            Label("Replay the welcome tour", systemImage: "sparkles")
+                        }
+                        .accessibilityHint("Shows the first launch's tour again, over the app as it is.")
+                        .accessibilityIdentifier("troubleshooting.replayTour")
+                    } footer: {
+                        Text("Test builds only. Your gateways, chats and settings stay as they are.")
                     }
-                    .accessibilityHint("Shows the first launch's tour again, over the app as it is.")
-                    .accessibilityIdentifier("troubleshooting.replayTour")
-                } footer: {
-                    Text("Test builds only. Your gateways, chats and settings stay as they are.")
+                case .screenLayout:
+                    // The numbers the layout works from (#516), for a screenshot from a device.
+                    Section {
+                        NavigationLink { ScreenLayoutView().pushedPage() } label: {
+                            Label("Screen layout", systemImage: "ruler")
+                        }
+                        .accessibilityIdentifier("troubleshooting.screenLayout")
+                    } footer: {
+                        Text("For testing. Shows how Vory measures this screen. A screenshot of it helps fix layouts on your device.")
+                    }
                 }
             }
             #endif

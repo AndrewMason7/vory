@@ -112,24 +112,23 @@ enum TopBarRoom {
     /// 56 (the full room) left it at 196, a 66 pt empty band; with no inset the field stood under the row.
     /// TopBarRoomUITests holds the drawer within 16 pt of the row, so an iOS that changes this trips a test.
     static let cornerRoom: CGFloat = 1
-    #if DEBUG
-    /// The room the probe last applied, for the geometry readout, which redraws when it changes.
+    /// The room the probe last applied, for the readouts (the DEBUG geometry probe, and Screen layout on a test build),
+    /// which redraw when it changes.
     @MainActor static var lastRoom: CGFloat {
         get { AppliedRoom.shared.room }
         set { AppliedRoom.shared.room = newValue }
     }
-    #endif
 }
 
-
-#if DEBUG
-/// DEBUG: the room the top bar's probe last applied (`TopBarRoom.lastRoom`), observed so the geometry readout
-/// (`-vory-geometry-probe`) redraws when it changes rather than showing an old room after a pose change.
+/// The room the top bar's probe last applied (`TopBarRoom.lastRoom`); -1 before it has applied one. Observed so a readout
+/// redraws when it changes rather than showing an old room after a pose change.
 @MainActor @Observable final class AppliedRoom {
     static let shared = AppliedRoom()
     var room: CGFloat = -1
+    /// Each tab root's room as its own probe last applied it. Every root applies one, the hidden ones too, so the last
+    /// applied (`room`) can be a hidden tab's: Screen layout shows the front tab's, and names any root that differs.
+    var rooms: [AppModel.AppTab: CGFloat] = [:]
 }
-#endif
 
 /// The fold on a partly open iPhone Duo, where it crosses this view's frame (its own
 /// coordinates), with Apple's margins for interactive content included; nil when there is no
@@ -189,6 +188,15 @@ struct ReservedRegions: Equatable {
     var upFold: CGRect? = nil
     /// The window can fold up its middle.
     var foldable: Bool { upFold != nil }
+    /// Every region the window reports, active or not, as it reports it (window space): what Settings › Troubleshooting ›
+    /// Screen layout shows (#516). The layouts read the active ones above, never these.
+    var reported: [Reported] = []
+    struct Reported: Equatable {
+        enum Kind: Equatable { case fold, occlusion }
+        var kind: Kind
+        var frame: CGRect
+        var active: Bool
+    }
 
     /// The first of `divisions` (active or not, the window's own space) that runs up a window of
     /// `size` and crosses it: a fold across the window (the laptop pose, the open Duo upright)
@@ -242,7 +250,24 @@ struct ReservedRegions: Equatable {
     /// status 27.2 reports as a strip 32 wide and the window's full height against a side; a camera under the top edge;
     /// an iPad window's own controls, in its top leading corner, should a system report them as an occlusion.
     func statusInCorner(width: CGFloat) -> Bool {
-        occlusions.contains { $0.minY <= 0.5 && $0.maxX >= width - 0.5 && $0.width < width / 2 && $0.width > $0.height }
+        if case .corner = statusArea(width: width) { true } else { false }
+    }
+
+    /// The status area as the layout reads it (`statusInCorner`'s rule): the corner it stands in, or why none was found.
+    /// One reading for the layout and for Settings › Troubleshooting › Screen layout, which shows what the layout decided
+    /// (#516: the open Duo upright gave its row no room on a real device, while the simulator did).
+    enum StatusArea: Equatable {
+        case corner(CGRect)
+        case notFound(String)
+    }
+    func statusArea(width: CGFloat) -> StatusArea {
+        let top = occlusions.filter { $0.minY <= 0.5 }
+        if let c = top.first(where: { $0.maxX >= width - 0.5 && $0.width < width / 2 && $0.width > $0.height }) { return .corner(c) }
+        guard let f = top.first else { return .notFound(occlusions.isEmpty ? "No area reported" : "None at the top edge") }
+        let more = top.count > 1 ? " (the first of \(top.count) at the top edge)" : ""
+        if f.maxX < width - 0.5 { return .notFound("Not against the right edge" + more) }
+        if f.width >= width / 2 { return .notFound("Half the window's width or wider" + more) }
+        return .notFound("Not wider than tall" + more)
     }
 
     /// The width of the list column in two columns when a fold runs up the window (a book
@@ -369,11 +394,14 @@ struct ReservedRegionsReader<Content: View>: View {
         var body: some View {
             GeometryReader { proxy in
                 let origin = proxy.frame(in: .global).origin
+                let all = proxy.reservedRegions(kind: .division, options: .includeInactive).map { (ReservedRegions.Reported.Kind.fold, $0) }
+                    + proxy.reservedRegions(kind: .occlusion, options: .includeInactive).map { (ReservedRegions.Reported.Kind.occlusion, $0) }
                 let regions = ReservedRegions(
                     divisions: proxy.reservedRegions(kind: .division).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
                     occlusions: proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map { $0.frame.offsetBy(dx: origin.x, dy: origin.y) },
                     upFold: ReservedRegions.upFold(proxy.reservedRegions(kind: .division, options: .includeInactive).map(\.frame), in: proxy.size)?
-                        .offsetBy(dx: origin.x, dy: origin.y))
+                        .offsetBy(dx: origin.x, dy: origin.y),
+                    reported: all.map { .init(kind: $0.0, frame: $0.1.frame.offsetBy(dx: origin.x, dy: origin.y), active: $0.1.isActive) })
                 content().environment(\.reservedRegions, regions)
             }
         }

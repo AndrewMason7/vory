@@ -437,7 +437,7 @@ struct TabRoot: ViewModifier {
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
             // Where nothing of the system's keeps a band under the bar's row (the closed Duo, the open Duo upright), the
             // stack starts under the row (#340).
-            .background(TopBarRoomProbe(room: TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner,
+            .background(TopBarRoomProbe(tab: tab, room: TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner,
                                                                barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
             // "At root" is set by the probe below: on a swipe back SwiftUI's onAppear fires as
             // the pop begins, and the bar's capsules came back over the pushed page before it
@@ -871,14 +871,19 @@ struct OwnBarMarker: UIViewControllerRepresentable {
 /// row. A child view controller of the root page applies it when it changes and when the page appears, never in the
 /// middle of a transition (again as the transition completes): nothing is read back from the page.
 struct TopBarRoomProbe: UIViewControllerRepresentable {
+    /// The tab whose root this is: the room each root applied is kept by tab (`AppliedRoom`).
+    var tab: AppModel.AppTab
     var room: CGFloat
     func makeUIViewController(context: Context) -> Probe { Probe() }
     func updateUIViewController(_ probe: Probe, context: Context) {
+        probe.rootTab = tab
         probe.room = room
         DispatchQueue.main.async { probe.apply() }
     }
 
     final class Probe: UIViewController {
+        /// Not `tab`: UIKit's view controllers have one of their own.
+        var rootTab: AppModel.AppTab = .chats
         var room: CGFloat = 0
         override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.backgroundColor = .clear; view = v }
         override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); apply() }
@@ -889,9 +894,9 @@ struct TopBarRoomProbe: UIViewControllerRepresentable {
                 transition.animate(alongsideTransition: nil) { [weak self] _ in self?.apply() }
                 return
             }
-            #if DEBUG
-            TopBarRoom.lastRoom = room
-            #endif
+            // Only on a change: the readouts observe these, and every root applies on every update.
+            if TopBarRoom.lastRoom != room { TopBarRoom.lastRoom = room }
+            if AppliedRoom.shared.rooms[rootTab] != room { AppliedRoom.shared.rooms[rootTab] = room }
             guard nav.additionalSafeAreaInsets.top != room else { return }
             nav.additionalSafeAreaInsets.top = room
         }

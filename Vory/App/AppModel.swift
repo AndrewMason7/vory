@@ -339,10 +339,10 @@ final class AppModel {
         }
         // A runtime started away (a launch in the background) is in front once the app is.
         AwayAtLaunch.clearOnActive { [weak self] in self?.runtime }
-        // Whether this is a test build, for the tour's replay (#487): asked once.
+        // Whether this is a test build, for Troubleshooting's test-build rows (the tour's replay, Screen layout): asked once.
         Task { [weak self] in
-            let allowed = await TourReplay.allowedHere()
-            self?.tourReplayAllowed = allowed
+            let allowed = await TestBuild.allowedHere()
+            self?.testBuild = allowed
         }
         #endif
     }
@@ -356,9 +356,10 @@ final class AppModel {
 
     // MARK: The welcome tour again (#487)
 
-    /// Whether this build offers "Replay the welcome tour" (Settings › Troubleshooting): a test build only, TestFlight's
-    /// or Xcode's, never the App Store's (`TourReplay.allowedHere`). False until the App Store has said, and if it can't.
-    var tourReplayAllowed = false
+    /// A test build (`TestBuild.allowedHere`): TestFlight's or Xcode's, never the App Store's. The one flag every
+    /// test-build row in Settings › Troubleshooting reads (Replay the welcome tour, Screen layout). False until the App
+    /// Store has said, and if it can't.
+    var testBuild = false
     /// The tour is being replayed over the app (`TourReplayView`).
     var replayingTour = false
 
