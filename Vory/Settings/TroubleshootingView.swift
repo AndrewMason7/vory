@@ -110,8 +110,18 @@ struct TroubleshootingView: View {
                     }
                 }
             }
+            // What the build check decided and why (#532), on every build but a confirmed App Store install.
+            if let line = model.testBuildFlag.last?.reason {
+                Section {} footer: {
+                    Text(line).accessibilityIdentifier("troubleshooting.buildCheck")
+                }
+            }
             #endif
         }
         .untitledPage()
+        #if os(iOS)
+        // Coming here asks again while the answer is still no (#532); the rows and the line above follow its answer.
+        .task { await model.testBuildFlag.refresh() }
+        #endif
     }
 }

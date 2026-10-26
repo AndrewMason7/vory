@@ -339,10 +339,12 @@ final class AppModel {
         }
         // A runtime started away (a launch in the background) is in front once the app is.
         AwayAtLaunch.clearOnActive { [weak self] in self?.runtime }
-        // Whether this is a test build, for Troubleshooting's test-build rows (the tour's replay, Screen layout): asked once.
-        Task { [weak self] in
-            let allowed = await TestBuild.allowedHere()
-            self?.testBuild = allowed
+        // Whether this is a test build, for Troubleshooting's test-build rows (the tour's replay, Screen layout): asked at
+        // launch, and again each time the app comes to the front while the answer is still no (#532: a launch in the
+        // background could find the App Store unable to answer, and the rows stayed away).
+        Task { [weak self] in await self?.testBuildFlag.refresh() }
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.testBuildFlag.refresh() }
         }
         #endif
     }
@@ -356,10 +358,11 @@ final class AppModel {
 
     // MARK: The welcome tour again (#487)
 
-    /// A test build (`TestBuild.allowedHere`): TestFlight's or Xcode's, never the App Store's. The one flag every
+    /// A test build (`TestBuild.checkHere`): TestFlight's or Xcode's, never the App Store's. The one flag every
     /// test-build row in Settings › Troubleshooting reads (Replay the welcome tour, Screen layout). False until the App
-    /// Store has said, and if it can't.
-    var testBuild = false
+    /// Store (or the receipt) has said; asked again while it's no (`TestBuildFlag`).
+    var testBuild: Bool { testBuildFlag.value }
+    let testBuildFlag = TestBuildFlag()
     /// The tour is being replayed over the app (`TourReplayView`).
     var replayingTour = false
 
