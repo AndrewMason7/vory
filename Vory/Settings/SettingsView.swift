@@ -56,6 +56,9 @@ struct SettingsView: View {
     @AppStorage(BotAvatarStore.storageKey) private var botAvatarsRaw = ""
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
     @Environment(\.colorScheme) private var colorScheme
+    /// The Profile picker's faces grow with the row's text: drawn at 24 pt at every size, they stayed small beside the
+    /// largest text (#526). 24 at the default size, so nothing changes there. Whole points, for the face cache.
+    @ScaledMetric(relativeTo: .body) private var pickerFace: CGFloat = 24
 
     var body: some View {
         NavigationStack {
@@ -119,7 +122,7 @@ struct SettingsView: View {
                         if let rt = model.runtime, !rt.profiles.isEmpty {
                             Picker("Profile", selection: Binding(get: { rt.selectedProfile ?? "" }, set: { rt.selectedProfile = $0 })) {
                                 ForEach(rt.profiles) { p in
-                                    Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, size: 24, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                                    Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, size: pickerFace.rounded(), scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
                                 }
                             }
                             // The menu's icons are rendered images; a new identity redraws them when a look changes.
