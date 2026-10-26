@@ -47,22 +47,26 @@ final class BoardFoldUITests: XCTestCase {
         // HERMES_E2E_ARGS="largest": the largest accessibility text size, where the chips go two to a row.
         let largest = (e["HERMES_E2E_ARGS"] ?? "").contains("largest")
         if largest { args += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
-        if let bundle = e["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
-            app = XCUIApplication(bundleIdentifier: bundle)
-            app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop"] + args
-        } else {
-            app = XCUIApplication()
-            app.launchArguments = args
+        let bundle = e["HERMES_E2E_BUNDLE"].flatMap { $0.isEmpty ? nil : $0 }
+        func launchBoard(_ launchArgs: [String]) {
+            if let bundle {
+                app = XCUIApplication(bundleIdentifier: bundle)
+                app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop"] + launchArgs
+            } else {
+                app = XCUIApplication()
+                app.launchArguments = launchArgs
+            }
+            app.launch()
+            // The Board's page is hidden until the plugin's probe answers, and the launch tab can fall back to Chats
+            // before it does (as BoardEditUITests finds): then its tab on the bar.
+            if !chip("Ready").waitForExistence(timeout: 12) {
+                let tab = app.buttons.matching(identifier: "tab.kanban").firstMatch
+                if tab.waitForExistence(timeout: 10), tab.isHittable { tab.tap() }
+            }
+            XCTAssertTrue(chip("Ready").waitForExistence(timeout: 30), "no Ready chip: the Board isn't in front")
+            pause(1.5)
         }
-        app.launch()
-        // The Board's page is hidden until the plugin's probe answers, and the launch tab can fall back to Chats
-        // before it does (as BoardEditUITests finds): then its tab on the bar.
-        if !chip("Ready").waitForExistence(timeout: 12) {
-            let tab = app.buttons.matching(identifier: "tab.kanban").firstMatch
-            if tab.waitForExistence(timeout: 10), tab.isHittable { tab.tap() }
-        }
-        XCTAssertTrue(chip("Ready").waitForExistence(timeout: 30), "no Ready chip: the Board isn't in front")
-        pause(1.5)
+        launchBoard(args)
         let window = app.windows.firstMatch.frame
         let readout = app.staticTexts["geometry.regions"].firstMatch
         let fold = readout.waitForExistence(timeout: 5) ? Self.upFold(in: readout.label, window: window) : nil
@@ -70,11 +74,39 @@ final class BoardFoldUITests: XCTestCase {
         print("BOARD-FOLD state \(pose) at \(String(format: "%.1f", Date().timeIntervalSince1970))")
         pause(2.5)
 
-        let chips = Self.titles.map { ($0, chip($0)) }
+        // The DEBUG readouts drawn over the page (accessibility elements that take no touches), and which chips they
+        // lie over: XCUITest's isHittable reads a chip under one as not hittable.
+        let overlays = ["geometry.window", "geometry.regions"].map { ($0, app.staticTexts[$0].firstMatch) }.filter { $0.1.exists }.map { ($0.0, $0.1.frame) }
+        for (id, f) in overlays { print("BOARD-FOLD \(pose) readout \(id) frame \(f)") }
+        var chips = Self.titles.map { ($0, chip($0)) }
+        var probeFrames: [String: CGRect] = [:]
+        var notHittable: Set<String> = [], under: Set<String> = []
         for (t, c) in chips {
             XCTAssertTrue(c.exists, "no \(t) chip")
-            print("BOARD-FOLD \(pose) chip \(t) frame \(c.frame) hittable \(c.isHittable)")
-            XCTAssertTrue(c.isHittable, "\(t) isn't hittable")
+            let f = c.frame; probeFrames[t] = f
+            let over = overlays.filter { $0.1.intersects(f) }.map(\.0)
+            if !over.isEmpty { under.insert(t) }
+            let hit = c.isHittable; if !hit { notHittable.insert(t) }
+            print("BOARD-FOLD \(pose) chip \(t) frame \(f) hittable \(hit) under \(over)")
+        }
+        // HERMES_E2E_RELAUNCH=1: the hittable and tap checks on a launch without the DEBUG readouts, which XCUITest's
+        // isHittable reads over some chips at the largest text (shown by a launch with no probe: all 8 hittable, every
+        // frame equal). The fold and the split are read on this launch; the chips' frames there must match it within
+        // 0.5 pt, so it's the same layout. What lies under the readouts is still logged.
+        if e["HERMES_E2E_RELAUNCH"] == "1" {
+            print("BOARD-FOLD \(pose) probe launch: not hittable \(notHittable.sorted()) under a readout \(under.sorted()); relaunching without the probe")
+            app.terminate()
+            launchBoard(args.filter { $0 != "-vory-geometry-probe" })
+            chips = Self.titles.map { ($0, chip($0)) }
+            for (t, c) in chips {
+                let f = c.frame, p = probeFrames[t] ?? .null
+                let same = abs(f.minX - p.minX) <= 0.5 && abs(f.minY - p.minY) <= 0.5 && abs(f.width - p.width) <= 0.5 && abs(f.height - p.height) <= 0.5
+                print("BOARD-FOLD \(pose) relaunch chip \(t) frame \(f) same \(same) hittable \(c.isHittable)")
+                XCTAssertTrue(same, "\(pose): \(t) moved without the readouts: \(f) vs \(p)")
+                XCTAssertTrue(c.isHittable, "\(t) isn't hittable without the readouts")
+            }
+        } else {
+            for (t, c) in chips { XCTAssertTrue(c.isHittable, "\(t) isn't hittable") }
         }
         // Rows by their top, each left to right.
         let framed = chips.filter { $0.1.exists }.map { (title: $0.0, frame: $0.1.frame) }
