@@ -329,6 +329,42 @@ enum FoldSplit {
     }
 }
 
+/// Voice mode on a column folded across (the Duo half open like a laptop, Duo stage 4): the bot above the fold, the
+/// conversation and the controls below it, so nothing sits on the hinge. The two halves' heights and the fold's between
+/// them, measured in the voice screen's column (inside the safe area, where its content goes), or nil for one column, as
+/// everywhere else: no fold across, a half under its minimum at this text size, or an accessibility text size. Decided by
+/// the fold and the text size alone, never by what the screen shows, so a session never changes layout mid-way.
+enum VoiceSplit {
+    /// The bot's face in the split, and its ring with the motion engine off (the same 1.2 as the full 164 and 196).
+    static let face: CGFloat = 140
+    static let ring: CGFloat = 168
+    /// The top half's worst content at each text size, plus 8: the top row, 12, and the bot's block in its tallest state
+    /// with the motion engine off (the ring), its lines at two at most, held at its own height (`-vory-voice-worst`,
+    /// measured on the Duo half open, 2026-10-26, each listening with an error under it and the waveform): Large 360.3,
+    /// xLarge 367.0, xxLarge 374.6, xxxLarge 386.0. Sizes under Large take Large's: they have less text, never more.
+    static func minTop(for size: DynamicTypeSize) -> CGFloat {
+        switch size {
+        case .xLarge: 375
+        case .xxLarge: 383
+        case .xxxLarge: 394
+        default: 369
+        }
+    }
+    /// The controls' height at the largest text short of the accessibility sizes (their words stay on one line, scaled
+    /// down to 0.6 at most), measured on the Duo: 134.7 at xxxLarge (127.3 at Large).
+    static let controls: CGFloat = 135
+    /// Three lines of the conversation under the bot's half, kept while no card waits.
+    static let transcriptFloor: CGFloat = 80
+    static var minBottom: CGFloat { controls + transcriptFloor }
+
+    static func halves(column: CGRect, fold: CGRect?, size: DynamicTypeSize) -> (top: CGFloat, gap: CGFloat, bottom: CGFloat)? {
+        guard !size.isAccessibilitySize, let fold, fold.width > fold.height, fold.minY > column.minY, fold.maxY < column.maxY else { return nil }
+        let top = fold.minY - column.minY, bottom = column.maxY - fold.maxY
+        guard top >= minTop(for: size), bottom >= minBottom else { return nil }
+        return (top, fold.height, bottom)
+    }
+}
+
 /// The Board's column chips (KanbanView): `count` to a row in even columns. On a window that can fold up its middle (the
 /// open Duo on its side), with the fold crossing the chips, half of them stand each side of it and the fold is the gap
 /// between the halves, so no chip lies across it (Duo stage 4, as Home's tiles). Keyed to the window being foldable,

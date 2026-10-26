@@ -192,6 +192,63 @@ import Testing
         #expect(HomeTiles.columns(regions: none) == 3)
     }
 
+    // MARK: Voice mode on a column folded across (Duo stage 4)
+
+    /// The open Duo upright, 669 x 951, half open like a laptop: the voice screen's column inside the safe area (82 at the
+    /// top for the status corner, 34 at the foot), the fold at 455.5 to 495.5 (the legs' readout).
+    private let voiceColumn = CGRect(x: 0, y: 82, width: 669, height: 835)
+    private let voiceFold = CGRect(x: 0, y: 455.5, width: 669, height: 40)
+    private let voiceSizes: [DynamicTypeSize] = [.xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge]
+
+    @Test func voiceModeSplitsAtAFoldAcrossTheColumn() {
+        let s = VoiceSplit.halves(column: voiceColumn, fold: voiceFold, size: .large)
+        #expect(s?.top == 373.5)
+        #expect(s?.gap == 40)
+        #expect(s?.bottom == 421.5)
+    }
+
+    @Test func voiceModeJudgesTheHalvesOnTheColumnNotTheWindow() {
+        // A fold a point short of the top half's minimum in the column: the window, 82 taller above, would split.
+        let window = CGRect(x: 0, y: 0, width: 669, height: 951)
+        let fold = CGRect(x: 0, y: voiceColumn.minY + VoiceSplit.minTop(for: .large) - 1, width: 669, height: 40)
+        #expect(VoiceSplit.halves(column: window, fold: fold, size: .large) != nil)
+        #expect(VoiceSplit.halves(column: voiceColumn, fold: fold, size: .large) == nil)
+    }
+
+    @Test func voiceModeStaysOneColumnWithoutAFoldAcross() {
+        // No fold (a phone, an iPad, the Duo flat or closed), a fold up the window (the book pose), a fold outside the
+        // column, and the accessibility text sizes.
+        #expect(VoiceSplit.halves(column: voiceColumn, fold: nil, size: .large) == nil)
+        #expect(VoiceSplit.halves(column: CGRect(x: 0, y: 0, width: 867, height: 635), fold: CGRect(x: 456, y: 0, width: 40, height: 669), size: .large) == nil)
+        #expect(VoiceSplit.halves(column: voiceColumn, fold: CGRect(x: 0, y: 1000, width: 669, height: 40), size: .large) == nil)
+        for size in [DynamicTypeSize.accessibility1, .accessibility2, .accessibility3, .accessibility4, .accessibility5] {
+            #expect(VoiceSplit.halves(column: voiceColumn, fold: voiceFold, size: size) == nil)
+        }
+    }
+
+    @Test func voiceModesTopMinimumGrowsWithTheTextAndSmallerSizesTakeLarges() {
+        let mins = voiceSizes.map { VoiceSplit.minTop(for: $0) }
+        #expect(mins == mins.sorted())
+        for size in [DynamicTypeSize.xSmall, .small, .medium] { #expect(VoiceSplit.minTop(for: size) == VoiceSplit.minTop(for: .large)) }
+        #expect(VoiceSplit.minBottom == VoiceSplit.controls + VoiceSplit.transcriptFloor)
+    }
+
+    @Test func voiceModeSplitsOnlyWithBothHalvesAtTheirMinimum() {
+        let gap: CGFloat = 40
+        for size in voiceSizes {
+            // The top half at its minimum for the size splits; a hair under doesn't.
+            let atTop = CGRect(x: 0, y: voiceColumn.minY + VoiceSplit.minTop(for: size), width: 669, height: gap)
+            if voiceColumn.maxY - atTop.maxY >= VoiceSplit.minBottom {
+                #expect(VoiceSplit.halves(column: voiceColumn, fold: atTop, size: size)?.top == VoiceSplit.minTop(for: size))
+                #expect(VoiceSplit.halves(column: voiceColumn, fold: atTop.offsetBy(dx: 0, dy: -0.1), size: size) == nil)
+            }
+        }
+        // The bottom half at its minimum splits; a hair under doesn't.
+        let atBottom = CGRect(x: 0, y: voiceColumn.maxY - VoiceSplit.minBottom - gap, width: 669, height: gap)
+        #expect(VoiceSplit.halves(column: voiceColumn, fold: atBottom, size: .large)?.bottom == VoiceSplit.minBottom)
+        #expect(VoiceSplit.halves(column: voiceColumn, fold: atBottom.offsetBy(dx: 0, dy: 0.1), size: .large) == nil)
+    }
+
     // MARK: The Board's column chips (Duo stage 4)
 
     /// The widths of fixed columns and the spacing after each; nil for a column that isn't fixed.
