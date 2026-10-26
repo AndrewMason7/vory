@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import Testing
 @testable import Vory
 
@@ -189,5 +190,73 @@ import Testing
     @Test func homesTilesStayThreeToARowOnAnIPad() {
         // A wide window with no fold (an iPad) and a phone: unchanged.
         #expect(HomeTiles.columns(regions: none) == 3)
+    }
+
+    // MARK: The Board's column chips (Duo stage 4)
+
+    /// The widths of fixed columns and the spacing after each; nil for a column that isn't fixed.
+    private func fixed(_ items: [GridItem]) -> [(width: CGFloat, spacing: CGFloat)]? {
+        let out = items.compactMap { item -> (width: CGFloat, spacing: CGFloat)? in
+            if case .fixed(let w) = item.size { return (w, item.spacing ?? 0) }
+            return nil
+        }
+        return out.count == items.count ? out : nil
+    }
+    private func allFlexible(_ items: [GridItem]) -> Bool {
+        items.allSatisfy { if case .flexible = $0.size { return true }; return false }
+    }
+
+    @Test func theBoardsChipsStandTwoEachSideOfTheFold() {
+        // The book pose's Board: the chips at x 12 to 855 (the safe area beside the 84 pt strip, less the 12 pt
+        // margins); the fold at 456 to 496 is the gap between the second chip and the third.
+        var bookOpen = book; bookOpen.upFold = book.divisions.first
+        let chips = CGRect(x: 12, y: 0, width: 843, height: 0)
+        let items = KanbanChips.items(regions: bookOpen, frame: chips, count: 4, spacing: 6)
+        #if os(macOS)
+        #expect(allFlexible(items))
+        #else
+        let cols = fixed(items)
+        #expect(cols?.count == 4)
+        guard let cols, cols.count == 4 else { return }
+        // Each half's chips share its width evenly, 6 pt apart.
+        #expect(cols[0].width == CGFloat(444 - 6) / 2)
+        #expect(cols[1].width == cols[0].width)
+        #expect(cols[2].width == CGFloat(359 - 6) / 2)
+        #expect(cols[3].width == cols[2].width)
+        // The second chip ends at the fold's leading edge, the third starts at its far edge.
+        #expect(chips.minX + cols[0].width + cols[0].spacing + cols[1].width == 456)
+        #expect(cols[1].spacing == 40)
+        #expect(chips.minX + cols[0].width + cols[0].spacing + cols[1].width + cols[1].spacing == 496)
+        #endif
+    }
+
+    @Test func atTheAccessibilitySizesOneChipStandsEachSideOfTheFold() {
+        var bookOpen = book; bookOpen.upFold = book.divisions.first
+        let items = KanbanChips.items(regions: bookOpen, frame: CGRect(x: 12, y: 0, width: 843, height: 0), count: 2, spacing: 6)
+        #if os(macOS)
+        #expect(allFlexible(items))
+        #else
+        let cols = fixed(items)
+        #expect(cols?.map(\.width) == [444, 359])
+        #expect(cols?.first?.spacing == 40)
+        #endif
+    }
+
+    @Test func theBoardsChipsStayEvenWithoutAFoldThroughThem() {
+        let chips = CGRect(x: 12, y: 0, width: 843, height: 0)
+        // A phone, an iPad, the closed Duo: no fold.
+        #expect(allFlexible(KanbanChips.items(regions: none, frame: CGRect(x: 12, y: 0, width: 378, height: 0), count: 4, spacing: 6)))
+        // The open Duo upright or as a laptop: the fold runs across, between rows.
+        #expect(allFlexible(KanbanChips.items(regions: laptop, frame: CGRect(x: 12, y: 0, width: 645, height: 0), count: 4, spacing: 6)))
+        // A fold that misses the chips, or that would leave a chip under the minimum (two chips need 146 pt a side).
+        let outside = ReservedRegions(upFold: CGRect(x: 900, y: 0, width: 40, height: 669))
+        #expect(allFlexible(KanbanChips.items(regions: outside, frame: chips, count: 4, spacing: 6)))
+        let nearTheEdge = ReservedRegions(upFold: CGRect(x: 140, y: 0, width: 40, height: 669))
+        #expect(allFlexible(KanbanChips.items(regions: nearTheEdge, frame: chips, count: 4, spacing: 6)))
+        // Not laid out yet.
+        var bookOpen = book; bookOpen.upFold = book.divisions.first
+        #expect(allFlexible(KanbanChips.items(regions: bookOpen, frame: .zero, count: 4, spacing: 6)))
+        // Even columns as before: four flexible, 6 pt apart.
+        #expect(KanbanChips.items(regions: none, frame: chips, count: 4, spacing: 6).count == 4)
     }
 }

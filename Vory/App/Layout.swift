@@ -288,10 +288,43 @@ enum HomeTiles {
     /// The two columns' widths and the gap between them with `fold` as the gap; nil where the fold doesn't cross the
     /// grid or a column would be under `minimum`.
     static func split(frame: CGRect, fold: CGRect?, minimum: CGFloat) -> (leading: CGFloat, gap: CGFloat, trailing: CGFloat)? {
+        FoldSplit.halves(frame: frame, fold: fold, minimum: minimum)
+    }
+}
+
+/// A grid standing at `frame` (window space) cut in two by a fold up the window: the part before the fold, the fold
+/// itself as the gap, and the part after it. Nil where the fold doesn't cross the grid or a part would be under
+/// `minimum`. Home's tiles (`HomeTiles`) and the Board's column chips (`KanbanChips`) put their halves either side of it.
+enum FoldSplit {
+    static func halves(frame: CGRect, fold: CGRect?, minimum: CGFloat) -> (leading: CGFloat, gap: CGFloat, trailing: CGFloat)? {
         guard let fold, frame.width > 0, fold.minX > frame.minX, fold.maxX < frame.maxX else { return nil }
         let leading = fold.minX - frame.minX, trailing = frame.maxX - fold.maxX
         guard leading >= minimum, trailing >= minimum else { return nil }
         return (leading, fold.width, trailing)
+    }
+}
+
+/// The Board's column chips (KanbanView): `count` to a row in even columns. On a window that can fold up its middle (the
+/// open Duo on its side), with the fold crossing the chips, half of them stand each side of it and the fold is the gap
+/// between the halves, so no chip lies across it (Duo stage 4, as Home's tiles). Keyed to the window being foldable,
+/// not to the hinge, so the chips don't reflow as it moves. Even columns where the fold misses the chips or a chip
+/// would be under `minimum`.
+enum KanbanChips {
+    static let minimum: CGFloat = 70
+
+    static func items(regions: ReservedRegions, frame: CGRect, count: Int, spacing: CGFloat) -> [GridItem] {
+        #if os(iOS)
+        let perHalf = count / 2
+        if perHalf > 0, count % 2 == 0, regions.foldable || regions.verticalFold != nil {
+            let between = CGFloat(perHalf - 1) * spacing
+            if let s = FoldSplit.halves(frame: frame, fold: regions.upFold ?? regions.verticalFold, minimum: CGFloat(perHalf) * minimum + between) {
+                let leading = (s.leading - between) / CGFloat(perHalf), trailing = (s.trailing - between) / CGFloat(perHalf)
+                return (0..<perHalf).map { GridItem(.fixed(leading), spacing: $0 == perHalf - 1 ? s.gap : spacing) }
+                    + (0..<perHalf).map { _ in GridItem(.fixed(trailing), spacing: spacing) }
+            }
+        }
+        #endif
+        return EvenColumns.items(count, spacing: spacing)
     }
 }
 

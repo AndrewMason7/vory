@@ -13,6 +13,10 @@ struct KanbanView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// A window that can fold: the column chips stand either side of the fold (`KanbanChips`).
+    @Environment(\.reservedRegions) private var regions
+    /// The chips' span across the window (window space), for where the fold falls.
+    @State private var chipsFrame = CGRect.zero
     @Environment(\.barTab) private var barTab
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
     @State private var showNew = false
@@ -177,8 +181,9 @@ struct KanbanView: View {
     /// The columns as chips with their counts, four to a row so all eight are in view; one
     /// is open at a time. (A scrolling row inside a safe-area inset would not scroll.)
     private func columns(_ board: KanbanBoard) -> some View {
-        // Two to a row at the accessibility sizes, where four left only an icon and "…".
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: typeSize.isAccessibilitySize ? 2 : 4), spacing: 6) {
+        // Two to a row at the accessibility sizes, where four left only an icon and "…". On a window
+        // that can fold up its middle, half each side of the fold (`KanbanChips`, Duo stage 4).
+        LazyVGrid(columns: KanbanChips.items(regions: regions, frame: chipsFrame, count: typeSize.isAccessibilitySize ? 2 : 4, spacing: 6), spacing: 6) {
             ForEach(KanbanStatus.columns, id: \.self) { s in
                 let n = board.count(s)
                 Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
@@ -197,6 +202,15 @@ struct KanbanView: View {
                 .accessibilityAddTraits(column == s ? .isSelected : [])
             }
         }
+        // The grid's full width, whatever its columns add up to: the frame the fold's place is read against
+        // doesn't move with the columns it decides.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        #if os(iOS)
+        // Its span across the window only, as Home's tiles read theirs.
+        .onGeometryChange(for: CGRect.self) { g in
+            let f = g.frame(in: .global); return CGRect(x: f.minX, y: 0, width: f.width, height: 0)
+        } action: { chipsFrame = $0 }
+        #endif
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
     }
