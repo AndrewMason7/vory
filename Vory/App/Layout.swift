@@ -317,6 +317,29 @@ enum HomeTiles {
     }
 }
 
+/// Home on a window folded across (the Duo half open like a laptop, Duo stage 4): who's working above the fold, what
+/// needs you and the rest of Home below it, so nothing sits on the hinge (the desk). The two halves' heights and the
+/// fold's between them, measured in the page (from under our top bar's row to our tab bar's top), or nil for Home as
+/// everywhere else: no fold across, a half under its minimum, an accessibility text size (as voice mode's), or Home
+/// being edited (the drag needs the one list).
+enum DeskSplit {
+    /// The top half's content at the largest text short of the accessibility sizes: the scroll's padding (8), the
+    /// greeting on one line and the date (4 + 41 + 4 + 26), the gap (16), the panel with one working row and the idle
+    /// faces' 44 pt row (16 + 29 + 10 + 53 + 10 + 44 + 16), and 8 over the fold. About 285.
+    static let minTop: CGFloat = 290
+    /// One approval card whole at the default text: the padding and the chat's 44 pt line (8 + 44 + 8) and the card (14 +
+    /// 22 + 10 + 20 + 10 + 34 + 10 + 16 + 10 + 26 + 10, its four choices two by two at the large size 50 + 8 + 50, and
+    /// 14). About 364. At the larger sizes the card's second row of choices is reached by scrolling the half.
+    static let minBottom: CGFloat = 365
+
+    static func halves(page: CGRect, fold: CGRect?, accessibilityText: Bool, editing: Bool) -> (top: CGFloat, gap: CGFloat, bottom: CGFloat)? {
+        guard !accessibilityText, !editing, let fold, fold.width > fold.height, fold.minY > page.minY, fold.maxY < page.maxY else { return nil }
+        let top = fold.minY - page.minY, bottom = page.maxY - fold.maxY
+        guard top >= minTop, bottom >= minBottom else { return nil }
+        return (top, fold.height, bottom)
+    }
+}
+
 /// A grid standing at `frame` (window space) cut in two by a fold up the window: the part before the fold, the fold
 /// itself as the gap, and the part after it. Nil where the fold doesn't cross the grid or a part would be under
 /// `minimum`. Home's tiles (`HomeTiles`) and the Board's column chips (`KanbanChips`) put their halves either side of it.

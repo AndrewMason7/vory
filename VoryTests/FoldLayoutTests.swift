@@ -1,6 +1,7 @@
 import CoreGraphics
 import SwiftUI
 import Testing
+import VoryCore
 @testable import Vory
 
 /// The fold of a half-open iPhone Duo (Duo stage 2): how far the composer's lists may grow under
@@ -315,5 +316,63 @@ import Testing
         #expect(allFlexible(KanbanChips.items(regions: bookOpen, frame: .zero, count: 4, spacing: 6)))
         // Even columns as before: four flexible, 6 pt apart.
         #expect(KanbanChips.items(regions: none, frame: chips, count: 4, spacing: 6).count == 4)
+    }
+
+    // MARK: Home's desk on a window folded across (Duo stage 4)
+
+    /// The open Duo half open like a laptop: Home's page from under our top bar's row (141) to our tab bar's top (874),
+    /// the fold at 456 to 496 (the code's numbers; the legs read the real ones).
+    private let deskPage = CGRect(x: 0, y: 141, width: 669, height: 733)
+    private let deskFold = CGRect(x: 0, y: 456, width: 669, height: 40)
+
+    @Test func homeIsADeskAtAFoldAcrossThePage() {
+        let s = DeskSplit.halves(page: deskPage, fold: deskFold, accessibilityText: false, editing: false)
+        #expect(s?.top == 315)
+        #expect(s?.gap == 40)
+        #expect(s?.bottom == 378)
+    }
+
+    @Test func homeStaysOneListWithoutAFoldAcrossOrWhileEdited() {
+        // No fold (a phone, an iPad, the Duo flat or closed), a fold up the window (the book pose), a fold outside the
+        // page, the accessibility text sizes, Home being edited, and a page not laid out yet.
+        #expect(DeskSplit.halves(page: deskPage, fold: nil, accessibilityText: false, editing: false) == nil)
+        #expect(DeskSplit.halves(page: CGRect(x: 0, y: 141, width: 867, height: 494), fold: CGRect(x: 456, y: 0, width: 40, height: 669), accessibilityText: false, editing: false) == nil)
+        #expect(DeskSplit.halves(page: deskPage, fold: CGRect(x: 0, y: 900, width: 669, height: 40), accessibilityText: false, editing: false) == nil)
+        #expect(DeskSplit.halves(page: deskPage, fold: deskFold, accessibilityText: true, editing: false) == nil)
+        #expect(DeskSplit.halves(page: deskPage, fold: deskFold, accessibilityText: false, editing: true) == nil)
+        #expect(DeskSplit.halves(page: .zero, fold: deskFold, accessibilityText: false, editing: false) == nil)
+    }
+
+    @Test func homeIsADeskOnlyWithBothHalvesAtTheirMinimum() {
+        let gap: CGFloat = 40
+        // The top half at its minimum (290) splits; a hair under doesn't.
+        let atTop = CGRect(x: 0, y: deskPage.minY + DeskSplit.minTop, width: 669, height: gap)
+        #expect(DeskSplit.halves(page: deskPage, fold: atTop, accessibilityText: false, editing: false)?.top == DeskSplit.minTop)
+        #expect(DeskSplit.halves(page: deskPage, fold: atTop.offsetBy(dx: 0, dy: -0.1), accessibilityText: false, editing: false) == nil)
+        // The bottom half at its minimum (365) splits; a hair under doesn't.
+        let atBottom = CGRect(x: 0, y: deskPage.maxY - DeskSplit.minBottom - gap, width: 669, height: gap)
+        #expect(DeskSplit.halves(page: deskPage, fold: atBottom, accessibilityText: false, editing: false)?.bottom == DeskSplit.minBottom)
+        #expect(DeskSplit.halves(page: deskPage, fold: atBottom.offsetBy(dx: 0, dy: 0.1), accessibilityText: false, editing: false) == nil)
+    }
+
+    @Test func theDeskAnswersApprovalsInPlaceAndSendsTheRestToTheirChat() {
+        let approval = PendingCard(id: "a", method: "approval", params: ["request_id": "r1", "session_id": "s1", "command": "ls"])
+        let question = PendingCard(id: "q", method: "clarify", params: ["question": "Which branch?"])
+        let secret = PendingCard(id: "v", method: "sudo", params: .object([:]))
+        // An approval the app can't read shows as unsupported, so it opens its chat too.
+        let unreadable = PendingCard(id: "b", method: "approval", params: .object([:]))
+        #expect(DeskCards.answersInPlace(approval))
+        #expect(!DeskCards.answersInPlace(question))
+        #expect(!DeskCards.answersInPlace(secret))
+        #expect(!DeskCards.answersInPlace(unreadable))
+        #expect(DeskCards.note(for: approval) == nil)
+        #expect(DeskCards.note(for: question) == "Answer in the chat")
+        #expect(DeskCards.note(for: nil) == "Needs you")
+    }
+
+    @Test func theDesksWaitingChatsFollowHomesChatList() {
+        // Home's list order (the latest first), then the chats it doesn't list, by id.
+        #expect(DeskCards.waiting(ids: ["c", "a", "z", "y"], order: ["a", "b", "c"]) == ["a", "c", "y", "z"])
+        #expect(DeskCards.waiting(ids: [], order: ["a"]).isEmpty)
     }
 }
