@@ -230,6 +230,10 @@ private struct StillBlink: ViewModifier {
     let key: String
     let on: Bool
     @Environment(\.botsLive) private var pageLive
+    #if DEBUG
+    /// Which face this is in the blink probe's lines (`-vory-blink-probe`): each one must blink once per opening.
+    @State private var probeID = UUID().uuidString.prefix(8)
+    #endif
     static var reduceMotionOn: Bool {
         #if os(iOS)
         UIAccessibility.isReduceMotionEnabled
@@ -252,6 +256,36 @@ private struct StillBlink: ViewModifier {
                 shut = false
             }
         }
+        #if os(iOS)
+        #if DEBUG
+        // For the hinge legs: a face is there to blink (FACEUP), with whether its page is in front and its blink is on;
+        // its page coming forward or going back (FACEFRONT), and the face going (FACEDOWN).
+        .onAppear { BotAmbient.blinkLog("FACEUP still face \(probeID) front \(pageLive) on \(on)") }
+        .onChange(of: pageLive) { _, f in BotAmbient.blinkLog("FACEFRONT still face \(probeID) \(f)") }
+        .onDisappear { BotAmbient.blinkLog("FACEDOWN still face \(probeID)") }
+        #endif
+        // A foldable phone opened (Duo stage 4): one blink by picture, as the live faces blink, on the page in front
+        // only, never with the bots still, under Reduce Motion or while the list is moving.
+        .onChange(of: BotAmbient.shared.opened) { _, d in
+            #if DEBUG
+            // Why a face didn't blink, the first gate that stopped it (the hinge legs).
+            let skip: String? = !on ? "on" : !pageLive ? "live" : d == nil ? "nil"
+                : Date().timeIntervalSince(d!) >= BotMotionModel.Reaction.blinkLength ? String(format: "late %.3f", Date().timeIntervalSince(d!))
+                : !BotMotionModel.Reaction.plays ? "plays" : Self.reduceMotionOn ? "reduceMotion" : BotAmbient.shared.scrolling ? "scrolling" : nil
+            if let skip { BotAmbient.blinkLog("FACESKIP still face \(probeID) \(skip)") }
+            #endif
+            guard on, pageLive, let d, Date().timeIntervalSince(d) < BotMotionModel.Reaction.blinkLength, BotMotionModel.Reaction.plays,
+                  !Self.reduceMotionOn, !BotAmbient.shared.scrolling else { return }
+            Task {
+                shut = true
+                #if DEBUG
+                BotAmbient.blinkLog("FACEBLINK still face \(probeID)")
+                #endif
+                try? await Task.sleep(for: .milliseconds(120))
+                shut = false
+            }
+        }
+        #endif
     }
 }
 

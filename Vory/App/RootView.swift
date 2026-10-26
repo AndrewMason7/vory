@@ -119,6 +119,10 @@ struct RootView: View {
         .modifier(HingeProbe.IfOn())
         #endif
         #endif
+        #if os(iOS)
+        // The faces blink once as a foldable phone opens (Duo stage 4).
+        .modifier(HingeOpenBlink())
+        #endif
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
         // iPad, the open Duo in landscape); the phone layout otherwise, which includes the open
@@ -435,6 +439,81 @@ struct MainTabView: View {
     }
 }
 
+
+#if os(iOS)
+/// The faces blink once as a foldable phone opens (Duo stage 4): the root watches the hinge and the window and stamps
+/// `BotAmbient.opened` when `HingeOpenRule` says (the later of 0.3 s after the hinge leaves closed and the open
+/// display's window; none if that window doesn't come within 2 s). Nothing on a phone that doesn't fold, where no hinge
+/// reading comes, or before iOS 27.1.
+struct HingeOpenBlink: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 27.1, *) { content.modifier(Watch()) } else { content }
+    }
+
+    @available(iOS 27.1, *)
+    private struct Watch: ViewModifier {
+        @Environment(\.windowGeometry) private var windowGeometry
+        @State private var rule = HingeOpenRule()
+        /// Bumped whenever the waiting opening changes: an earlier wait that wakes to a newer one does nothing.
+        @State private var generation = 0
+
+        private static var now: Double { Date().timeIntervalSinceReferenceDate }
+
+        private static func status(_ s: DeviceHinge.Status) -> HingeOpenRule.Status {
+            s == .closed ? .closed : s == .fullyOpen ? .open : .partly
+        }
+
+        func body(content: Content) -> some View {
+            content
+                .onHingeChange { old, new in
+                    guard let n = new.hinge else { return }
+                    let before = (rule.leftClosedAt, rule.windowAt)
+                    rule.hinge(from: old.hinge.map { Self.status($0.status) }, to: Self.status(n.status), at: Self.now)
+                    if before != (rule.leftClosedAt, rule.windowAt) { schedule() }
+                }
+                .onChange(of: windowGeometry.bounds.size, initial: true) { _, size in
+                    let before = (rule.leftClosedAt, rule.windowAt)
+                    rule.window(size, at: Self.now)
+                    if before != (rule.leftClosedAt, rule.windowAt) { schedule() }
+                    #if DEBUG
+                    BotAmbient.blinkLog(String(format: "BLINKWIN %.0fx%.0f", size.width, size.height))
+                    #endif
+                }
+                #if DEBUG
+                // For the hinge legs: a second appearance means the root was made again (its rule with it), not resized.
+                .onAppear { BotAmbient.blinkLog("BLINKWATCH appear") }
+                #endif
+        }
+
+        /// Waits for the opening's blink and stamps it, or gives the opening up when no open window came in time.
+        private func schedule() {
+            generation += 1
+            let g = generation
+            if let at = rule.blinkAt {
+                Task { @MainActor in
+                    let wait = at - Self.now
+                    if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                    guard g == generation, rule.blinkAt != nil else { return }
+                    #if DEBUG
+                    BotAmbient.blinkLog(String(format: "BLINKSTAMP left %.3f window %.3f due %.3f", rule.leftClosedAt ?? 0, rule.windowAt ?? 0, at))
+                    #endif
+                    rule.done()
+                    BotAmbient.shared.opened = Date()
+                }
+            } else if let left = rule.leftClosedAt {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(max(0, left + HingeOpenRule.windowWait - Self.now) + 0.05))
+                    guard g == generation, rule.gaveUp(at: Self.now) else { return }
+                    #if DEBUG
+                    BotAmbient.blinkLog(String(format: "BLINKGIVEUP left %.3f", left))
+                    #endif
+                    rule.done()
+                }
+            }
+        }
+    }
+}
+#endif
 
 #if DEBUG && os(iOS)
 /// DEBUG, `-vory-geometry-probe`: the window's reserved regions as the system reports them (stage 2 of the Duo work):
