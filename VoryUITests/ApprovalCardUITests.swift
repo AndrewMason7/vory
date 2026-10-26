@@ -34,17 +34,20 @@ final class ApprovalCardUITests: XCTestCase {
         return nil
     }
 
-    /// Launches the app (on the gateway when one is set), `extra` added to its arguments.
+    /// Launches the app (on the gateway when one is set), `extra` added to its arguments: light, at the default text size,
+    /// unless HERMES_E2E_SCHEME / HERMES_E2E_SIZE (L, XL, XXL, XXXL) say otherwise.
     private func launch(_ extra: [String] = []) throws {
         let e = ProcessInfo.processInfo.environment
         guard let url = e["HERMES_E2E_URL"], let token = e["HERMES_E2E_TOKEN"], !url.isEmpty else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         continueAfterFailure = false
+        let look = ["-colorSchemePreference", e["HERMES_E2E_SCHEME"] ?? "light"]
+            + (e["HERMES_E2E_SIZE"].map { ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\($0)"] } ?? [])
         if let bundle = e["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
             app = XCUIApplication(bundleIdentifier: bundle)
-            app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-launchTab", "chats", "-colorSchemePreference", "light"] + extra
+            app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-launchTab", "chats"] + look + extra
         } else {
             app = XCUIApplication()
-            app.launchArguments = ["-launchTab", "chats", "-colorSchemePreference", "light"] + extra
+            app.launchArguments = ["-launchTab", "chats"] + look + extra
         }
         app.launch()
     }
@@ -55,9 +58,9 @@ final class ApprovalCardUITests: XCTestCase {
         try XCTUnwrap(hittable(rows, timeout: 40), "no Disk cleanup row").tap()
     }
 
-    /// Opens the chat, sends `prompt`, and waits for the approval card.
-    private func approvalOnScreen(_ prompt: String) throws {
-        try launch()
+    /// Opens the chat, sends `prompt`, and waits for the approval card; `extra` added to the launch arguments.
+    private func approvalOnScreen(_ prompt: String, extra: [String] = []) throws {
+        try launch(extra)
         try openChat()
         let composer = app.textViews["composer.text"].firstMatch
         // An approval left waiting by an earlier test (the mock keeps it) is denied first.
@@ -73,6 +76,45 @@ final class ApprovalCardUITests: XCTestCase {
         if !card { shot("approval-card-missing") }
         XCTAssertTrue(card, "no approval card")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
+    }
+
+    /// Equality runs (Duo stage 4 A, whose voice mode can pin an approval's choices under its words): the card in a chat,
+    /// saved whole twice a second apart as HERMES_E2E_CARD_SHOT-1.png and -2.png, for a pixel compare with the release
+    /// head's (and of the two with each other, the method's own floor). Skipped without HERMES_E2E_CARD_SHOT.
+    func testTheCardAsDrawn() throws {
+        guard let path = ProcessInfo.processInfo.environment["HERMES_E2E_CARD_SHOT"], !path.isEmpty else { throw XCTSkip("HERMES_E2E_CARD_SHOT not set") }
+        try approvalOnScreen("Clean up the old logs")
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let dock = app.otherElements["chat.dock"].firstMatch
+        XCTAssertTrue(dock.exists, "no dock with the card")
+        for n in 1...2 {
+            let png = dock.screenshot().pngRepresentation
+            try png.write(to: URL(fileURLWithPath: "\(path)-\(n).png"))
+            print("CARD-SHOT \(n) frame \(dock.frame) \(png.count) bytes")
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+        }
+    }
+
+    /// Equality runs (Duo stage 4 A): the card in a chat as VoiceOver reads it, the oracle's stops inside the dock alone
+    /// (the card's heading, what's asked, the command, the tool, the scope line and the choices), printed in order
+    /// (CARD-ORACLE) for a compare with the release head's. Skipped without HERMES_E2E_CARD_ORACLE=1.
+    func testTheCardsVoiceOverOrder() throws {
+        guard ProcessInfo.processInfo.environment["HERMES_E2E_CARD_ORACLE"] == "1" else { throw XCTSkip("HERMES_E2E_CARD_ORACLE not set") }
+        try approvalOnScreen("Clean up the old logs", extra: ["-vory-ax-oracle"])
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let dock = app.otherElements["chat.dock"].firstMatch
+        XCTAssertTrue(dock.exists, "no dock with the card")
+        let oracle = app.descendants(matching: .any).matching(identifier: "debug.voiceover").firstMatch
+        XCTAssertTrue(oracle.waitForExistence(timeout: 5), "no oracle")
+        // Each stop is "label|x,y,w,h": kept when its middle is in the dock.
+        let stops = ((oracle.value as? String) ?? "").split(separator: "\n").compactMap { line -> String? in
+            guard let bar = line.lastIndex(of: "|") else { return nil }
+            let n = line[line.index(after: bar)...].split(separator: ",").compactMap { Double($0) }
+            guard n.count == 4, dock.frame.contains(CGPoint(x: n[0] + n[2] / 2, y: n[1] + n[3] / 2)) else { return nil }
+            return String(line[..<bar])
+        }
+        XCTAssertFalse(stops.isEmpty, "no stops in the dock")
+        print("CARD-ORACLE \(stops.count) stops: \(stops.joined(separator: " ⟩ "))")
     }
 
     /// The card's choice buttons, in the order VoiceOver reads them.
