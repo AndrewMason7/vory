@@ -114,6 +114,10 @@ struct RootView: View {
                 #endif
             }
         }
+        #if os(iOS)
+        // `-vory-hinge-probe`: every hinge change the window reports (Duo stage 4, the blink as it opens).
+        .modifier(HingeProbe.IfOn())
+        #endif
         #endif
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
@@ -452,6 +456,52 @@ private struct RegionsProbe: View {
                 // The fold's frame for the pose tests (FoldPoseUITests), read off this text.
                 .accessibilityIdentifier("geometry.regions")
                 .position(x: min(proxy.size.width - 130, 160), y: 250)
+        }
+    }
+}
+
+/// DEBUG, `-vory-hinge-probe`: every hinge change the window reports, oldest first (the time, the old and the new
+/// status, the new angle), in a band at the foot of the window and in the log as `HINGE` lines; the UI tests read
+/// `hinge.probe`'s value. It tells whether the simulator sends them for Device Hub's posture buttons (Duo stage 4,
+/// the blink as the phone opens).
+private enum HingeProbe {
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-hinge-probe")
+
+    struct IfOn: ViewModifier {
+        func body(content: Content) -> some View {
+            if #available(iOS 27.1, *), HingeProbe.isOn { content.modifier(Readout()) } else { content }
+        }
+    }
+
+    @available(iOS 27.1, *)
+    struct Readout: ViewModifier {
+        @State private var lines: [String] = []
+
+        func body(content: Content) -> some View {
+            content
+                .onHingeChange { old, new in
+                    let angle = new.hinge.map { String(format: "%.0f", $0.angle.degrees) } ?? "-"
+                    let line = "\(Date().formatted(.dateTime.hour().minute().second().secondFraction(.fractional(2)))) \(Self.name(old)) > \(Self.name(new)) \(angle)"
+                    // Written straight to standard output, unbuffered: to a file (simctl launch --stdout) print's output is
+                    // block-buffered, so the lines could come late, or be lost when the app is stopped.
+                    FileHandle.standardOutput.write(Data("HINGE \(line)\n".utf8))
+                    lines.append(line)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    Text(lines.isEmpty ? "hinge: none yet" : lines.suffix(8).joined(separator: "\n"))
+                        .font(.caption2.monospaced()).padding(4).background(.mint.opacity(0.9)).foregroundStyle(.black)
+                        .accessibilityIdentifier("hinge.probe")
+                        .accessibilityValue(lines.joined(separator: " | "))
+                        .padding(.bottom, 140).allowsHitTesting(false)
+                }
+        }
+
+        private static func name(_ c: DeviceHingeContext) -> String {
+            guard let h = c.hinge else { return "nil" }
+            if h.status == .closed { return "closed" }
+            if h.status == .partiallyOpen { return "partly" }
+            if h.status == .fullyOpen { return "open" }
+            return "other"
         }
     }
 }
