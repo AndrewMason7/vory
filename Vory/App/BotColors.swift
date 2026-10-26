@@ -200,6 +200,48 @@ struct BotAvatar: View {
     }
 }
 
+/// The top bar's bot circle (Chats' profile menu): the bot's cached picture, exactly as before at rest. It blinks only
+/// as a foldable phone opens (Duo stage 4, `BotAmbient.opened`), by swapping to its eyes-shut twin for 120 ms, as a list
+/// row's still does, under the same gates; it has no blinks of its own.
+struct BarFaceCircle: View {
+    let profile: String
+    let size: CGFloat
+    let scheme: ColorScheme
+    @State private var shut = false
+    #if DEBUG
+    /// Which circle this is in the blink probe's lines: more than one can be on screen as the bar settles.
+    @State private var probeID = "bar-" + UUID().uuidString.prefix(6)
+    #endif
+
+    var body: some View {
+        Image(uiImage: BotAvatarImage.cached(profile: profile, size: size, scheme: scheme, closed: shut)).renderingMode(.original)
+            #if os(iOS)
+            #if DEBUG
+            .onAppear { BotAmbient.blinkLog("FACEUP still face \(probeID) front true on true") }
+            .onDisappear { BotAmbient.blinkLog("FACEDOWN still face \(probeID)") }
+            #endif
+            .onChange(of: BotAmbient.shared.opened) { _, d in
+                #if DEBUG
+                let skip: String? = d == nil ? "nil"
+                    : Date().timeIntervalSince(d!) >= BotMotionModel.Reaction.blinkLength ? String(format: "late %.3f", Date().timeIntervalSince(d!))
+                    : !BotMotionModel.Reaction.plays ? "plays" : UIAccessibility.isReduceMotionEnabled ? "reduceMotion" : BotAmbient.shared.scrolling ? "scrolling" : nil
+                if let skip { BotAmbient.blinkLog("FACESKIP still face \(probeID) \(skip)") }
+                #endif
+                guard let d, Date().timeIntervalSince(d) < BotMotionModel.Reaction.blinkLength, BotMotionModel.Reaction.plays,
+                      !UIAccessibility.isReduceMotionEnabled, !BotAmbient.shared.scrolling else { return }
+                Task {
+                    shut = true
+                    #if DEBUG
+                    BotAmbient.blinkLog("FACEBLINK still face \(probeID)")
+                    #endif
+                    try? await Task.sleep(for: .milliseconds(120))
+                    shut = false
+                }
+            }
+            #endif
+    }
+}
+
 /// A fixed look's face at rest, not a bot's own (the Companion card's Vory bot): a cached
 /// picture that blinks by swapping to its eyes-shut twin, as a list row's face does. The live
 /// glass face redrew the whole Settings page on every frame at rest (18% CPU on the simulator).

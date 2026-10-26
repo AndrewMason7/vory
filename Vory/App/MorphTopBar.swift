@@ -742,8 +742,8 @@ struct MorphTopBar: View {
             switch chrome.lead {
             case .botMenu:
                 Menu { ChatListProfileItems() } label: {
-                    Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: scheme))
-                        .renderingMode(.original).frame(width: 44, height: 44).contentShape(.circle)
+                    BarFaceCircle(profile: model.listChipProfile ?? "?", size: 26, scheme: scheme)
+                        .frame(width: 44, height: 44).contentShape(.circle)
                 }
                 .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .circle))
                 .accessibilityLabel("Profile: \(model.listChipProfile ?? "none")")
