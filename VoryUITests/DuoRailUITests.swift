@@ -125,7 +125,9 @@ final class DuoRailUITests: XCTestCase {
         let gateways = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Workshop'")).firstMatch
         if gateways.waitForExistence(timeout: 10) {
             gateways.tap(); pause(1.5)
-            let back = app.navigationBars.buttons.firstMatch
+            // Back by the system's identifier first: with the bar down a side, a pushed page's Back stands in the strip, out of
+            // any navigation bar.
+            let back = element("BackButton").exists ? element("BackButton") : app.navigationBars.buttons.firstMatch
             print("DUO516 SIDE settings.gateways back \(back.exists ? "\(back.frame) '\(back.label)'" : "none")")
             XCTAssertTrue(back.exists, "settings.gateways: no Back")
             checkSideBar("settings.gateways", window: window, status: status, safeBottom: CGFloat(safeBottom))
