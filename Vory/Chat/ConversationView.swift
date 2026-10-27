@@ -36,14 +36,17 @@ struct ConversationView: View {
     /// The dock went up for an open list: it stays up until the list closes.
     @State private var liftHeldForList = false
     /// The header's bottom in the window: the morph bar's chat row (its space starts the bar's padding under the safe
-    /// area's top) on a narrow window, this view's own header on a wide one; 0 until measured.
+    /// area's top, less its lift into the status band) on a narrow window, this view's own header on a wide one; 0 until
+    /// measured. Up in the band the chat's row is laid out the lift lower in the bar's space, so it stands where it was.
     private var chatHeaderBottom: CGFloat {
         if MorphTopBar.active(model) {
             let row = MorphState.shared.chatRowBottom
-            return row > 0 ? windowGeometry.safeArea.top + TopBarRoom.barPadding + row : 0
+            return row > 0 ? windowGeometry.safeArea.top + TopBarRoom.barPadding - barLift + row : 0
         }
         return headerBottom
     }
+    /// How far the top bar stands up in the status band (the open Duo upright); 0 elsewhere.
+    @Environment(\.barLift) private var barLift
     private var foldLift: CGFloat {
         guard dockSlotBottom > 0, dockHeight > 0 else { return 0 }
         let bottom = dockSlotBottom - barReserve

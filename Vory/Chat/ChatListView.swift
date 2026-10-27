@@ -35,6 +35,8 @@ struct ChatListView: View {
     @Environment(\.windowGeometry) private var windowGeometry
     /// The status stands in a top corner: the top bar's row gets its room there, and the search keeps the bar (`TopBarRoom`).
     @Environment(\.statusInCorner) private var statusInCorner
+    /// The top bar up in the status band (the open Duo upright): the bar kept while searching there too (#516).
+    @Environment(\.barLift) private var barLift
     /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
     @Environment(\.macPageShown) private var pageShown
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
@@ -214,8 +216,9 @@ struct ChatListView: View {
             // before this iOS, is gone; the field no longer rides in and out with the bar on the
             // way back from a chat.
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
-            // The bar kept while searching under a status in a top corner, as on the other pages (#516).
-            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner) ? .avoidHidingContent : .automatic)
+            // The bar kept while searching under a status in a top corner or with the bar up in the band, as on the other
+            // pages (#516).
+            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner, barUp: barLift > 0) ? .avoidHidingContent : .automatic)
             .textInputAutocapitalization(.never).autocorrectionDisabled()
             #endif
             // One column on a window wider than a phone (the open Duo upright, 669 pt): the

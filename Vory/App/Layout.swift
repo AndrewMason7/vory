@@ -100,18 +100,41 @@ enum TopBarRoom {
         return statusInCorner ? cornerRoom : 0
     }
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
-    /// (.avoidHidingContent)`): under a status in a top corner only (#516). There the corner room holds the field under the
-    /// row through the bar's own title band; with the band hidden by an active search the field and its Cancel rode up
-    /// under the row's capsules, and a room changed to follow the search arrived after UIKit had moved the field (the page
-    /// jumped as the search started and ended). Keeping the bar, the field stays where it is and nothing changes late.
-    /// Everywhere else (phones, iPads, the closed Duo) the system's own behaviour, unchanged.
-    static func keepsBarWhileSearching(statusInCorner: Bool) -> Bool { statusInCorner }
+    /// (.avoidHidingContent)`): under a status in a top corner, and with the bar up in the status band (#516). There the
+    /// field stands at the safe area's top under the row; with the bar's band hidden by an active search the field and its
+    /// Cancel rode up under the row's capsules (into the status band, y 24, with the bar up), and a room changed to follow
+    /// the search arrived after UIKit had moved the field (the page jumped as the search started and ended). Keeping the
+    /// bar, the field stays where it is and nothing changes late. Everywhere else (phones, iPads, the closed Duo) the
+    /// system's own behaviour, unchanged.
+    static func keepsBarWhileSearching(statusInCorner: Bool, barUp: Bool = false) -> Bool { statusInCorner || barUp }
     /// The room under a status in a top corner. ASSUMPTION (iOS 27.1 to 27.2, the open Duo upright and as a laptop): UIKit
     /// brings the navigation bar's own title band (58 pt) back under the safe area once any additional inset is set, so
     /// the smallest inset puts the search drawer just under the row: 1 pt leaves it at 141 against the row's 130, where
     /// 56 (the full room) left it at 196, a 66 pt empty band; with no inset the field stood under the row.
     /// TopBarRoomUITests holds the drawer within 16 pt of the row, so an iOS that changes this trips a test.
     static let cornerRoom: CGFloat = 1
+
+    /// The open Duo held upright (#516, replacing the corner room above): the row stands up in the status band at the
+    /// window's top, clear of the status, and the pages need no room under it. Keyed on the window alone: a fold reported
+    /// across it (active or not), taller than wide, with a top safe area deep enough to hold the row. Never on a status
+    /// region: the device reports none in any pose (Matt's 38 readouts), and neither does a plain iPhone.
+    static func barUp(regions: ReservedRegions, size: CGSize, safeTop: CGFloat) -> Bool {
+        size.height > size.width && safeTop >= bandRowTop + bandRowHeight
+            && regions.reported.contains { $0.kind == .fold && $0.frame.width > $0.frame.height }
+    }
+    /// The row's top in the band: a 44 pt row centred on y 48, the middle of the status as measured on Matt's two 38
+    /// readouts of the open Duo upright (y 27 to 69 in both).
+    static let bandRowTop: CGFloat = 26
+    static let bandRowHeight: CGFloat = 44
+    /// What the row leaves clear at the band's trailing end, from the window's trailing edge: the status's left edge at
+    /// its widest in Matt's two 38 readouts (476; the other 553), less 25 for one more indicator (Location, an alarm,
+    /// Focus) and an 8 pt gap. The row ends at 443 on the 669 pt window.
+    static let statusReserve: CGFloat = 226
+    /// How far the bar moves up from its place under the safe area's top to stand in the band; 0 where it doesn't.
+    static func lift(barUp: Bool, safeTop: CGFloat) -> CGFloat {
+        barUp ? max(0, safeTop + barPadding - bandRowTop) : 0
+    }
+
     /// The room the probe last applied, for the readouts (the DEBUG geometry probe, and Screen layout on a test build),
     /// which redraw when it changes.
     @MainActor static var lastRoom: CGFloat {
@@ -418,14 +441,22 @@ extension EnvironmentValues {
     /// at the root (`StatusCornerEnvironment`), so the tab roots that give the top bar's row its room read one value that
     /// almost never changes rather than the window's geometry (#516).
     @Entry var statusInCorner = false
+    /// How far the top bar stands up from its place, into the status band (`TopBarRoom.barUp`: the open Duo upright); 0
+    /// everywhere else. Worked out once at the root with `statusInCorner`.
+    @Entry var barLift: CGFloat = 0
 }
 
-/// Puts `statusInCorner` into the environment from the window's regions and width.
+/// Puts `statusInCorner` and `barLift` into the environment from the window's regions, size and safe area. The bar
+/// standing up in the band replaces the corner's room (#516): one or the other, never both.
 struct StatusCornerEnvironment: ViewModifier {
     @Environment(\.reservedRegions) private var regions
     @Environment(\.windowGeometry) private var windowGeometry
     func body(content: Content) -> some View {
-        content.environment(\.statusInCorner, regions.statusInCorner(width: windowGeometry.bounds.width))
+        let g = windowGeometry
+        let up = TopBarRoom.barUp(regions: regions, size: g.bounds.size, safeTop: g.safeArea.top)
+        content
+            .environment(\.statusInCorner, !up && regions.statusInCorner(width: g.bounds.width))
+            .environment(\.barLift, TopBarRoom.lift(barUp: up, safeTop: g.safeArea.top))
     }
 }
 

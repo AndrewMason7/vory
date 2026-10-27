@@ -445,6 +445,13 @@ struct MorphTopBar: View {
     /// Content Viewer instead, so the pill's long-press menu steps aside (its items are in …).
     @Environment(\.dynamicTypeSize) private var typeSize
     private var axSize: Bool { typeSize.isAccessibilitySize }
+    /// The open Duo upright (#516): the bar stands this much higher, in the status band (`TopBarRoom.barUp`); 0 elsewhere.
+    @Environment(\.barLift) private var lift
+    /// The bar's inset from the window's sides.
+    static let sideInset: CGFloat = 16
+    /// Up in the band, a root's and a pushed page's row end short of the status (`TopBarRoom.statusReserve`, from the
+    /// window's trailing edge); a chat's row stays where it was, full width.
+    private var statusClear: CGFloat { lift > 0 ? TopBarRoom.statusReserve - Self.sideInset : 0 }
     /// On by default (Matt, 2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
     /// shipped chrome back for a comparison.
     static var on: Bool { !ProcessInfo.processInfo.arguments.contains("-vory-morph-off") }
@@ -493,17 +500,19 @@ struct MorphTopBar: View {
         let _ = Perf.tick("morphbar-body")
         GlassEffectContainer(spacing: 10) {
             ZStack(alignment: .topLeading) {
-                // The end states, for their frames only.
-                listLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
-                if let chat = state.chat { chatLayout(chat).opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
+                // The end states, for their frames only. Up in the status band (the open Duo upright) the whole bar
+                // stands `lift` higher; a chat's row is laid out that much lower, so it stays where it was: its seated
+                // face rises over the pill, and there's no room for it above the band.
+                listLayout.padding(.trailing, statusClear).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                if let chat = state.chat { chatLayout(chat).padding(.top, lift).opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
                 // A pushed page's end state is the same on every page: laid out always, so the
                 // first push already knows where its Back goes.
-                pushedLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                pushedLayout.padding(.trailing, statusClear).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
                 // The capsules that are seen, one per slot, at the frame between the two.
                 ForEach(MorphSlot.allCases, id: \.self) { slot in capsule(slot) }
             }
             .coordinateSpace(.named("morph"))
-            .padding(.horizontal, 16).padding(.top, 4)
+            .padding(.horizontal, Self.sideInset).padding(.top, TopBarRoom.barPadding)
         }
         // The seated face rides above the middle capsule in the chat state: outside the glass
         // container, which composites its glass over anything drawn inside it (the face sat
@@ -520,9 +529,11 @@ struct MorphTopBar: View {
                         .position(x: mid.midX, y: mid.minY + 10 - 22 + 44 * seatDrop(chat))
                         .allowsHitTesting(shown < 0.02 && !state.scrubbing)
                 }
-                .padding(.horizontal, 16).padding(.top, 4)
+                .padding(.horizontal, Self.sideInset).padding(.top, TopBarRoom.barPadding)
             }
         }
+        // Up in the status band on the open Duo upright (0 elsewhere): drawn, hit and read by VoiceOver there.
+        .offset(y: -lift)
         // The bar's type stops at XXXL, as the system's own bar does: at the accessibility
         // sizes the three capsules no longer fit one row (the actions ran off the right edge
         // and the pill hid the circles, AX3 on the simulator).

@@ -172,15 +172,17 @@ extension View {
 private struct PhonePageSearchable: ViewModifier {
     @Environment(AppModel.self) private var model: AppModel?
     @Environment(\.statusInCorner) private var statusInCorner
+    @Environment(\.barLift) private var barLift
     var text: Binding<String>
     var prompt: LocalizedStringKey?
     var always: Bool
     func body(content: Content) -> some View {
         content
             .searchable(text: text, placement: .navigationBarDrawer(displayMode: always ? .always : .automatic), prompt: prompt.map { Text($0) })
-            // Under a status in a top corner (the open Duo upright) the bar and its title band stay while the search is
-            // presented, so the field doesn't move under the top bar's row (#516, `TopBarRoom.keepsBarWhileSearching`).
-            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner) ? .avoidHidingContent : .automatic)
+            // Under a status in a top corner, or with the bar up in the status band (the open Duo upright), the bar and its
+            // title band stay while the search is presented, so the field doesn't move under the top bar's row (#516,
+            // `TopBarRoom.keepsBarWhileSearching`).
+            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner, barUp: barLift > 0) ? .avoidHidingContent : .automatic)
             .navigationBarBackButtonHidden(model.map { MorphTopBar.active($0) } ?? false)
     }
 }
