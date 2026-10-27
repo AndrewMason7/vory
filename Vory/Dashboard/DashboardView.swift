@@ -144,6 +144,10 @@ struct DashboardView: View {
             .scrollPosition($scrollPosition)
             .reloadable { await Task { await load(); await summarizeSince(force: true) }.value }
         }
+        // The desk comes and goes in one frame. The system changes the posture inside an animation, and with it the
+        // scroll's frame glided from the fold up to the page's top going flat, the greeting passing mid-screen (Matt, on
+        // build 39; the recording put the slide at 0.2 s).
+        .transaction(value: desk != nil) { $0.animation = nil }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { pageFrame = $0 }
         #if DEBUG
         .overlay(alignment: .topLeading) {
