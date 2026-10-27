@@ -260,7 +260,12 @@ final class DeskHomeUITests: XCTestCase {
                         }
                         pause(0.05)
                     }
-                    if !seen { XCTFail("cycle \(n) \(pose): the desk didn't \(wantSplit ? "come" : "go") in 30 s") }
+                    if !seen {
+                        // What the app had at the end, so a miss tells no fold (the pose) from a fold but no desk (the app).
+                        let r = readout()
+                        print("DESK cycle \(n) \(pose) MISS after 30 s: last readout fold \(r?.fold.map { "\($0)" } ?? "none") split \(r?.split ?? false) page \(r?.page ?? .null)")
+                        XCTFail("cycle \(n) \(pose): the desk didn't \(wantSplit ? "come" : "go") in 30 s")
+                    }
                     XCTAssertTrue(waitFor("done-\(pose)-\(n)", timeout: 30), "no \(pose) pose \(n) in time")
                     pause(1.5)
                     let heading = any("home.heading")
