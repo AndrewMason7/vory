@@ -329,41 +329,39 @@ struct MainTabView: View {
                 // Not tappable while it slides away: a tap then switched tabs under an open chat.
                 .allowsHitTesting(!model.tabBarHidden)
                 .accessibilityHidden(model.tabBarHidden)
-            Group {
-                if let edge {
-                    // Into the system's strip itself (the window's inset on that side, where the
-                    // status bar and the navigation bars' items already stand), at the strip's
-                    // foot under those items, so the pages keep the width the strip leaves them.
-                    // A strip too narrow for the capsule gets the bar beside it instead.
-                    let strip = edge == .leading ? windowGeometry.safeArea.leading : windowGeometry.safeArea.trailing
-                    if strip >= VoryTabBar.stripItemWidth {
-                        // One column with the system's items: their width, their centre line
-                        // (measured on the closed Duo: 50 pt wide, centred 48 pt from the edge).
-                        // The stack sits at the strip's foot, under the page's navigation items,
-                        // on the closed display and the open one alike (#516). On the open display
-                        // it stood at the top under a fixed allowance for the status items, and a
-                        // taller status column (an extra pill in it on a real Duo) covered its
-                        // first tabs; at the foot nothing in the status column reaches it.
-                        let outer = VoryTabBar.stripCentreFromEdge - VoryTabBar.stripItemWidth / 2
-                        pages.overlay(alignment: edge == .leading ? .bottomLeading : .bottomTrailing) {
-                            bar
-                                .frame(width: VoryTabBar.stripItemWidth)
-                                .padding(edge == .leading ? .leading : .trailing, outer)
-                                // The overlay already ends above the home-indicator area; the stack
-                                // keeps one group gap over it, no more. Padding it by the inset again
-                                // pushed the stack up until its first tab touched the page's own
-                                // strip items (the list's filter met Home, Matt).
-                                .padding(.bottom, VoryTabBar.stripGroupGap)
-                                .ignoresSafeArea(.container, edges: edge == .leading ? .leading : .trailing)
-                        }
-                    } else {
-                        pages.safeAreaInset(edge: edge, spacing: 0) { bar }
+            // One structure wherever the bar stands (#533): along the bottom, beside a narrow strip, or in the strip,
+            // each a slot that holds the bar or nothing, so only the bar moves. The pages stood in one of three branches
+            // by the bar's place, each another identity: every move of the bar (a turn of the open Duo, closing or
+            // opening it) rebuilt every tab's navigation stack at its root, and a pushed page went back to the root.
+            let side = edge ?? .trailing
+            // Into the system's strip itself (the window's inset on that side, where the status bar and the navigation
+            // bars' items already stand), at the strip's foot under those items, so the pages keep the width the strip
+            // leaves them. A strip too narrow for the capsule gets the bar beside it instead.
+            let strip = side == .leading ? windowGeometry.safeArea.leading : windowGeometry.safeArea.trailing
+            let inStrip = vertical && strip >= VoryTabBar.stripItemWidth
+            // One column with the system's items: their width, their centre line (measured on the closed Duo: 50 pt
+            // wide, centred 48 pt from the edge). The stack sits at the strip's foot, under the page's navigation items,
+            // on the closed display and the open one alike (#516). On the open display it stood at the top under a
+            // fixed allowance for the status items, and a taller status column (an extra pill in it on a real Duo)
+            // covered its first tabs; at the foot nothing in the status column reaches it.
+            let outer = VoryTabBar.stripCentreFromEdge - VoryTabBar.stripItemWidth / 2
+            pages
+                .safeAreaInset(edge: .bottom, spacing: 0) { if !vertical { bar } }
+                .safeAreaInset(edge: side, spacing: 0) { if vertical && !inStrip { bar } }
+                .overlay(alignment: side == .leading ? .bottomLeading : .bottomTrailing) {
+                    if inStrip {
+                        bar
+                            .frame(width: VoryTabBar.stripItemWidth)
+                            .padding(side == .leading ? .leading : .trailing, outer)
+                            // The overlay already ends above the home-indicator area; the stack
+                            // keeps one group gap over it, no more. Padding it by the inset again
+                            // pushed the stack up until its first tab touched the page's own
+                            // strip items (the list's filter met Home, Matt).
+                            .padding(.bottom, VoryTabBar.stripGroupGap)
+                            .ignoresSafeArea(.container, edges: side == .leading ? .leading : .trailing)
                     }
-                } else {
-                    pages.safeAreaInset(edge: .bottom, spacing: 0) { bar }
                 }
-            }
-            .onChange(of: vertical, initial: true) { _, v in model.tabBarVertical = v }
+                .onChange(of: vertical, initial: true) { _, v in model.tabBarVertical = v }
         }
         // Lists on every page (roots and the pages pushed over them) do not pick up the bar's
         // inset on this iOS (their last rows ended under the bar), so their scroll content gets
