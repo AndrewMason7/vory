@@ -139,6 +139,59 @@ class CapabilitiesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(written["version"], hermes_push.VERSION)
 
 
+class ReconnectTests(unittest.IsolatedAsyncioTestCase):
+    """A reconnect closes the socket it replaces, and a socket released on purpose does not
+    report "closed" after its replacement is up: that stale "closed" made the relay reconnect
+    without closing the new socket, leaking one attached socket per idle release."""
+
+    async def asyncSetUp(self) -> None:
+        self.open: set = set()
+        fake = FakeGateway("ok")
+
+        async def handler(ws) -> None:
+            self.open.add(ws)
+            try:
+                await fake.handler(ws)
+            finally:
+                self.open.discard(ws)
+
+        self.server = await websockets.serve(handler, "127.0.0.1", 0)
+        port = self.server.sockets[0].getsockname()[1]
+        self.gw = hermes_push.Gateway()
+        self.gw._ws_for = lambda url: (f"ws://127.0.0.1:{port}/api/ws", "test")
+
+    async def asyncTearDown(self) -> None:
+        await self.gw.close()
+        self.server.close()
+        await self.server.wait_closed()
+
+    async def settle(self) -> None:
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+
+    async def test_a_released_socket_is_not_reported_closed(self) -> None:
+        await self.gw.connect()
+        await self.gw.close()  # ReleaseIdle / a config reload
+        await self.gw.connect()
+        await self.settle()
+        self.assertTrue(self.gw.events.empty())
+        self.assertEqual(len(self.open), 1)
+
+    async def test_a_reconnect_closes_the_socket_it_replaces(self) -> None:
+        await self.gw.connect()
+        await self.gw.connect()
+        await self.settle()
+        self.assertEqual(len(self.open), 1)
+        self.assertTrue(self.gw.events.empty())
+
+    async def test_the_current_socket_closing_is_still_news(self) -> None:
+        await self.gw.connect()
+        for ws in list(self.open):
+            await ws.close()
+        ev = await asyncio.wait_for(self.gw.events.get(), timeout=2)
+        self.assertEqual(ev["type"], "__closed__")
+
+
 class FakeMsvcrt(types.ModuleType):
     """Windows' msvcrt, as far as the lock goes: one holder per file, LK_NBLCK raising OSError
     while another handle holds it."""
