@@ -80,8 +80,11 @@ struct DashboardView: View {
     private var deskPage: CGRect { CGRect(x: pageFrame.minX, y: pageFrame.minY, width: pageFrame.width, height: max(0, pageFrame.height - barReserve)) }
     /// Home as a desk, the window folded across like a laptop (`DeskSplit`); nil for Home as everywhere else.
     private var desk: (top: CGFloat, gap: CGFloat, bottom: CGFloat)? {
-        DeskSplit.halves(page: deskPage, fold: regions.horizontalFold, accessibilityText: typeSize.isAccessibilitySize, editing: editingHome)
+        DeskSplit.halves(page: deskPage, fold: deskFold, accessibilityText: typeSize.isAccessibilitySize, editing: editingHome)
     }
+    /// The fold the desk lays out against: the window's, taken a main-actor turn after the system reports it (see the
+    /// onChange that sets it).
+    @State private var deskFold: CGRect?
     /// The gateway the last finished load ran against (see `shouldLoad`).
     @State private var loadedConnection: UUID?
 
@@ -148,6 +151,12 @@ struct DashboardView: View {
         // scroll's frame glided from the fold up to the page's top going flat, the greeting passing mid-screen (Matt, on
         // build 39; the recording put the slide at 0.2 s).
         .transaction(value: desk != nil) { $0.animation = nil }
+        // The system reports a posture change inside its own UIKit animation, and a layout change made in that pass
+        // glided with it (the scroll view's frame is a UIKit view's, out of SwiftUI's transactions' reach). Taken on
+        // the next turn, the desk comes and goes outside it, in one frame. At once when Home appears, so a launch
+        // already half open shows the desk from its first frame.
+        .onAppear { deskFold = regions.horizontalFold }
+        .onChange(of: regions.horizontalFold) { _, fold in Task { @MainActor in deskFold = fold } }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { pageFrame = $0 }
         #if DEBUG
         .overlay(alignment: .topLeading) {
