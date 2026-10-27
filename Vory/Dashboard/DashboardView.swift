@@ -65,11 +65,22 @@ struct DashboardView: View {
     @Environment(\.reservedRegions) private var regions
     /// The tiles' grid in the window, for the fold's place in it.
     @State private var tilesFrame = CGRect.zero
-    /// The page in the window (under our top bar's row, over our tab bar), for the desk's halves.
+    /// The page in the window (under our top bar's row, to the window's safe bottom), for the desk's halves.
     @State private var pageFrame = CGRect.zero
+    #if os(iOS)
+    @Environment(\.windowGeometry) private var windowGeometry
+    /// The tab bar's height under Home, when it is there and runs along the bottom. The page's scroll runs on under the
+    /// bar (its content margin keeps the last card clear), so `pageFrame` reaches the window's safe bottom; the desk's
+    /// bottom half ends at the bar's top, as the chat's dock does.
+    private var barReserve: CGFloat { model.tabBarReserved && !model.tabBarVertical ? VoryTabBar.reservedHeight(in: windowGeometry) : 0 }
+    #else
+    private var barReserve: CGFloat { 0 }
+    #endif
+    /// The page the desk is laid in: `pageFrame` less our tab bar's reserve at its foot.
+    private var deskPage: CGRect { CGRect(x: pageFrame.minX, y: pageFrame.minY, width: pageFrame.width, height: max(0, pageFrame.height - barReserve)) }
     /// Home as a desk, the window folded across like a laptop (`DeskSplit`); nil for Home as everywhere else.
     private var desk: (top: CGFloat, gap: CGFloat, bottom: CGFloat)? {
-        DeskSplit.halves(page: pageFrame, fold: regions.horizontalFold, accessibilityText: typeSize.isAccessibilitySize, editing: editingHome)
+        DeskSplit.halves(page: deskPage, fold: regions.horizontalFold, accessibilityText: typeSize.isAccessibilitySize, editing: editingHome)
     }
     /// The gateway the last finished load ran against (see `shouldLoad`).
     @State private var loadedConnection: UUID?
@@ -86,8 +97,9 @@ struct DashboardView: View {
         // place, its position and its numbers, so a posture change loads nothing (Duo stage 4).
         VStack(spacing: 0) {
             if let desk {
-                deskTop.frame(height: desk.top, alignment: .top)
-                Color.clear.frame(height: desk.gap).accessibilityHidden(true)
+                // The fold's band as padding, no view of its own: a hidden Color.clear there still stood in the
+                // accessibility audit as an element with no description, the fold's frame exactly.
+                deskTop.frame(height: desk.top, alignment: .top).padding(.bottom, desk.gap)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -337,10 +349,14 @@ struct DashboardView: View {
                     if busy.isEmpty {
                         Text("No one's working right now.").font(.subheadline).foregroundStyle(.secondary)
                     } else {
+                        // The rows take what the half leaves them and scroll in it: without a floor of 0 the list stood
+                        // at its whole height and the panel ran onto the fold with two bots working (the Duo, 2026-10-27).
                         ScrollView {
                             VStack(alignment: .leading, spacing: 10) { ForEach(busy) { p in botRow(rt, p) } }
                         }
                         .scrollBounceBehavior(.basedOnSize)
+                        .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                        .layoutPriority(-1)
                     }
                     if !idle.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -428,7 +444,7 @@ struct DashboardView: View {
     @State private var probeLoads = 0
     private var deskReadout: String {
         func r(_ f: CGRect) -> String { String(format: "%.1f %.1f %.1f %.1f", f.minX, f.minY, f.width, f.height) }
-        return "page \(r(pageFrame));panel \(r(probePanel));cards \(r(probeCards));fold \(regions.horizontalFold.map(r) ?? "none");split \(desk == nil ? "no" : "yes");loads \(probeLoads)"
+        return "page \(r(deskPage));panel \(r(probePanel));cards \(r(probeCards));fold \(regions.horizontalFold.map(r) ?? "none");split \(desk == nil ? "no" : "yes");loads \(probeLoads)"
     }
     #endif
 

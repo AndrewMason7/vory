@@ -118,7 +118,13 @@ final class DeskHomeUITests: XCTestCase {
             return
         }
         XCTAssertTrue(composer.exists, "no composer in \(title)")
+        // On the Duo half open the dock lifts above the fold as the keyboard comes: a tap can lose the focus to that
+        // move, so it waits for the focus and taps once more if it hasn't come.
         composer.tap()
+        var focusBy = Date().addingTimeInterval(3)
+        while !focused(composer) && Date() < focusBy { pause(0.3) }
+        if !focused(composer) { composer.tap(); focusBy = Date().addingTimeInterval(3); while !focused(composer) && Date() < focusBy { pause(0.3) } }
+        print("DESK \(title) composer focused \(focused(composer))")
         composer.typeText("Clean up the old logs")
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 5), "no send").tap()
         XCTAssertTrue(app.buttons["Allow once"].firstMatch.waitForExistence(timeout: 90), "no approval in \(title)")
@@ -142,16 +148,31 @@ final class DeskHomeUITests: XCTestCase {
     }
 
     /// The screen the launch started on: Home, the Chats list, a chat, or unknown after 30 s. A compare needs the one the
-    /// launch asked for (`-launchTab`); a launch that started anywhere else is a void run, not a finding.
+    /// launch asked for (`-launchTab`); a launch that started anywhere else is a void run, not a finding. By what can be
+    /// hit, not what exists: the tabs' pages stay mounted, so Home's heading exists behind the Chats list too.
     private func launchScreen() -> String {
         let end = Date().addingTimeInterval(30)
         repeat {
-            if any("home.heading").exists { return "home" }
-            if any("chats.sort").exists { return "chats" }
-            if app.buttons["chat.back"].firstMatch.exists { return "chat" }
+            if app.buttons["chat.back"].firstMatch.exists && app.buttons["chat.back"].firstMatch.isHittable { return "chat" }
+            if any("chats.sort").exists && any("chats.sort").isHittable { return "chats" }
+            if any("home.heading").exists && any("home.heading").isHittable { return "home" }
             pause(0.5)
         } while Date() < end
         return "unknown"
+    }
+
+    private func focused(_ e: XCUIElement) -> Bool { (e.value(forKey: "hasKeyboardFocus") as? Bool) ?? false }
+
+    /// The default accessibility audit (every type), each issue printed with its element (nil elements as type 0).
+    private func audit() throws {
+        var count = 0
+        try app.performAccessibilityAudit { issue in
+            let el = issue.element
+            print("DESK audit issue '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' frame \(el?.frame ?? .zero)")
+            count += 1
+            return true
+        }
+        print("DESK audit \(count) issues")
     }
 
     func testHomeAsADesk() throws {
@@ -177,7 +198,16 @@ final class DeskHomeUITests: XCTestCase {
         app.launch()
         print("DESK launch screen \(launchScreen())")
         for title in ["Disk cleanup", "Weekly dependency audit"].prefix(waiting) { try leaveWaiting(title) }
-        if waiting > 0 { try toHome() } else {
+        if waiting > 0 {
+            try toHome()
+            // HERMES_E2E_SETUP_FLAT=1: the chats were left waiting with the Duo flat (in the laptop pose the composer
+            // lost its focus as the dock lifted, and nothing could be typed); the script folds it like a laptop now.
+            if env["HERMES_E2E_SETUP_FLAT"] == "1" {
+                signal("ready-2")
+                XCTAssertTrue(waitFor("posed-2"), "no laptop pose in time")
+                pause(3)
+            }
+        } else {
             XCTAssertTrue(any("home.heading").waitForExistence(timeout: 40), "Home isn't in front")
             pause(3)
         }
@@ -204,6 +234,12 @@ final class DeskHomeUITests: XCTestCase {
                 print("DESK cards answered: Allow once buttons \(before) -> \(after)")
                 XCTAssertEqual(after, before - 1, "Allow once on Home didn't answer its card in place")
             } else { XCTFail("no Allow once on Home") }
+            // HERMES_E2E_CARDS_AUDIT=1: the desk audited as it stands now, a bot working and its card still in place.
+            if env["HERMES_E2E_CARDS_AUDIT"] == "1" {
+                if let r = readout() { print("DESK cards-audit page \(r.page) panel \(r.panel) cards \(r.cards) split \(r.split)") }
+                print("DESK cards-audit Allow once buttons \(app.buttons.matching(NSPredicate(format: "label == 'Allow once'")).count) no-one-working shown \(app.staticTexts["No one's working right now."].exists)")
+                try audit()
+            }
         case "posture":
             // Scrolled down far enough that the heading is off the top in every pose.
             dragPage(from: (readout()?.fold?.maxY ?? 500) + 250)
@@ -230,14 +266,7 @@ final class DeskHomeUITests: XCTestCase {
             let stops = ((o.value as? String) ?? "").split(separator: "\n").map { String($0.split(separator: "|").first ?? "") }
             print("DESK oracle \(stops.count) stops: \(stops.joined(separator: " / "))")
         case "audit":
-            var count = 0
-            try app.performAccessibilityAudit { issue in
-                let el = issue.element
-                print("DESK audit issue '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' frame \(el?.frame ?? .zero)")
-                count += 1
-                return true
-            }
-            print("DESK audit \(count) issues")
+            try audit()
         default:
             if expect == "split" { _ = checkDesk("frames") } else if let r = readout() {
                 print("DESK frames one list page \(r.page) fold \(r.fold.map { "\($0)" } ?? "none") split \(r.split)")
