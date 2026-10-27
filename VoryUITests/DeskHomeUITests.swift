@@ -273,10 +273,14 @@ final class DeskHomeUITests: XCTestCase {
             // answered (no card, the mock's scripted end). The mock logs each ask and answer by its request id.
             guard let r = checkDesk("answers"), r.split, let fold = r.fold else { XCTFail("VOID: no desk in the laptop pose"); break }
             let titles = ["Disk cleanup", "Weekly dependency audit"]
+            // A waiting chat's line on the desk: inside what needs you (the readout's cards), not a row further down
+            // (Pick up lists the same chats by title).
             func lines() -> [(String, CGFloat)] {
-                titles.compactMap { t in
+                let cards = readout()?.cards ?? .null
+                return titles.compactMap { t in
                     app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", t)).allElementsBoundByIndex
-                        .first { $0.exists && $0.frame.minY > fold.maxY }.map { (t, $0.frame.minY) }
+                        .first { $0.exists && $0.frame.minY > fold.maxY && $0.frame.minY >= cards.minY - 1 && $0.frame.minY <= cards.maxY }
+                        .map { (t, $0.frame.minY) }
                 }.sorted { $0.1 < $1.1 }
             }
             let order = lines()
@@ -291,6 +295,7 @@ final class DeskHomeUITests: XCTestCase {
                 }
                 print("DESK answers '\(title)': \(choice) at \(b.frame)")
                 b.tap()
+                print(String(format: "DESK answers tapped at %.3f", Date().timeIntervalSince1970))
                 pause(3)
                 let stays = lines().contains { $0.0 == title }
                 print("DESK answers '\(title)' after \(choice): its card on the desk \(stays)")
