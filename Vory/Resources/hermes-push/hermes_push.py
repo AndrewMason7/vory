@@ -607,7 +607,7 @@ class Gateway:
 
     async def connect(self) -> None:
         """Connect to the configured URL; the error says what that URL answered, for the app."""
-        # A reconnect replaces the socket: the one before it is closed, or it stays open — still
+        # A reconnect replaces the socket: the one before it is closed, or it stays open, still
         # attached to every session it mirrored (so the gateway never reaps them), still pinged,
         # and its reader still feeding events into the queue next to the new one's.
         await self.close()
