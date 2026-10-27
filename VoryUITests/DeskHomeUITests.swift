@@ -294,8 +294,9 @@ final class DeskHomeUITests: XCTestCase {
                     XCTFail("no hittable \(choice) under '\(title)'"); break
                 }
                 print("DESK answers '\(title)': \(choice) at \(b.frame)")
-                b.tap()
+                // The time just before the tap: tap() returns once the app is idle, its move over.
                 print(String(format: "DESK answers tapped at %.3f", Date().timeIntervalSince1970))
+                b.tap()
                 pause(3)
                 let stays = lines().contains { $0.0 == title }
                 print("DESK answers '\(title)' after \(choice): its card on the desk \(stays)")
