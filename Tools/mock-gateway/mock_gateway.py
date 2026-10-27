@@ -1996,6 +1996,10 @@ class Gateway:
         (live.pending if live is not None else self.pending)[rid] = fut
         self.pending[rid] = fut
         frame = {"jsonrpc": "2.0", "id": rid, "method": method, "params": {"session_id": sid, **params}}
+        # One line per ask and per answer, by the request's own id, so a UI test can match the answer it gave to the
+        # card it gave it on (the session's title says which chat).
+        s = getattr(self, "sessions", {}).get(sid)
+        print(f"ask {method} {sid} title={getattr(s, 'title', '')!r} request={params.get('request_id', rid)}", flush=True)
         if live is not None:
             live.open_frames[rid] = frame
         for m in (list(live.members) if live is not None and live.members else [self]):
@@ -2004,7 +2008,9 @@ class Gateway:
             except Exception:  # noqa: BLE001
                 pass
         try:
-            return await asyncio.wait_for(fut, timeout)
+            answer = await asyncio.wait_for(fut, timeout)
+            print(f"answer {method} {sid} request={params.get('request_id', rid)} choice={(answer or {}).get('choice')!r}", flush=True)
+            return answer
         except asyncio.TimeoutError:
             await self.event("request.cancel", sid, {"id": rid, "method": method, "reason": "timeout"})
             return None

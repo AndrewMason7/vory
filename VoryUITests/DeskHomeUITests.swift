@@ -182,7 +182,7 @@ final class DeskHomeUITests: XCTestCase {
         continueAfterFailure = true
         let deskCase = env["HERMES_E2E_DESK_CASE"] ?? "frames"
         let expect = env["HERMES_E2E_EXPECT"] ?? "split"
-        let waiting = deskCase == "cards" ? max(1, min(2, Int(env["HERMES_E2E_WAITING"] ?? "2") ?? 2)) : 0
+        let waiting = deskCase == "answers" ? 2 : deskCase == "cards" ? max(1, min(2, Int(env["HERMES_E2E_WAITING"] ?? "2") ?? 2)) : 0
         // `-restore.openChat none`: the last open chat isn't reopened (its saved record reads as nothing for this launch,
         // the argument domain only), so every launch starts on the tab it asks for, in both copies.
         var args = ["-companionPromptShown", "YES", "-launchTab", waiting > 0 ? "chats" : "dashboard", "-restore.openChat", "none",
@@ -239,6 +239,80 @@ final class DeskHomeUITests: XCTestCase {
                 if let r = readout() { print("DESK cards-audit page \(r.page) panel \(r.panel) cards \(r.cards) split \(r.split)") }
                 print("DESK cards-audit Allow once buttons \(app.buttons.matching(NSPredicate(format: "label == 'Allow once'")).count) no-one-working shown \(app.staticTexts["No one's working right now."].exists)")
                 try audit()
+            }
+        case "foldcycle":
+            // Half open, flat, half open, HERMES_E2E_CYCLES times (3), Home unscrolled (Matt, on build 39: the desk came
+            // late, and going flat the list jumped). Each pose is asked of the script by signal (want-flat-n, want-half-n;
+            // it answers done-...-n with the click's epoch); the readout is polled from the signal on, and the first poll
+            // that shows the desk gone or come is printed with its epoch, then the heading and the loads once settled.
+            let cycles = Int(env["HERMES_E2E_CYCLES"] ?? "3") ?? 3
+            for n in 1...cycles {
+                for (pose, wantSplit) in [("flat", false), ("half", true)] {
+                    signal("want-\(pose)-\(n)")
+                    let start = Date()
+                    var seen = false
+                    while Date().timeIntervalSince(start) < 30 {
+                        if let r = readout(), r.split == wantSplit {
+                            print(String(format: "DESK cycle %d %@ split %@ at %.3f fold %@ page %@", n, pose, wantSplit ? "yes" : "no",
+                                         Date().timeIntervalSince1970, r.fold.map { "\($0)" } ?? "none", "\(r.page)"))
+                            seen = true
+                            break
+                        }
+                        pause(0.05)
+                    }
+                    if !seen { XCTFail("cycle \(n) \(pose): the desk didn't \(wantSplit ? "come" : "go") in 30 s") }
+                    XCTAssertTrue(waitFor("done-\(pose)-\(n)", timeout: 30), "no \(pose) pose \(n) in time")
+                    pause(1.5)
+                    let heading = any("home.heading")
+                    print("DESK cycle \(n) \(pose) settled heading \(heading.exists ? "\(heading.frame)" : "none") loads \(readout()?.loads ?? -1)")
+                }
+            }
+        case "answers":
+            // Answering on the desk (Matt couldn't: nothing waited): two chats left waiting, the desk folded, then Allow once
+            // on the first card and Deny on the second, each from the desk; each chat then opened from Chats to see it
+            // answered (no card, the mock's scripted end). The mock logs each ask and answer by its request id.
+            guard let r = checkDesk("answers"), r.split, let fold = r.fold else { XCTFail("VOID: no desk in the laptop pose"); break }
+            let titles = ["Disk cleanup", "Weekly dependency audit"]
+            func lines() -> [(String, CGFloat)] {
+                titles.compactMap { t in
+                    app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", t)).allElementsBoundByIndex
+                        .first { $0.exists && $0.frame.minY > fold.maxY }.map { (t, $0.frame.minY) }
+                }.sorted { $0.1 < $1.1 }
+            }
+            let order = lines()
+            print("DESK answers cards \(order.map { "'\($0.0)' at \(Int($0.1))" }) Allow once \(app.buttons.matching(NSPredicate(format: "label == 'Allow once'")).count)")
+            guard order.count == 2 else { XCTFail("VOID: not two waiting cards on the desk"); break }
+            for (i, choice) in ["Allow once", "Deny"].enumerated() {
+                let title = order[i].0
+                let query = app.buttons.matching(NSPredicate(format: "label == %@", choice))
+                let lineY = lines().first { $0.0 == title }?.1 ?? fold.maxY
+                guard let b = query.allElementsBoundByIndex.filter({ $0.exists && $0.isHittable && $0.frame.minY > lineY }).min(by: { $0.frame.minY < $1.frame.minY }) else {
+                    XCTFail("no hittable \(choice) under '\(title)'"); break
+                }
+                print("DESK answers '\(title)': \(choice) at \(b.frame)")
+                b.tap()
+                pause(3)
+                let stays = lines().contains { $0.0 == title }
+                print("DESK answers '\(title)' after \(choice): its card on the desk \(stays)")
+                XCTAssertFalse(stays, "'\(title)''s card stayed on the desk after \(choice)")
+                try XCTUnwrap(hittable(app.buttons.matching(identifier: "tab.chats"), timeout: 10), "no Chats tab").tap()
+                pause(1.5)
+                let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@ AND identifier != 'chat.titlePill'", title))
+                try XCTUnwrap(hittable(row, timeout: 20), "no '\(title)' row").tap()
+                let want = choice == "Deny" ? ["leave the files in place"] : ["4.2 GB freed", "34 files removed"]
+                let end = Date().addingTimeInterval(30)
+                var shown = false
+                while !shown && Date() < end {
+                    shown = want.contains { app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", $0)).firstMatch.exists }
+                    if !shown { pause(0.5) }
+                }
+                let card = app.buttons["Allow once"].firstMatch.exists
+                print("DESK answers '\(title)' chat end: card \(card ? "still there" : "none"), \(want.joined(separator: " or ")) \(shown ? "shown" : "not shown")")
+                XCTAssertFalse(card, "'\(title)' still shows its card after \(choice)")
+                XCTAssertTrue(shown, "'\(title)' doesn't show the turn's end after \(choice)")
+                try XCTUnwrap(hittable(app.buttons.matching(identifier: "chat.back"), timeout: 10), "no Back in '\(title)'").tap()
+                pause(1.5)
+                try toHome()
             }
         case "posture":
             // Scrolled down far enough that the heading is off the top in every pose.
