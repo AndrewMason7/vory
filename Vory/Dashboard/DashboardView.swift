@@ -85,6 +85,9 @@ struct DashboardView: View {
     /// The fold the desk lays out against: the window's, taken a main-actor turn after the system reports it (see the
     /// onChange that sets it).
     @State private var deskFold: CGRect?
+    /// The idle bots' faces on the desk: 44 pt (Matt, on build 39's stills), 36 at the two largest text sizes short of
+    /// the accessibility ones, so the row keeps clear of Who's working's rows and the fold. Hit areas stay at least 44.
+    private var idleFace: CGFloat { typeSize >= .xxLarge ? 36 : 44 }
     /// The gateway the last finished load ran against (see `shouldLoad`).
     @State private var loadedConnection: UUID?
 
@@ -376,7 +379,7 @@ struct DashboardView: View {
                             HStack(spacing: 6) {
                                 ForEach(idle) { p in
                                     Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
-                                        BotAvatar(profile: p.name, size: 28).frame(width: 44, height: 44).contentShape(Rectangle())
+                                        BotAvatar(profile: p.name, size: idleFace).frame(width: idleFace + 8, height: idleFace + 8).contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityLabel("\(p.label): idle")

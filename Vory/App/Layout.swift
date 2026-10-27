@@ -348,7 +348,8 @@ enum HomeTiles {
 enum DeskSplit {
     /// The top half's content at the largest text short of the accessibility sizes: the scroll's padding (8), the
     /// greeting on one line and the date (4 + 41 + 4 + 26), the gap (16), the panel with one working row and the idle
-    /// faces' 44 pt row (16 + 29 + 10 + 53 + 10 + 44 + 16), and 8 over the fold. About 285.
+    /// faces' 44 pt row (16 + 29 + 10 + 53 + 10 + 44 + 16), and 8 over the fold. About 285. At the default text the same
+    /// content, with the idle faces' 52 pt row (44 pt faces), measured about 263 on the Duo (2026-10-27).
     static let minTop: CGFloat = 290
     /// One approval card whole at the default text: the padding and the chat's 44 pt line (8 + 44 + 8) and the card (14 +
     /// 22 + 10 + 20 + 10 + 34 + 10 + 16 + 10 + 26 + 10, its four choices two by two at the large size 50 + 8 + 50, and
