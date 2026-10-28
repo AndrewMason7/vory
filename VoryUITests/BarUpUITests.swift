@@ -14,6 +14,8 @@ import XCTest
 /// Every frame is printed (BARUP). Run where the bar is up (HERMES_E2E_BARUP=1: the Duo upright, flat or laptop);
 /// skipped elsewhere, where the frames A/B holds the bar unmoved. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are
 /// set (a mock with a long chat list: --extra-sessions).
+/// #542: a chat's bar on the Duo like Messages, in the pose the script names (HERMES_E2E_POSE: upright, laptop, closed,
+/// side, book), and nothing travelling between the list and a chat in the bar's own frame log.
 @MainActor
 final class BarUpUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -307,6 +309,271 @@ final class BarUpUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5) && row.isHittable, "Back didn't pop to Settings")
         print("BARUP Back anchor after \(row.exists ? "\(row.frame)" : "gone")")
         if row.exists { XCTAssertEqual(row.frame.minY, rowY, accuracy: 1, "Back: Settings moved (scrolled to its top?)") }
+        app.terminate()
+    }
+
+    // MARK: A chat's bar on the Duo, like Messages (#542)
+
+    /// The Duo's pose for the chat tests (HERMES_E2E_POSE): upright and laptop (the bar up in the band), closed (the status
+    /// column at the window's side), side and book (the split, the status column at its side).
+    private enum Pose: String { case upright, laptop, closed, side, book }
+    /// The status column (`TopBarRoom.statusColumnTops`, `VoryTabBar.stripCentreFromEdge`): 44 pt items centred 48 pt from
+    /// the window's edge, their tops at these.
+    static let columnTops: [String: [CGFloat]] = ["closed": [176, 236], "side": [126], "book": [126]]
+    static let columnCentreFromEdge: CGFloat = 48
+    /// On its side, the name and the face centred on the status's middle.
+    static let sideRowMiddle: CGFloat = 48
+    /// Like Messages (Matt, 2026-10-28): the gap between the face and the name, and how far the band's opaque part reaches
+    /// under the face, each a quarter of the face's 44 pt (`ChatNameLines.faceGap`, `ChatBand.below`); the band's soft
+    /// foot past that (`ChatBand.foot`).
+    static let faceNameGap: CGFloat = 11, bandBelow: CGFloat = 11, bandFoot: CGFloat = 4
+
+    /// Opens the chat the script names (HERMES_E2E_CHAT, a words-in-its-row match) from the Chats list, with the frames
+    /// readout, VoiceOver's oracle and any extra arguments; in the scheme and text size the script asks for
+    /// (HERMES_E2E_SCHEME, HERMES_E2E_SIZE=XXXL). Returns the wall time just before the row's tap.
+    @discardableResult private func openChat(_ extra: [String] = []) throws -> TimeInterval {
+        let e = ProcessInfo.processInfo.environment
+        guard let url = e["HERMES_E2E_URL"], let token = e["HERMES_E2E_TOKEN"], !url.isEmpty, !token.isEmpty else {
+            throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set")
+        }
+        app = XCUIApplication(bundleIdentifier: e["HERMES_E2E_BUNDLE"].flatMap { $0.isEmpty ? nil : $0 } ?? "com.vorantx.vory.demo")
+        app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-launchTab", "chats",
+                               "-colorSchemePreference", e["HERMES_E2E_SCHEME"] ?? "light", "-vory-morph-frames", "-vory-ax-oracle"]
+            + (e["HERMES_E2E_SIZE"] == "XXXL" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"] : []) + extra
+        app.launch()
+        XCTAssertTrue(element("tab.chats").waitForExistence(timeout: 40), "no tab bar")
+        pause(2)
+        // HERMES_E2E_ORIENT=landscape (an off-Duo A/B): turned before the chat opens; the frames print the window as it is.
+        if e["HERMES_E2E_ORIENT"] == "landscape" { XCUIDevice.shared.orientation = .landscapeLeft; pause(2.5) }
+        let words = e["HERMES_E2E_CHAT"].flatMap { $0.isEmpty ? nil : $0 } ?? "Disk cleanup"
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@ AND identifier != 'chat.titlePill'", words)).allElementsBoundByIndex
+        let row = try XCTUnwrap(rows.first { $0.exists && $0.isHittable }, "no row with '\(words)'")
+        let tapped = Date().timeIntervalSince1970
+        row.tap()
+        // Open once Chat info is there: beside the list on the Duo's side there's no Back.
+        XCTAssertTrue(element("chat.titlePill").waitForExistence(timeout: 20), "the chat didn't open")
+        pause(3)
+        return tapped
+    }
+
+    /// VoiceOver's stops, in order (the oracle's walk, `-vory-ax-oracle`): label and frame.
+    private func voiceOverStops() -> [(label: String, frame: CGRect)]? {
+        let oracle = element("debug.voiceover")
+        guard oracle.waitForExistence(timeout: 5) else { return nil }
+        return ((oracle.value as? String) ?? "").split(separator: "\n").compactMap { line in
+            guard let bar = line.lastIndex(of: "|") else { return nil }
+            let n = line[line.index(after: bar)...].split(separator: ",").compactMap { Double($0) }
+            guard n.count == 4 else { return nil }
+            return (String(line[..<bar]), CGRect(x: n[0], y: n[1], width: n[2], height: n[3]))
+        }
+    }
+
+    /// The chat's bar on the Duo like Messages (Matt, 2026-10-28), in the pose the script names (HERMES_E2E_POSE); with
+    /// HERMES_E2E_LISTHIDDEN=1 (side or book), after the split's list column is hidden. In every pose:
+    /// - Chat info (the face and the name, one button) 44 pt tall (the name alone at XXXL keeps it so), and Back and More
+    ///   44 pt or more;
+    /// - like Messages (the frames readout's face, name and band): the name 11 pt from the face and centred on it, and the
+    ///   band's opaque part reaching 11 pt under the face, each within 1 pt;
+    /// - VoiceOver's order Back, Chat info, More, wherever each is;
+    /// - the thread, scrolled to its start, beginning under the band (its soft foot included).
+    /// Up in the band (upright, laptop): Back, the face's slot and More in the band's row (26 to 70, 1 pt either way; at
+    /// XXXL bottoms by 78), ending by 443; Chat info between Back and More, 4 pt clear of each.
+    /// Closed: Chat info at the top left; Back and More in the status column (their middles 48 pt from the window's edge,
+    /// their tops at 176 and 236). On its side and as a book: Chat info at the pane's top left, centred on y 48; More in the
+    /// column (top 126); no Back while the list is beside the chat, and with the list hidden Back at the top left, which
+    /// pops the chat. Elsewhere it only prints. Always printed: the frames (CHATFRAMES) and the stops (CHATAX); with
+    /// HERMES_E2E_AUDIT=1 the chat screen's audit (AUDIT lines); a hold for a still (BARUP HOLD chat).
+    func testTheChatsBarIsLikeMessages() throws {
+        let e = ProcessInfo.processInfo.environment
+        let pose = Pose(rawValue: e["HERMES_E2E_POSE"] ?? ""), largest = e["HERMES_E2E_SIZE"] == "XXXL"
+        let listHidden = e["HERMES_E2E_LISTHIDDEN"] == "1" && (pose == .side || pose == .book)
+        try openChat()
+        if listHidden {
+            let hide = app.buttons["Hide Sidebar"].firstMatch
+            try XCTUnwrap(hide.exists ? hide : nil, "no Hide Sidebar on the split").tap()
+            pause(2)
+        }
+        let window = app.windows.firstMatch.frame
+        let c = caps()
+        let back = element("chat.back"), more = element("chat.more"), info = element("chat.titlePill")
+        let frame = { (el: XCUIElement) in el.exists ? el.frame : .zero }
+        print("CHATFRAMES \(pose?.rawValue ?? "elsewhere")\(listHidden ? " list hidden" : "") window \(window) capsules "
+              + c.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))
+        print("CHATFRAMES elements back \(frame(back)) info \(frame(info)) more \(frame(more))")
+        if let pose {
+            XCTAssertEqual(info.frame.height, 44, accuracy: 1, "Chat info \(info.frame) isn't one 44 pt row")
+            XCTAssertGreaterThanOrEqual(info.frame.width, 44, "Chat info \(info.frame) under 44 pt")
+            XCTAssertTrue(more.exists, "no More")
+            // Like Messages (Matt, 2026-10-28): a quarter of the face between it and the name, the name centred on it, and
+            // the band reaching a quarter of the face under it.
+            if let face = c["face"], let name = c["name"], let band = c["band"] {
+                print("CHATFRAMES spacing face \(face) name \(name) band \(band): gap \(name.minX - face.maxX), name middle off \(name.midY - face.midY), band under the face \(band.maxY - face.maxY)")
+                XCTAssertEqual(name.minX - face.maxX, Self.faceNameGap, accuracy: 1, "the gap from the face \(face) to the name \(name)")
+                XCTAssertEqual(name.midY, face.midY, accuracy: 1, "the name \(name) isn't centred on the face \(face)")
+                XCTAssertEqual(band.maxY - face.maxY, Self.bandBelow, accuracy: 1, "the band \(band) isn't a quarter of the face under it \(face)")
+            } else { XCTFail("the readout lacks the face, the name or the band: \(c.keys.sorted())") }
+            // To the thousandth of a point: a 44 pt circle at x 511.667 reads 43.99999999999994 wide (floating point).
+            let side = { (f: CGRect) in (min(f.width, f.height) * 1000).rounded() / 1000 }
+            for (name, el) in [("Back", back), ("More", more)] where el.exists {
+                XCTAssertGreaterThanOrEqual(side(el.frame), 44, "\(name) \(el.frame) under 44 pt")
+            }
+            let fromEdge = { (f: CGRect) in min(abs(window.maxX - f.midX), abs(f.midX - window.minX)) }
+            switch pose {
+            case .upright, .laptop:
+                guard let lead = c["lead"], let mid = c["mid"], let trail = c["trail"], let face = c["face"] else {
+                    XCTFail("capsules or the face missing: \(c.keys.sorted())"); break
+                }
+                for (name, f) in [("Back", lead), ("the face's slot", mid), ("More", trail), ("the face", face)] {
+                    XCTAssertGreaterThanOrEqual(f.minY, Self.rowTop - Self.slack, "\(name) \(f) above the band's row")
+                    XCTAssertLessThanOrEqual(f.maxY, largest ? Self.bandBottom : Self.rowBottom + Self.slack, "\(name) \(f) below the row")
+                    XCTAssertLessThanOrEqual(f.maxX, Self.trailingLimit + Self.slack, "\(name) \(f) reaches the status")
+                }
+                XCTAssertTrue(back.exists, "no Back")
+                XCTAssertGreaterThanOrEqual(info.frame.minX - back.frame.maxX, 4, "Chat info \(info.frame) within 4 pt of Back \(back.frame)")
+                XCTAssertGreaterThanOrEqual(more.frame.minX - info.frame.maxX, 4, "More \(more.frame) within 4 pt of Chat info \(info.frame)")
+            case .closed, .side, .book:
+                let tops = Self.columnTops[pose.rawValue] ?? []
+                let column = pose == .closed ? [("Back", back), ("More", more)] : [("More", more)]
+                for ((name, el), top) in zip(column, tops) {
+                    XCTAssertTrue(el.exists, "no \(name) in the status column")
+                    XCTAssertEqual(fromEdge(el.frame), Self.columnCentreFromEdge, accuracy: 1, "\(name) \(el.frame) not in the status column")
+                    XCTAssertEqual(el.frame.minY, top, accuracy: 1, "\(name) \(el.frame) not under the status at \(top)")
+                }
+                // Chat info stays clear of the column.
+                XCTAssertFalse(info.frame.intersects(more.frame), "Chat info \(info.frame) runs into More \(more.frame)")
+                if pose != .closed {
+                    XCTAssertEqual(info.frame.midY, Self.sideRowMiddle, accuracy: 1, "Chat info \(info.frame) not on the status's middle")
+                    XCTAssertEqual(back.exists, listHidden, listHidden ? "no Back with the list hidden" : "Back beside the list")
+                    if listHidden, back.exists {
+                        XCTAssertGreaterThanOrEqual(info.frame.minX - back.frame.maxX, 4, "Chat info \(info.frame) within 4 pt of Back \(back.frame)")
+                    }
+                    // Every element named Chat info, so a second one can't stand behind `firstMatch`.
+                    let infos = app.descendants(matching: .any).matching(identifier: "chat.titlePill").allElementsBoundByIndex.filter(\.exists)
+                    print("CHATFRAMES titlePill matches \(infos.count): \(infos.map { "\($0.elementType.rawValue) \($0.frame)" }.joined(separator: ", "))")
+                    XCTAssertEqual(infos.count, 1, "Chat info named \(infos.count) times")
+                    // The header is one surface: a tap on its empty part, short of the column, opens nothing (no Bot info,
+                    // nothing over the chat) and never reaches the thread under the band.
+                    let empty = CGVector(dx: more.frame.minX - 74, dy: Self.sideRowMiddle)
+                    // The thread's row under the tap's point (or, with none there, the topmost row on screen), read the same way
+                    // before and after: a tap that reached the thread (a tool card opening) moves or resizes it. The ids repeat
+                    // (every user row is "thread.row.user"), so the row is found by its place, not its id.
+                    let tapPoint = CGPoint(x: empty.dx, y: empty.dy)
+                    let rowAt = { () -> (how: String, frame: CGRect)? in
+                        let rows = self.app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'thread.row.'")).allElementsBoundByIndex
+                            .filter { $0.exists && $0.frame.height > 0 }
+                        if let r = rows.first(where: { $0.frame.contains(tapPoint) }) { return ("under the tap, \(r.identifier)", r.frame) }
+                        return rows.filter { $0.frame.maxY > 0 }.min { $0.frame.minY < $1.frame.minY }.map { ("topmost on screen, \($0.identifier)", $0.frame) }
+                    }
+                    let rowBefore = rowAt()
+                    app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(empty).tap(); pause(1.5)
+                    let rowAfter = rowAt()
+                    print("CHATFRAMES header tap at \(empty): Bot info \(element("profile.header").exists ? "open" : "closed"), Chat info hittable \(info.isHittable), thread row \(rowBefore.map { "\($0.how) \($0.frame)" } ?? "none") after \(rowAfter.map { "\($0.how) \($0.frame)" } ?? "none")")
+                    XCTAssertFalse(element("profile.header").exists, "a tap on the header's empty part opened Bot info")
+                    XCTAssertTrue(info.isHittable && more.isHittable, "a tap on the header's empty part covered the chat")
+                    if let b = rowBefore {
+                        let a = try XCTUnwrap(rowAfter, "no thread row to read after the header tap")
+                        XCTAssertEqual(a.how, b.how, "a tap on the header's empty part changed the row read: \(b.how) to \(a.how)")
+                        XCTAssertTrue(abs(a.frame.minY - b.frame.minY) <= 0.5 && abs(a.frame.height - b.frame.height) <= 0.5,
+                                      "a tap on the header's empty part moved the thread: \(b.frame) to \(a.frame)")
+                    } else { XCTFail("no thread row to read before the header tap") }
+                }
+            }
+        }
+        // VoiceOver: Back, Chat info, More, in that order wherever they stand.
+        if let stops = voiceOverStops() {
+            let order = ["Back", "Chat info", "Chat options"].compactMap { name in
+                stops.firstIndex { $0.label == name || $0.label.hasPrefix(name + ":") }.map { (name, $0) }
+            }
+            print("CHATAX \(stops.count) stops: \(stops.map(\.label).joined(separator: " ⟩ "))")
+            print("CHATAX header order: \(order.map { "\($0.0) \($0.1)" }.joined(separator: ", "))")
+            if pose != nil { XCTAssertEqual(order.map(\.1), order.map(\.1).sorted(), "VoiceOver's order: \(order)") }
+        } else { print("CHATAX no oracle") }
+        print("BARUP HOLD chat"); pause(3)
+        if e["HERMES_E2E_AUDIT"] == "1" {
+            var issues = 0
+            try app.performAccessibilityAudit { issue in
+                issues += 1
+                let el = issue.element
+                print("AUDIT duo-\(pose?.rawValue ?? "elsewhere") chat \(issue.auditType) '\(el?.identifier ?? "")' '\(el?.label ?? "")' \(el.map { "\($0.frame)" } ?? "-") \(issue.compactDescription)")
+                // Printed, not failed here: the gate holds the fix's issues against the base's (as the desk's audit).
+                return true
+            }
+            print("AUDIT duo-\(pose?.rawValue ?? "elsewhere") chat done, \(issues) issues so far")
+        }
+        if pose != nil {
+            // The thread at its start begins under the row (Chat info's bottom; the column beside it runs on down).
+            let w = app.windows.firstMatch
+            for _ in 0..<12 {
+                w.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.35)).press(forDuration: 0.05,
+                    thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.9)), withVelocity: .fast, thenHoldForDuration: 0)
+                pause(0.6)
+            }
+            pause(1)
+            // Under the band, its soft foot included, where the readout has it; else under the row.
+            let rowBottom = c["band"].map { $0.maxY + Self.bandFoot }
+                ?? max(info.frame.maxY, back.exists && (pose == .upright || pose == .laptop || listHidden) ? back.frame.maxY : 0)
+            let first = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'thread.row.'")).allElementsBoundByIndex
+                .filter { $0.exists && $0.frame.height > 0 }.min { $0.frame.minY < $1.frame.minY }
+            print("CHATFRAMES thread start \(first.map { "\($0.identifier) \($0.frame)" } ?? "none") row bottom \(rowBottom)")
+            if let first { XCTAssertGreaterThanOrEqual(first.frame.minY, rowBottom - 1, "the thread's start \(first.frame) under the band (bottom \(rowBottom))") }
+        }
+        // With the list hidden, Back pops the chat (the split's empty detail).
+        if listHidden, back.exists {
+            back.tap(); pause(2)
+            XCTAssertTrue(element("chats.noChat").waitForExistence(timeout: 5), "Back didn't pop the chat")
+            XCTAssertFalse(info.exists, "Chat info still there after Back")
+        }
+        app.terminate()
+    }
+
+    /// NO TRAVEL between the list and a chat, in the app's own frame log (`-vory-morph-log`: every drawn change of each
+    /// capsule and of the face between this test's wall marks, a zero frame where one goes): a chat opened, then Back.
+    /// - Up in the band (HERMES_E2E_POSE upright or laptop), strict: Back's circle, the face's slot, More and the face
+    ///   keep their vertical middle within 1 pt in every frame.
+    /// - Closed: a slot in both states keeps its vertical middle within 1 pt; a slot in one state (it logs a zero frame
+    ///   as it goes or before it comes) may appear or go, but never moves: its middle within 1 pt both ways.
+    /// Fewer than 10 frames of the slot that changes on every push and pop (the title capsule's up in the band; Back's
+    /// in the status column, closed, where the title capsule only goes) didn't sample the motion: VOID, not a pass.
+    /// Printed per slot: frames, the middle's least and most (NOTRAVEL); for a slot that moves, its every frame logged
+    /// (NOTRAVEL RAW, seconds from the tap). On its side and as a book the list stays beside the chat and nothing morphs
+    /// between them: skipped.
+    func testNothingTravelsBetweenTheListAndAChat() throws {
+        let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
+        guard let pose else { throw XCTSkip("no Duo pose (HERMES_E2E_POSE)") }
+        if pose == .side || pose == .book { throw XCTSkip("the split: the list stays beside the chat") }
+        let strict = pose == .upright || pose == .laptop
+        let t0 = try openChat(["-vory-morph-log"])
+        let back = element("chat.back")
+        XCTAssertTrue(back.exists, "no Back")
+        back.tap(); pause(3)
+        let t1 = Date().timeIntervalSince1970
+        let log = element("debug.morphlog")
+        XCTAssertTrue(log.waitForExistence(timeout: 5), "no frame log")
+        var frames: [String: [CGRect]] = [:], times: [String: [Double]] = [:]
+        for line in ((log.value as? String) ?? "").split(separator: "\n") {
+            let f = line.split(separator: " ")
+            guard f.count == 6, let t = Double(f[0]), t >= t0, t <= t1, let x = Double(f[2]), let y = Double(f[3]),
+                  let w = Double(f[4]), let h = Double(f[5]) else { continue }
+            frames[String(f[1]), default: []].append(CGRect(x: x, y: y, width: w, height: h))
+            times[String(f[1]), default: []].append(t - t0)
+        }
+        let sampled = strict ? "mid" : "columnBack"
+        let slots = strict ? ["lead", "mid", "trail", "face"] : frames.keys.sorted()
+        for slot in slots {
+            let all = frames[slot] ?? [], drawn = all.filter { $0.width > 0 }
+            let ys = drawn.map(\.midY), xs = drawn.map(\.midX)
+            let oneState = all.count > drawn.count
+            print("NOTRAVEL \(slot): \(all.count) frames (\(all.count - drawn.count) gone), middle y \(ys.min().map { String(format: "%.1f", $0) } ?? "-") to \(ys.max().map { String(format: "%.1f", $0) } ?? "-"), x \(xs.min().map { String(format: "%.1f", $0) } ?? "-") to \(xs.max().map { String(format: "%.1f", $0) } ?? "-")")
+            if slot == sampled && all.count < 10 { print("NOTRAVEL VOID \(slot): \(all.count) frames"); XCTFail("VOID: \(slot): only \(all.count) frames logged") }
+            let travel = (ys.max() ?? 0) - (ys.min() ?? 0), sideways = !strict && oneState ? (xs.max() ?? 0) - (xs.min() ?? 0) : 0
+            XCTAssertLessThanOrEqual(travel, 1, "\(slot): its middle travelled \(ys.min() ?? 0) to \(ys.max() ?? 0)")
+            XCTAssertLessThanOrEqual(sideways, 1, "\(slot): a slot in one state moved sideways \(xs.min() ?? 0) to \(xs.max() ?? 0)")
+            if travel > 1 || sideways > 1 {
+                for (t, f) in zip(times[slot] ?? [], all).prefix(40) {
+                    print(String(format: "NOTRAVEL RAW %@ %.3f %.1f %.1f %.1f %.1f", slot, t, f.minX, f.minY, f.width, f.height))
+                }
+            }
+        }
         app.terminate()
     }
 }
