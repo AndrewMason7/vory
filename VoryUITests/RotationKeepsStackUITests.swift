@@ -6,7 +6,8 @@ import XCTest
 ///
 /// The moves come from outside the test: the Duo's posture is set from the Mac between steps. For each move the test
 /// writes `ready-<n>` into ROT_DIR, then waits for `moved-<n>`. ROT_MOVES names the moves in order (e.g.
-/// "side,closed,upright"). With ROT_TURN=1 (the iPad) the test turns the device itself, to landscape and back. A move
+/// "side,closed,upright"); ROT_PRE names moves made before any scene is set, with Chats at its list and nothing read
+/// (the focus test's cycle). With ROT_TURN=1 (the iPad) the test turns the device itself, to landscape and back. A move
 /// "home" (#537) is made in the test with no posture change: Home, 2 s, then the app again. After
 /// each move the state is read (ROTREAD lines) and judged KEPT, or LOST with the parts named:
 /// - tab: the same tab in front (Settings);
@@ -194,7 +195,8 @@ final class RotationKeepsStackUITests: XCTestCase {
         }
         if ((composer.value as? String) ?? "") != draft {
             // The keyboard comes up with focus; a tap while the chat still settles can miss it. Up to 3 taps 2 s apart, each
-            // waiting for the keyboard; if none takes, what stood at the composer is printed and saved, and the scene is void.
+            // waiting for the keyboard; if none takes, a hold for the script's still and the element tree, and the scene is
+            // void.
             var focused = false
             for attempt in 1...3 where !focused {
                 composer.tap()
@@ -204,22 +206,28 @@ final class RotationKeepsStackUITests: XCTestCase {
                 if !focused { pause(2) }
             }
             if !focused {
-                let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); a.name = "composer-no-focus"; a.lifetime = .keepAlways; add(a)
-                if let dir = ProcessInfo.processInfo.environment["ROT_DIR"] {
-                    try? XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("composer-no-focus.png"))
-                }
-                print("ROTFOCUS the window's elements at the composer: \(app.descendants(matching: .any).allElementsBoundByIndex.filter { $0.exists && $0.frame.contains(CGPoint(x: composer.frame.midX, y: composer.frame.midY)) }.prefix(8).map { "\($0.elementType.rawValue) '\($0.identifier)'" })")
+                // The still is the script's, of the window's own display: on the Duo XCUIScreen.main is the closed cover
+                // display, dark while it's open (the night's composer-no-focus.png was that). Then the whole tree.
+                print("ROTHOLD focus-miss"); pause(2)
+                print("ROTTREE begin\n\(app.debugDescription)\nROTTREE end")
                 try require(false, "chat: the composer never took the keyboard")
             }
             if let old = composer.value as? String, !old.isEmpty, old != draft { composer.press(forDuration: 1.2); app.menuItems["Select All"].tap(); app.keys["delete"].tap() }
             composer.typeText(draft)
         }
         // Two slow drags down the thread (the content moves down, older rows come in); the first also puts the keyboard
-        // away.
+        // away. Each inside the thread's room, measured before it (from a fifth of the way down to nine tenths), in the
+        // composer's column. By the window's height (0.35 to 0.7) the iPad's set in landscape, the keyboard up, pressed at
+        // 287 pt, 28 pt over the composer, moved nothing, and the thread read at its end (VOID on both arms).
         let w = app.windows.firstMatch
         for _ in 0..<2 {
-            w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).press(forDuration: 0.05,
-                thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)), withVelocity: .slow, thenHoldForDuration: 0.3)
+            let top = threadTop(), bottom = roomBottom(), f = w.frame
+            let x = composer.exists ? max(0.05, min(0.95, (composer.frame.midX - f.minX) / max(1, f.width))) : 0.5
+            let from = (top + (bottom - top) * 0.2 - f.minY) / max(1, f.height), to = (top + (bottom - top) * 0.9 - f.minY) / max(1, f.height)
+            let kb = app.keyboards.firstMatch
+            print("ROTREAD the room \(top) to \(bottom) (keyboard \(kb.exists ? "\(kb.frame)" : "none")): a drag at x \(x) from \(from) to \(to) of the window")
+            w.coordinate(withNormalizedOffset: CGVector(dx: x, dy: from)).press(forDuration: 0.05,
+                thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: x, dy: to)), withVelocity: .slow, thenHoldForDuration: 0.3)
             pause(1)
         }
         pause(1)
@@ -230,6 +238,16 @@ final class RotationKeepsStackUITests: XCTestCase {
     private func atEnd(_ s: State) -> Bool {
         guard let g = s.lastGap else { return true }
         return abs(g) <= 1 || endGap.map { abs(g - $0) <= 1 } == true
+    }
+
+    /// A posture move made from the Mac: `ready-<k>` written (the move's name), then `moved-<k>` waited for, 180 s at most.
+    private func handOff(_ move: String, _ k: Int, _ what: String, dir: URL) throws {
+        try "\(move)\n".write(to: dir.appendingPathComponent("ready-\(k)"), atomically: true, encoding: .utf8)
+        print("ROTREADY \(k) \(what) \(move)")
+        let moved = dir.appendingPathComponent("moved-\(k)")
+        let deadline = Date().addingTimeInterval(180)
+        while !FileManager.default.fileExists(atPath: moved.path) && Date() < deadline { pause(0.5) }
+        try require(FileManager.default.fileExists(atPath: moved.path), "move \(k) (\(move)) never came")
     }
 
     /// A setup that didn't take: the run is void, not a reading.
@@ -335,10 +353,22 @@ final class RotationKeepsStackUITests: XCTestCase {
         // Every scene through every move; the moves are numbered across the scenes (ready-<k>, moved-<k>). The iPad also
         // takes the cross-tab scene through one turn, then is turned back unread.
         var lost = 0, k = 0
+        // ROT_PRE (the like-for-like focus test): posture moves made first, with Chats at its list in front, nothing set
+        // and nothing read; numbered with the rest.
+        for move in (e["ROT_PRE"] ?? "").split(separator: ",").map(String.init) {
+            guard let dir, !turn else { break }
+            let w0 = app.windows.firstMatch.frame
+            try handOff(move, k, "pre", dir: dir)
+            for _ in 0..<20 where app.windows.firstMatch.frame == w0 { pause(0.5) }
+            pause(3)
+            print("ROTPRE \(k) \(move) window \(w0.size.width)x\(w0.size.height) -> \(app.windows.firstMatch.frame.size.width)x\(app.windows.firstMatch.frame.size.height)")
+            k += 1
+        }
         let only = Set((e["ROT_SCENES"] ?? "").split(separator: ",").compactMap { Scene(rawValue: String($0)) })
         for scene in (turn ? [Scene.settings, .chat, .cross] : [.settings, .chat]) where only.isEmpty || only.contains(scene) {
             var before = try setUp(scene)
-            for move in scene == .cross ? ["landscape"] : moves {
+            let sceneMoves = scene == .cross ? ["landscape"] : moves
+            for move in sceneMoves {
                 let w0 = app.windows.firstMatch.frame
                 if move == "home" {
                     // #537: leaving the app and coming back (no posture change): Home, 2 s, then the app again.
@@ -348,12 +378,7 @@ final class RotationKeepsStackUITests: XCTestCase {
                 } else if turn {
                     XCUIDevice.shared.orientation = move == "landscape" ? .landscapeLeft : .portrait
                 } else if let dir {
-                    try "\(move)\n".write(to: dir.appendingPathComponent("ready-\(k)"), atomically: true, encoding: .utf8)
-                    print("ROTREADY \(k) \(scene) \(move)")
-                    let moved = dir.appendingPathComponent("moved-\(k)")
-                    let deadline = Date().addingTimeInterval(180)
-                    while !FileManager.default.fileExists(atPath: moved.path) && Date() < deadline { pause(0.5) }
-                    try require(FileManager.default.fileExists(atPath: moved.path), "move \(k) (\(move)) never came")
+                    try handOff(move, k, scene.rawValue, dir: dir)
                 }
                 // The window takes its new size, then settles (leaving and coming back keeps it: the wait ends at once).
                 for _ in 0..<20 where move != "home" && app.windows.firstMatch.frame == w0 { pause(0.5) }
