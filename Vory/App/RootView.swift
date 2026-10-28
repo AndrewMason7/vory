@@ -94,6 +94,7 @@ struct RootView: View {
             if DemoDeliveredReadout.isOn { DemoDeliveredReadout().frame(width: 1, height: 1).allowsHitTesting(false) }
             // `-vory-morph-frames`: the top bar's capsules as drawn, for the headings and search fields checks (#516).
             if MorphFramesProbe.isOn { MorphFramesProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            if MorphFramesProbe.isOn && MorphFramesProbe.logs { MorphFramesProbe.LogReadout().frame(width: 1, height: 1).allowsHitTesting(false) }
         }
         #endif
         #if DEBUG

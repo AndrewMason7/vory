@@ -526,6 +526,9 @@ struct MorphTopBar: View {
                     // and the face reacts. Only with the chat at rest.
                     FaceTapArea { openBotInfo(chat) }
                         .frame(width: 44, height: 44)
+                        #if DEBUG
+                        .modifier(MorphFramesProbe.RecordFace(shown: shown < 0.02))
+                        #endif
                         .position(x: mid.midX, y: mid.minY + 10 - 22 + 44 * seatDrop(chat))
                         .allowsHitTesting(shown < 0.02 && !state.scrubbing)
                 }
@@ -1191,10 +1194,46 @@ private struct FaceTapArea: UIViewRepresentable {
 enum MorphFramesProbe {
     nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-morph-frames")
     @MainActor static var frames: [MorphSlot: CGRect] = [:]
+    /// The chat's face (its tap area, where the face is drawn), while the chat is at rest; nil otherwise.
+    @MainActor static var face: CGRect?
+    /// With `-vory-morph-log` too: every drawn frame of every capsule and of the face, "<wall time> <slot> x y w h", as
+    /// they change (a push's or a pop's every frame), the latest 4,000; read through "debug.morphlog". A capsule that
+    /// goes logs a zero frame under its name, so a capsule that vanishes reads as travel there; one that stands still
+    /// logs nothing.
+    nonisolated static let logs = ProcessInfo.processInfo.arguments.contains("-vory-morph-log")
+    @MainActor static var log: [String] = []
+    @MainActor static func note(_ name: String, _ f: CGRect) {
+        guard logs else { return }
+        log.append(String(format: "%.3f %@ %.1f %.1f %.1f %.1f", Date().timeIntervalSince1970, name, f.minX, f.minY, f.width, f.height))
+        if log.count > 4000 { log.removeFirst(log.count - 4000) }
+    }
     @MainActor static var summary: String {
-        MorphSlot.allCases.compactMap { s in
-            frames[s].map { "\(s) \(Int($0.minX.rounded())) \(Int($0.minY.rounded())) \(Int($0.width.rounded())) \(Int($0.height.rounded()))" }
-        }.joined(separator: ";")
+        let f = { (n: String, r: CGRect) in "\(n) \(Int(r.minX.rounded())) \(Int(r.minY.rounded())) \(Int(r.width.rounded())) \(Int(r.height.rounded()))" }
+        return (MorphSlot.allCases.compactMap { s in frames[s].map { f("\(s)", $0) } } + [face.map { f("face", $0) }].compactMap { $0 })
+            .joined(separator: ";")
+    }
+    /// The face's frame for the readout while `shown` (the chat at rest).
+    struct RecordFace: ViewModifier {
+        let shown: Bool
+        /// Its last frame, so a face that comes to rest without moving (closed, in the bot circle's place) is read then
+        /// too: measured only on a change, it was left out of the readout there.
+        @State private var last: CGRect = .zero
+        @ViewBuilder func body(content: Content) -> some View {
+            if isOn {
+                content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+                    last = f
+                    MorphFramesProbe.face = shown && f.width > 0 ? f : nil
+                    if shown && f.width > 0 { MorphFramesProbe.note("face", f) }
+                }
+                .onChange(of: shown) { _, now in
+                    MorphFramesProbe.face = now && last.width > 0 ? last : nil
+                    if now && last.width > 0 { MorphFramesProbe.note("face", last) }
+                }
+                .onDisappear { MorphFramesProbe.face = nil }
+            } else {
+                content
+            }
+        }
     }
     struct Record: ViewModifier {
         let slot: MorphSlot?
@@ -1203,10 +1242,11 @@ enum MorphFramesProbe {
             if isOn, let slot {
                 content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
                     MorphFramesProbe.frames[slot] = present && f.width > 0 ? f : nil
+                    if present && f.width > 0 { MorphFramesProbe.note("\(slot)", f) }
                 }
                 // A capsule that hides without moving isn't measured again: it leaves the readout at once, so no check
-                // reads a capsule that's gone.
-                .onChange(of: present) { _, shown in if !shown { MorphFramesProbe.frames[slot] = nil } }
+                // reads a capsule that's gone. The frame log gets a zero frame under its name as it goes.
+                .onChange(of: present) { _, shown in if !shown { MorphFramesProbe.frames[slot] = nil; MorphFramesProbe.note("\(slot)", .zero) } }
             } else {
                 content
             }
@@ -1221,6 +1261,17 @@ enum MorphFramesProbe {
     struct Readout: UIViewRepresentable {
         func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
         func updateUIView(_ v: ReadoutView, context: Context) {}
+    }
+    /// The frame log (`-vory-morph-log`), one line per drawn change.
+    final class LogView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.morphlog" } set {} }
+        override var accessibilityLabel: String? { get { "Top bar frame log" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { MorphFramesProbe.log.joined(separator: "\n") } } set {} }
+    }
+    struct LogReadout: UIViewRepresentable {
+        func makeUIView(context: Context) -> LogView { LogView() }
+        func updateUIView(_ v: LogView, context: Context) {}
     }
 }
 #endif
