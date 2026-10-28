@@ -183,11 +183,26 @@ final class RotationKeepsStackUITests: XCTestCase {
     /// The chat open on the Chats tab with the draft typed, and the thread moved up from its end, so a rebuild (which
     /// opens a chat at its end) shows.
     private func setUpChat() throws {
-        tapTab("chats")
         let composer = app.textViews["composer.text"].firstMatch
+        // The chat already open and in front is kept: on the wide split (the Duo on its side) it stands in the detail column
+        // beside the list, and a tap on the Chats tab there took it away. Otherwise Chats in front, and the chat's row.
+        let pill = element("chat.titlePill")
+        let open = composer.exists && composer.isHittable && pill.exists && pill.label.localizedCaseInsensitiveContains("Disk cleanup")
+        if !open { tapTab("chats") }
         if !(composer.exists && composer.isHittable) {
-            let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Disk cleanup' AND identifier != 'chat.titlePill'")).allElementsBoundByIndex
-            try XCTUnwrap(rows.first { $0.exists && $0.isHittable }, "no Disk cleanup row").tap()
+            // The chat's row, as a button (the phone's list, the closed Duo) or as a cell or its text (the split's list
+            // column): the first one that can be tapped. The header's own title is not a row.
+            let words = NSPredicate(format: "label CONTAINS[c] 'Disk cleanup' AND identifier != 'chat.titlePill'")
+            let rows = app.buttons.matching(words).allElementsBoundByIndex + app.cells.matching(words).allElementsBoundByIndex
+                + app.staticTexts.matching(words).allElementsBoundByIndex
+            guard let row = rows.first(where: { $0.exists && $0.isHittable }) else {
+                // A still of the window's display (the script's) and the tree: what stood there instead of the row.
+                print("ROTHOLD set-miss"); pause(2)
+                print("ROTTREE begin\n\(app.debugDescription)\nROTTREE end")
+                try require(false, "chat: no Disk cleanup row to open (open \(open), tab \(frontTab()))")
+                return
+            }
+            row.tap()
             XCTAssertTrue(composer.waitForExistence(timeout: 20), "no composer")
             pause(2)
             // A chat opens at its end: where its last row's bottom stands then, before the keyboard or a drag moves it.
