@@ -44,6 +44,11 @@ final class WindowGeometry {
         return end
     }
 
+    /// The rule `WindowGeometryReader` keeps (`publishes`), for a value worked out from the window elsewhere (the size
+    /// class's `wide`, the reserved regions): while `holding` (the scene in the background), the last value read
+    /// outside it, or the live one before any.
+    nonisolated static func held<T>(live: T, holding: Bool, last: T?) -> T { holding ? (last ?? live) : live }
+
     nonisolated static func keyboardOverlap(window: CGRect, keyboard: CGRect, safeBottom: CGFloat) -> CGFloat {
         guard !keyboard.isNull, window.height > 0 else { return 0 }
         let covered = max(0, window.maxY - keyboard.minY)
@@ -56,6 +61,15 @@ extension EnvironmentValues {
 }
 
 #if os(iOS)
+extension WindowGeometry {
+    /// Whether a measure of the window is published: unless its scene is in the background, and the first one whatever
+    /// the scene. In the background the system lays the window out again for its snapshot at other sizes (on the open
+    /// Duo on its side, 466 × 678 with the top inset of the cover display), and everything that reads this followed it
+    /// there and back on every trip (#537); the window is read again as the scene leaves the background. A scene that is
+    /// only inactive (the switcher, an unfocused window still on screen, which can still be resized) is read as ever.
+    nonisolated static func publishes(_ state: UIScene.ActivationState?, measured: Bool) -> Bool { state != .background || !measured }
+}
+
 /// Reads the window into a `WindowGeometry` on every layout and inset change. Put one in the
 /// root; it draws nothing.
 struct WindowGeometryReader: UIViewRepresentable {
@@ -84,6 +98,8 @@ struct WindowGeometryReader: UIViewRepresentable {
             let center = NotificationCenter.default
             center.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
             center.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
+            center.addObserver(self, selector: #selector(sceneLeavesBackground(_:)), name: UIScene.willEnterForegroundNotification, object: nil)
+            center.addObserver(self, selector: #selector(sceneLeavesBackground(_:)), name: UIScene.didActivateNotification, object: nil)
         }
         private var observing = false
         deinit { NotificationCenter.default.removeObserver(self) }
@@ -96,6 +112,13 @@ struct WindowGeometryReader: UIViewRepresentable {
             keyboardEndOnScreen = .null
             publish()
         }
+        /// This window's scene is leaving the background: what was held there is read on the next turn, once the scene
+        /// no longer says background. Again when it is active, since "will enter the foreground" can still read
+        /// background on that turn, and a window back at its old size may lay out no more.
+        @objc private func sceneLeavesBackground(_ n: Notification) {
+            guard let scene = n.object as? UIWindowScene, scene === window?.windowScene else { return }
+            DispatchQueue.main.async { [weak self] in self?.publish() }
+        }
 
         override func layoutSubviews() { super.layoutSubviews(); publish() }
         override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); publish() }
@@ -103,6 +126,7 @@ struct WindowGeometryReader: UIViewRepresentable {
         private var lastSize = CGSize.zero
         private func publish() {
             guard let geometry, let window else { return }
+            guard WindowGeometry.publishes(window.windowScene?.activationState, measured: geometry.bounds != .zero) else { return }
             let bounds = window.bounds
             let insets = window.safeAreaInsets
             // A window of a new size (a turn, a fold, a resize): the keyboard's last frame is

@@ -5,12 +5,20 @@ import VoryCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
-    /// Two columns and the wide chat layout: see `wideLayout` below.
-    private var wide: Bool { Self.isWide(regular: sizeClass == .regular, size: windowGeometry.bounds.size) }
+    @Environment(\.scenePhase) private var scenePhase
+    /// Two columns and the wide chat layout: see `wideLayout` below. Held while the scene is in the background (`shownWide`).
+    private var wide: Bool { WindowGeometry.held(live: liveWide, holding: scenePhase == .background, last: shownWide) }
+    private var liveWide: Bool { Self.isWide(regular: sizeClass == .regular, size: windowGeometry.bounds.size) }
     nonisolated static func isWide(regular: Bool, size: CGSize) -> Bool {
         guard size.width > 0, size.height > 0 else { return regular }   // not measured yet
         return regular && (size.width > size.height || size.width >= 700)
     }
+    /// `wide` as last read outside the background. There the system lays the scene out again for its snapshot, at
+    /// another size class and shape (on the open Duo on its side: compact, then 466 × 678); read live, that took the
+    /// Chats page to one column and back on every trip and left its header shifted (#537). The window's geometry and
+    /// reserved regions hold the same way, and all of it is read again as the scene leaves the background. A scene
+    /// that is only inactive (the switcher, an unfocused window still on screen) is never held.
+    @State private var shownWide: Bool?
     /// The window's geometry for this scene, read from the window on every layout (see
     /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
     @State private var windowGeometry = WindowGeometry()
@@ -133,6 +141,8 @@ struct RootView: View {
         // Duo upright (669 pt: Matt chose one column there, 2026-10-10) and a narrow Stage
         // Manager or Split View window. The window's shape decides, never the device or a pose.
         .environment(\.wideLayout, wide)
+        .onChange(of: liveWide, initial: true) { _, w in if scenePhase != .background { shownWide = w } }
+        .onChange(of: scenePhase) { _, phase in if phase != .background { shownWide = liveWide } }
         .onChange(of: wide, initial: true) { _, w in model.wideLayout = w }
         // Belt and braces: the same value again once the layout has settled after a change of
         // shape (the Duo's turn from one column to two).

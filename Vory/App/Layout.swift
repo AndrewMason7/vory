@@ -69,8 +69,17 @@ struct VerticalBarEdge<Content: View>: View {
     @available(iOS 27.1, *)
     private struct Reader: View {
         @Environment(\.toolbarVerticalEdge) private var edge
+        @Environment(\.scenePhase) private var scenePhase
         @ViewBuilder var content: (HorizontalEdge?) -> Content
-        var body: some View { content(edge) }
+        /// The edge as last read outside the background, held while the scene is there, as the window's geometry and
+        /// `wide` are (`WindowGeometry.held`, #537): the snapshot pass could stand the bars on an edge the window doesn't
+        /// have when it comes back, and the rows' room follows the edge.
+        @State private var shownEdge: HorizontalEdge??
+        var body: some View {
+            content(WindowGeometry.held(live: edge, holding: scenePhase == .background, last: shownEdge))
+                .onChange(of: edge, initial: true) { _, e in if scenePhase != .background { shownEdge = e } }
+                .onChange(of: scenePhase) { _, phase in if phase != .background { shownEdge = edge } }
+        }
     }
     #endif
 }
@@ -482,6 +491,10 @@ struct ReservedRegionsReader<Content: View>: View {
     @available(iOS 27.1, *)
     private struct Reader: View {
         @ViewBuilder var content: () -> Content
+        @Environment(\.scenePhase) private var scenePhase
+        /// The regions as last read outside the background, held while the scene is there, as the window's geometry and
+        /// `wide` are (`WindowGeometry.held`): the background's snapshot pass lays the window out at another size (#537).
+        @State private var shownRegions: ReservedRegions?
         var body: some View {
             GeometryReader { proxy in
                 let origin = proxy.frame(in: .global).origin
@@ -493,7 +506,9 @@ struct ReservedRegionsReader<Content: View>: View {
                     upFold: ReservedRegions.upFold(proxy.reservedRegions(kind: .division, options: .includeInactive).map(\.frame), in: proxy.size)?
                         .offsetBy(dx: origin.x, dy: origin.y),
                     reported: all.map { .init(kind: $0.0, frame: $0.1.frame.offsetBy(dx: origin.x, dy: origin.y), active: $0.1.isActive) })
-                content().environment(\.reservedRegions, regions)
+                content().environment(\.reservedRegions, WindowGeometry.held(live: regions, holding: scenePhase == .background, last: shownRegions))
+                    .onChange(of: regions, initial: true) { _, r in if scenePhase != .background { shownRegions = r } }
+                    .onChange(of: scenePhase) { _, phase in if phase != .background { shownRegions = regions } }
             }
         }
     }

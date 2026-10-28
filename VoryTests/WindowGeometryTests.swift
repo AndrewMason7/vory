@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import Testing
 @testable import Vory
 
@@ -65,6 +66,36 @@ import Testing
         #expect(WindowGeometry.keyboardCarriesOver(from: CGSize(width: 669, height: 951), to: CGSize(width: 669, height: 951)))
         #expect(!WindowGeometry.keyboardCarriesOver(from: CGSize(width: 669, height: 951), to: CGSize(width: 951, height: 669)))
     }
+
+    #if os(iOS)
+    /// #537: in the background the system lays the window out again for its snapshot (the open Duo on its side: compact,
+    /// 466 × 678). The window's measure is held there and only there; the first one always goes through.
+    @Test func theWindowIsHeldOnlyInTheBackground() {
+        #expect(WindowGeometry.publishes(.foregroundActive, measured: true))
+        #expect(WindowGeometry.publishes(UIScene.ActivationState.background, measured: true) == false)
+        #expect(WindowGeometry.publishes(.background, measured: false))   // the first measure, whatever the scene
+        // Inactive is still read: the switcher, or an unfocused window still on screen, which can be resized.
+        #expect(WindowGeometry.publishes(.foregroundInactive, measured: true))
+        #expect(WindowGeometry.publishes(nil, measured: true))   // a window not in a scene yet
+    }
+
+    /// #537: `wide`, the reserved regions and the bars' edge keep the last value read outside the background while the
+    /// scene is there, and follow the live one again once it leaves; before any, the live one.
+    @Test func aValueFromTheWindowHoldsInTheBackground() {
+        // On its side, wide; the background's snapshot pass reads compact: still wide until the scene leaves it.
+        #expect(WindowGeometry.held(live: false, holding: true, last: true))
+        #expect(!WindowGeometry.held(live: false, holding: false, last: true))
+        #expect(!WindowGeometry.held(live: false, holding: true, last: nil))
+        #expect(WindowGeometry.held(live: true, holding: false, last: nil))
+        // A wide window turned upright while the app was away reads one column the moment it leaves the background.
+        #expect(!WindowGeometry.held(live: RootView.isWide(regular: true, size: CGSize(width: 669, height: 951)), holding: false, last: true))
+        // The bars' edge is itself optional: a held edge stays while the pass reads none, and a held "no edge" stays none.
+        let trailing: HorizontalEdge?? = .some(.trailing), noEdge: HorizontalEdge?? = .some(nil)
+        #expect(WindowGeometry.held(live: HorizontalEdge?.none, holding: true, last: trailing) == .trailing)
+        #expect(WindowGeometry.held(live: Optional(HorizontalEdge.trailing), holding: true, last: noEdge) == nil)
+        #expect(WindowGeometry.held(live: Optional(HorizontalEdge.trailing), holding: true, last: nil) == .trailing)   // before any
+    }
+    #endif
 
     /// #340: the floating top bar's row gets stage 1's room (the row's bottom, in the bar's space, plus the bar's top
     /// padding and a gap) where the bars stand vertical (the closed Duo) or the status stands in a top corner (the open

@@ -15,6 +15,16 @@ struct ChatsSplitPage: View {
     @Environment(\.wideLayout) private var wide
     @Environment(\.reservedRegions) private var regions
     @State private var columns = NavigationSplitViewVisibility.doubleColumn
+    @Environment(\.scenePhase) private var scenePhase
+    /// The columns as they stood when the scene went into the background, kept until it is active again. In the
+    /// background the system lays the scene out for its snapshot at its own compact size class (the open Duo on its
+    /// side), the split view collapses there, and it came back showing the chat alone, the list column gone (#537). For
+    /// that trip the split view's writes are let go, and the page's own visibility is put back once the scene is
+    /// active. While the scene is active (a narrowed iPad window, a turn, the sidebar button) every write is taken.
+    @State private var columnsBeforeBackground: NavigationSplitViewVisibility?
+    private var columnsBinding: Binding<NavigationSplitViewVisibility> {
+        Binding(get: { columns }, set: { if columnsBeforeBackground == nil { columns = $0 } })
+    }
     /// The split view's leading edge in the window (a bar down the leading side moves it in).
     @State private var leading: CGFloat = 0
 
@@ -38,7 +48,7 @@ struct ChatsSplitPage: View {
 
     var body: some View {
         if wide {
-            NavigationSplitView(columnVisibility: $columns) {
+            NavigationSplitView(columnVisibility: columnsBinding) {
                 ChatListView(detailPath: chatPath)
                     .onChange(of: model.chatPath.isEmpty, initial: true) { _, empty in
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
@@ -49,6 +59,10 @@ struct ChatsSplitPage: View {
             }
             .navigationSplitViewStyle(.balanced)
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { leading = $0 }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background, columnsBeforeBackground == nil { columnsBeforeBackground = columns }
+                if phase == .active, let held = columnsBeforeBackground { columnsBeforeBackground = nil; columns = held }
+            }
         } else {
             // One column (a phone, the closed Duo, the open Duo upright, a narrow window): the
             // list's own stack on the same path. The split view collapsed to one column left
