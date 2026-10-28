@@ -139,6 +139,12 @@ enum TopBarRoom {
     /// its widest in Matt's two 38 readouts (476; the other 553), less 25 for one more indicator (Location, an alarm,
     /// Focus) and an 8 pt gap. The row ends at 443 on the 669 pt window.
     static let statusReserve: CGFloat = 226
+    /// The Duo's status column (closed, and on its side): where a chat's controls stand under the time and Wi-Fi, in
+    /// window points, as UIKit's own navigation items do there in Messages (#542, Matt's Duo, 2026-10-28): the column's
+    /// centre `VoryTabBar.stripCentreFromEdge` from the window's edge, 44 pt items with their tops at these. Closed: Back
+    /// then More. On its side: More (no Back beside the list). ASSUMPTION until the DEBUG probe reads UIKit's own items.
+    static func statusColumnTops(closed: Bool) -> [CGFloat] { closed ? [176, 236] : [126, 186] }
+
     /// How far the bar moves up from its place under the safe area's top to stand in the band; 0 where it doesn't.
     static func lift(barUp: Bool, safeTop: CGFloat) -> CGFloat {
         barUp ? max(0, safeTop + barPadding - bandRowTop) : 0

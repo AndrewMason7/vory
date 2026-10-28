@@ -86,6 +86,14 @@ struct VoryTabBar: View {
     static let stripItemWidth: CGFloat = 50
     static let stripCentreFromEdge: CGFloat = 48
     static let stripGroupGap: CGFloat = 10
+    /// The side of a status strip like the Duo's (closed, or open on its side: the safe area 84 on one side, 0 on the
+    /// other): one side deep enough for the strip's items, the other none. Nil anywhere else, an iPhone held sideways among
+    /// them (its Dynamic Island's inset on both sides) (#542).
+    static func statusStrip(_ safe: EdgeInsets) -> HorizontalEdge? {
+        if safe.trailing >= stripItemWidth, safe.leading < 1 { return .trailing }
+        if safe.leading >= stripItemWidth, safe.trailing < 1 { return .leading }
+        return nil
+    }
     /// The longest the bar group (the capsule and the circles) runs along the bottom: its length on the
     /// widest iPhone, the 17 Pro Max (440 pt wide, less the two 21 pt side margins), so no iPhone
     /// reaches it (the iPhone app is portrait-only). An iPad and the open Duo upright keep the
