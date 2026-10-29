@@ -20,6 +20,9 @@ final class WindowGeometry {
     /// `.null` when there is none, it is hidden, or it does not sit on the window's bottom edge
     /// (a floating iPad keyboard, another scene's).
     var keyboard: CGRect = .null
+    /// Whether the reader is holding back a turn's passing window (`passing`): what else is read from the window holds
+    /// with it, so nothing moves before the window settles (#548: the bars' edge).
+    var holding = false
 
     /// Nonisolated so the environment's default (an empty geometry, what the Mac's views see)
     /// can be made anywhere; every read and write after that is on the main actor.
@@ -154,7 +157,10 @@ struct WindowGeometryReader: UIViewRepresentable {
                     passingSince = since
                     DispatchQueue.main.asyncAfter(deadline: .now() + WindowGeometry.settleLimit + 0.05) { [weak self] in self?.publish() }
                 }
-                if Date.now.timeIntervalSince(since) < WindowGeometry.settleLimit { return }
+                if Date.now.timeIntervalSince(since) < WindowGeometry.settleLimit {
+                    if !geometry.holding { geometry.holding = true }
+                    return
+                }
             } else { passingSince = nil }
             // A window of a new size (a turn, a fold, a resize): the keyboard's last frame is
             // forgotten. A keyboard that stays announces itself again (keyboardWillChangeFrame);
@@ -168,6 +174,7 @@ struct WindowGeometryReader: UIViewRepresentable {
             if geometry.bounds != bounds { geometry.bounds = bounds }
             if geometry.safeArea != measured { geometry.safeArea = measured }
             if geometry.keyboard != keyboard { geometry.keyboard = keyboard }
+            if geometry.holding { geometry.holding = false }
         }
     }
 }

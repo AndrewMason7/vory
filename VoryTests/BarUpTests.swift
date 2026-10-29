@@ -39,6 +39,12 @@ import Testing
         let corner = CGRect(x: 535, y: 0, width: 134, height: 82)
         #expect(barUp([fold, Reported(kind: .occlusion, frame: corner, active: true)], upright, safeTop: 82, occlusions: [corner]))
         #expect(corner.minX >= upright.width - TopBarRoom.statusReserve + 8, "the row clears the simulator's corner too")
+        // The corner's room only where the bar isn't up and the window is taller than wide (#548): the upright's corner
+        // still reported once the window is on its side gives none.
+        let regions = ReservedRegions(occlusions: [corner])
+        #expect(TopBarRoom.statusCorner(barUp: false, regions: regions, size: upright))
+        #expect(!TopBarRoom.statusCorner(barUp: true, regions: regions, size: upright))
+        #expect(!TopBarRoom.statusCorner(barUp: false, regions: ReservedRegions(occlusions: [CGRect(x: 817, y: 0, width: 134, height: 82)]), size: onItsSide))
     }
 
     @Test func everythingElseLeavesTheBarWhereItIs() {

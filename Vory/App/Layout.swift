@@ -70,15 +70,21 @@ struct VerticalBarEdge<Content: View>: View {
     private struct Reader: View {
         @Environment(\.toolbarVerticalEdge) private var edge
         @Environment(\.scenePhase) private var scenePhase
+        @Environment(\.windowGeometry) private var windowGeometry
         @ViewBuilder var content: (HorizontalEdge?) -> Content
         /// The edge as last read outside the background, held while the scene is there, as the window's geometry and
         /// `wide` are (`WindowGeometry.held`, #537): the snapshot pass could stand the bars on an edge the window doesn't
-        /// have when it comes back, and the rows' room follows the edge.
+        /// have when it comes back, and the rows' room follows the edge. Held too while the window's reader holds back a
+        /// turn's passing window (`WindowGeometry.holding`): the system turns its bars to the side before the window
+        /// settles, and against the held window's strip (none) our bar took a side inset for a tenth of a second, which
+        /// Home's column kept (#548). The bar now moves once, with the window, straight into the strip.
         @State private var shownEdge: HorizontalEdge??
         var body: some View {
-            content(WindowGeometry.held(live: edge, holding: scenePhase == .background, last: shownEdge))
-                .onChange(of: edge, initial: true) { _, e in if scenePhase != .background { shownEdge = e } }
-                .onChange(of: scenePhase) { _, phase in if phase != .background { shownEdge = edge } }
+            let holding = scenePhase == .background || windowGeometry.holding
+            content(WindowGeometry.held(live: edge, holding: holding, last: shownEdge))
+                .onChange(of: edge, initial: true) { _, e in if !holding { shownEdge = e } }
+                .onChange(of: scenePhase) { _, phase in if phase != .background, !windowGeometry.holding { shownEdge = edge } }
+                .onChange(of: windowGeometry.holding) { _, held in if !held, scenePhase != .background { shownEdge = edge } }
         }
     }
     #endif
@@ -130,6 +136,13 @@ enum TopBarRoom {
     static func barUp(regions: ReservedRegions, size: CGSize, safeTop: CGFloat) -> Bool {
         size.height > size.width && safeTop >= bandRowTop + bandRowHeight
             && regions.reported.contains { $0.kind == .fold && $0.frame.width > $0.frame.height }
+    }
+    /// Whether the pages get the room under a status in a top corner (`statusInCorner`): where the bar isn't up, the
+    /// regions report one, and the window is taller than wide, as only the open Duo upright is with its status in a corner.
+    /// A turn on its side keeps reporting the upright's corner for about 0.75 s after the window is wide, and the room
+    /// that came and went with it in that time left Home's column where it was laid out in the turn (#548).
+    static func statusCorner(barUp: Bool, regions: ReservedRegions, size: CGSize) -> Bool {
+        !barUp && size.height > size.width && regions.statusInCorner(width: size.width)
     }
     /// The row's top in the band: a 44 pt row centred on y 48, the middle of the status as measured on Matt's two 38
     /// readouts of the open Duo upright (y 27 to 69 in both).
@@ -471,7 +484,7 @@ struct StatusCornerEnvironment: ViewModifier {
         let g = windowGeometry
         let up = TopBarRoom.barUp(regions: regions, size: g.bounds.size, safeTop: g.safeArea.top)
         content
-            .environment(\.statusInCorner, !up && regions.statusInCorner(width: g.bounds.width))
+            .environment(\.statusInCorner, TopBarRoom.statusCorner(barUp: up, regions: regions, size: g.bounds.size))
             .environment(\.barLift, TopBarRoom.lift(barUp: up, safeTop: g.safeArea.top))
     }
 }
