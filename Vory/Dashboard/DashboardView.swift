@@ -63,7 +63,7 @@ struct DashboardView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     /// A window that can fold: the tiles go two to a row, either side of the fold (`HomeTiles`).
     @Environment(\.reservedRegions) private var regions
-    /// The tiles' grid in the window, for the fold's place in it.
+    /// The tiles' span in the window, the width the card offers them (`OfferedWidthTiles`), for the fold's place in it.
     @State private var tilesFrame = CGRect.zero
     /// The page in the window (under our top bar's row, to the window's safe bottom), for the desk's halves.
     @State private var pageFrame = CGRect.zero
@@ -490,17 +490,19 @@ struct DashboardView: View {
             // Three to a row on a phone, an iPad and the Mac: six tiles fill two rows that way,
             // where four left a short second row on the Mac. Two to a row on a window that can
             // fold, so a fold up the middle falls between the tiles (`HomeTiles`, Duo stage 2).
-            LazyVGrid(columns: HomeTiles.items(regions: regions, frame: tilesFrame, spacing: 8), spacing: 8) {
-                tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
-                tile("Messages", Format.count(messages))
-                tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")
-                tile("Active days", "\(activeDays > 0 ? activeDays : Set(periodSessions.compactMap { $0.startedAt.map { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: $0)) } }).count)")
-                tile("Peak hour", peakHour ?? "–")
-                tile("Top model", favoriteModel ?? "–")
+            // The span the fold's place is read against is the width the card offers the tiles, whatever their columns
+            // add up to (`OfferedWidthTiles`).
+            OfferedWidthTiles {
+                LazyVGrid(columns: HomeTiles.items(regions: regions, frame: tilesFrame, spacing: 8), spacing: 8) {
+                    tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
+                    tile("Messages", Format.count(messages))
+                    tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")
+                    tile("Active days", "\(activeDays > 0 ? activeDays : Set(periodSessions.compactMap { $0.startedAt.map { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: $0)) } }).count)")
+                    tile("Peak hour", peakHour ?? "–")
+                    tile("Top model", favoriteModel ?? "–")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            // The grid's full width, whatever its columns add up to: the frame the fold's place is read against
-            // doesn't move with the columns it decides.
-            .frame(maxWidth: .infinity, alignment: .leading)
             #if os(iOS)
             // Its span across the window only: Home scrolls, and its height and place down the page are no business
             // of the columns (a full frame changed on every frame of a scroll and re-ran the whole page).
@@ -813,6 +815,26 @@ struct DashboardView: View {
         snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: sessions, previous: snap.usage)
         snap.save()
         WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
+    }
+}
+
+/// Home's tiles, as wide as the card offers them whatever their columns add up to, and laid out at that width (#548).
+/// With a fold up the window the tiles are two fixed columns, either side of it, worked out from their span in the
+/// window, and fixed columns add up to the span they're worked out from. Measured on the grid itself, or on anything a
+/// stack placed beside it (a stack places each child at its widest child's width), the span held itself: the columns
+/// of a turn's first pass, at the window's full 951 pt, stayed in every pass after it, and with them the card and Home's
+/// column, 42 pt left of the window. Here the card never sees the tiles' own width: columns wider than the offer last
+/// one pass, drawn past it, and the span read on this is the offer. Asked with no width or an infinite one (a stack's
+/// probe), it gives the tiles' own answer, as before.
+private struct OfferedWidthTiles: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let tiles = subviews.first?.sizeThatFits(proposal) ?? .zero
+        guard let width = proposal.width, width.isFinite else { return tiles }
+        return CGSize(width: width, height: tiles.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: proposal.height))
     }
 }
 
