@@ -949,9 +949,14 @@ struct ChatBand: View {
                 }
             }
             #if DEBUG
-            // Its opaque part, for the readout ("band" in debug.morphframes).
+            // Its opaque part, for the readout ("band" in debug.morphframes); the column's part as far as it's drawn, foot
+            // and all ("bandColumn").
             .background(alignment: .topLeading) {
                 Color.clear.frame(width: max(0, width), height: bottom).modifier(MorphFramesProbe.Mark(key: "band"))
+                if let column {
+                    Color.clear.frame(width: max(0, width - column.x), height: column.bottom + Self.foot)
+                        .modifier(MorphFramesProbe.Mark(key: "bandColumn")).offset(x: column.x)
+                }
             }
             #endif
             .allowsHitTesting(false).accessibilityHidden(true)
