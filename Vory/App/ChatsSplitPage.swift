@@ -83,6 +83,10 @@ struct ChatsSplitPage: View {
                     // The bar follows a chat's push and pop in this stack (`MorphState.follow`).
                     .chatsStackProbe()
             }
+            // Two columns again for the next wide window: collapsing on a turn upright, the split view writes "detail only",
+            // and with the pages no longer rebuilt as the bar moves (#533) the next turn on its side came back with the
+            // list hidden (#547). The open chat is the model's path, so nothing the person had goes with it.
+            .onAppear { columns = .doubleColumn }
         }
     }
 }

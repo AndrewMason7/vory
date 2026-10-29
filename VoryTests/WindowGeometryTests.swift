@@ -176,4 +176,31 @@ import Testing
         // Such a strip in a narrow window with the bar up gives no room either.
         #expect(!ReservedRegions(occlusions: [CGRect(x: 0, y: 0, width: 32, height: 820)]).statusInCorner(width: 320))
     }
+
+    #if os(iOS)
+    /// #537, #547, #548: only the window a turn of the open Duo passes through is held back (the probe's readings,
+    /// 2026-10-28): wide already, with the upright's insets carried over from the measure published before it.
+    @Test func onlyATurnsPassingWindowIsHeldBack() {
+        let inset = { (t: CGFloat, l: CGFloat, b: CGFloat, r: CGFloat) in EdgeInsets(top: t, leading: l, bottom: b, trailing: r) }
+        let upright = CGSize(width: 669, height: 951), side = CGSize(width: 951, height: 669)
+        // The open Duo turned on its side right after an upright publish: the passing window is held, the corrected one
+        // isn't.
+        #expect(WindowGeometry.passing(size: side, safeArea: inset(82, 0, 34, 0), published: upright, publishedSafeArea: inset(82, 0, 34, 0)))
+        #expect(!WindowGeometry.passing(size: side, safeArea: inset(0, 0, 34, 84), published: upright, publishedSafeArea: inset(82, 0, 34, 0)))
+        // Once a wide measure is published (the corrected one, or the passing one at the hold's limit), no hold.
+        #expect(!WindowGeometry.passing(size: side, safeArea: inset(82, 0, 34, 0), published: side, publishedSafeArea: inset(82, 0, 34, 0)))
+        // A window already wide, top 60 and no sides (an iPad window with a title bar): settled.
+        #expect(!WindowGeometry.passing(size: CGSize(width: 1180, height: 800), safeArea: inset(60, 0, 20, 0),
+                                        published: CGSize(width: 1180, height: 800), publishedSafeArea: inset(60, 0, 20, 0)))
+        // An iPad turned to landscape, its 24 pt status band both ways: settled.
+        #expect(!WindowGeometry.passing(size: CGSize(width: 1180, height: 820), safeArea: inset(24, 0, 20, 0),
+                                        published: CGSize(width: 820, height: 1180), publishedSafeArea: inset(24, 0, 20, 0)))
+        // Turned back upright, closed, a phone on its side, and the first measure (nothing published yet): settled.
+        #expect(!WindowGeometry.passing(size: upright, safeArea: inset(82, 0, 34, 0), published: side, publishedSafeArea: inset(0, 0, 34, 84)))
+        #expect(!WindowGeometry.passing(size: CGSize(width: 466, height: 678), safeArea: inset(0, 0, 34, 84), published: side, publishedSafeArea: inset(0, 0, 34, 84)))
+        #expect(!WindowGeometry.passing(size: CGSize(width: 874, height: 402), safeArea: inset(0, 62, 21, 62),
+                                        published: CGSize(width: 402, height: 874), publishedSafeArea: inset(62, 0, 34, 0)))
+        #expect(!WindowGeometry.passing(size: side, safeArea: inset(82, 0, 34, 0), published: .zero, publishedSafeArea: inset(0, 0, 0, 0)))
+    }
+    #endif
 }

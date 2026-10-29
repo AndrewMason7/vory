@@ -68,6 +68,20 @@ extension WindowGeometry {
     /// there and back on every trip (#537); the window is read again as the scene leaves the background. A scene that is
     /// only inactive (the switcher, an unfocused window still on screen, which can still be resized) is read as ever.
     nonisolated static func publishes(_ state: UIScene.ActivationState?, measured: Bool) -> Bool { state != .background || !measured }
+
+    /// Whether a measure is the window a turn of the open Duo passes through (the probe, #547): its shape has turned from
+    /// the last published measure's, taller than wide to wider, while its insets are still that measure's (the upright's
+    /// status band on top, 82 there, and nothing at either side). The system corrects it about half a second later (the
+    /// strip's 84 at the side and nothing on top). Since the bar's moves no longer rebuild the pages (#533), what was laid
+    /// out in that half second stayed: the Chats split view's items squeezed into its overflow (#537) and Home's heading
+    /// left of the window (#548). A window already wide, and an iPad turned (its status band 24 pt), are never held.
+    nonisolated static func passing(size: CGSize, safeArea: EdgeInsets, published: CGSize, publishedSafeArea: EdgeInsets) -> Bool {
+        published.height > published.width && size.width > size.height
+            && safeArea.top >= 50 && abs(safeArea.top - publishedSafeArea.top) < 1
+            && safeArea.leading < 1 && safeArea.trailing < 1
+    }
+    /// How long a passing window is held back at most, should it never be corrected.
+    nonisolated static let settleLimit: TimeInterval = 1
 }
 
 /// Reads the window into a `WindowGeometry` on every layout and inset change. Put one in the
@@ -124,11 +138,24 @@ struct WindowGeometryReader: UIViewRepresentable {
         override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); publish() }
 
         private var lastSize = CGSize.zero
+        /// When a passing window was first held back (`passing`), for the hold's limit.
+        private var passingSince: Date?
         private func publish() {
             guard let geometry, let window else { return }
             guard WindowGeometry.publishes(window.windowScene?.activationState, measured: geometry.bounds != .zero) else { return }
             let bounds = window.bounds
             let insets = window.safeAreaInsets
+            // A turn's passing window: the last published measure stays until the window settles (`passing`), a second at
+            // most.
+            let measured = EdgeInsets(top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right)
+            if WindowGeometry.passing(size: bounds.size, safeArea: measured, published: geometry.bounds.size, publishedSafeArea: geometry.safeArea) {
+                let since = passingSince ?? .now
+                if passingSince == nil {
+                    passingSince = since
+                    DispatchQueue.main.asyncAfter(deadline: .now() + WindowGeometry.settleLimit + 0.05) { [weak self] in self?.publish() }
+                }
+                if Date.now.timeIntervalSince(since) < WindowGeometry.settleLimit { return }
+            } else { passingSince = nil }
             // A window of a new size (a turn, a fold, a resize): the keyboard's last frame is
             // forgotten. A keyboard that stays announces itself again (keyboardWillChangeFrame);
             // one the turn took away never posts a will-hide, and the open Duo's bar stayed
@@ -139,8 +166,7 @@ struct WindowGeometryReader: UIViewRepresentable {
             let end: CGRect = keyboardEndOnScreen.isNull ? .null : window.convert(keyboardEndOnScreen, from: window.screen.coordinateSpace)
             let keyboard = WindowGeometry.keyboardRect(window: bounds, end: end)
             if geometry.bounds != bounds { geometry.bounds = bounds }
-            let edges = EdgeInsets(top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right)
-            if geometry.safeArea != edges { geometry.safeArea = edges }
+            if geometry.safeArea != measured { geometry.safeArea = measured }
             if geometry.keyboard != keyboard { geometry.keyboard = keyboard }
         }
     }
