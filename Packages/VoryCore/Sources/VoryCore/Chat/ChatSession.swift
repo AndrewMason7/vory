@@ -571,11 +571,11 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// Shows the last transcript this device saw for the session while `resume()` runs, or a REST
     /// page of it when nothing is cached; `resume()` then replaces both with the live snapshot.
     public func beginResume() {
-        if items.isEmpty, let cached = TranscriptCache.load(connection: runtime.connection.id, storedID: storedID), !cached.isEmpty {
+        if items.isEmpty, !runtime.isEphemeral, let cached = TranscriptCache.load(connection: runtime.connection.id, storedID: storedID), !cached.isEmpty {
             items = TranscriptItem.fromHistory(cached)
             fetchedRowIDs = Set(items.map(\.id))
         }
-        if info == nil, cachedModel == nil {
+        if info == nil, cachedModel == nil, !runtime.isEphemeral {
             cachedModel = TranscriptCache.loadInfo(connection: runtime.connection.id, storedID: storedID)?.model
             // No cache and no bots yet (a first launch whose profile load failed and was not
             // asked again): the bot's default model needs the list.
@@ -616,6 +616,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func saveTranscriptCache() {
+        // The demo's chats are never written to this device's cache.
+        guard !runtime.isEphemeral else { return }
         TranscriptCache.save(items, connection: runtime.connection.id, storedID: storedID)
         if let info { TranscriptCache.saveInfo(info, connection: runtime.connection.id, storedID: storedID) }
     }
@@ -1080,7 +1082,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func stageAttachment(data: Data, name: String, kind: AttachmentPreview.Kind) {
         var data = data, name = name
         if kind == .image, let t = Self.imageTranscoder?(data, name) { data = t.0; name = t.1 }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("staged-\(runtimeID)", isDirectory: true)
+        let dir = runtime.scratchDirectory.appendingPathComponent("staged-\(runtimeID)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(UUID().uuidString + "-" + name)
         do {
@@ -1317,7 +1319,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func beginQuickAnswers() async {
         guard VoiceSettings.quickAnswers, !quickAnswersOn else { return }
         let before = ["reasoning": info?.reasoningEffort ?? "", "fast": (info?.fast ?? false) ? "on" : "off"]
-        if !storedID.isEmpty { UserDefaults.standard.set(before, forKey: Self.quickRestoreKey(storedID)) }
+        if !storedID.isEmpty, !runtime.isEphemeral { UserDefaults.standard.set(before, forKey: Self.quickRestoreKey(storedID)) }
         quickAnswersOn = true
         try? await setReasoning(Self.quickEffort)
         try? await setFast(true)
@@ -1346,7 +1348,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func rename(_ newTitle: String) async {
         if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
-        Self.markRenamedByPerson(storedID)
+        if !runtime.isEphemeral { Self.markRenamedByPerson(storedID) }
         // The chat list draws the gateway's stored rows, read again on this notice: without it
         // the row kept the old name until the next open or close (seen at once on the Mac,
         // where the list sits beside the chat).

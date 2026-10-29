@@ -40,9 +40,17 @@ struct ComposerView: View {
     private var group: Bool { newMessage?.group == true }
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
+    /// The cursor stays in the field after a send, ready for the next message, as in Messages. Onboarding's tour (#388)
+    /// turns it off: its Send is a step of the tour, and the keyboard coming up covered the chat it shows.
+    @Environment(\.composerFocusesAfterSend) private var focusesAfterSend
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
+    #if os(iOS)
+    @AppStorage(ChatStyle.closeKeyboardAfterSend) private var closeKeyboardAfterSend = false
+    #else
+    private let closeKeyboardAfterSend = false
+    #endif
     /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
     /// A drag is over the card (the Mac): the outline says it will take the drop.
     @State private var dropTargeted = false
@@ -100,17 +108,37 @@ struct ComposerView: View {
     @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.windowGeometry) private var windowGeometry
-    @Environment(AppModel.self) private var model
     /// The fold of a partly open Duo, when it runs across the window above the composer (a
     /// laptop pose): the lists that grow up from the field stop under it (Step D).
     @Environment(\.reservedRegions) private var regions
+    /// The chat's header's bottom in the window (ConversationView), for the + panel's cap.
+    @Environment(\.chatHeaderBottom) private var chatHeaderBottom
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var composerFrame = CGRect.zero
-    /// How far up from the field's top a list may grow before the fold: nil with no such fold.
-    private var roomUnderFold: CGFloat? {
-        guard let ceiling = regions.ceiling(for: composerFrame), composerFrame.height > 0 else { return nil }
-        // The field's top: the stack's bottom edge less a one-line field and its padding.
-        return max(SlashMenuList.rowHeight + 8, composerFrame.maxY - 46 - 10 - ceiling)
+    /// How far a list growing up from `y` (window space) may reach before the fold: nil with
+    /// no such fold. No floor: a list that wants more lifts the dock over the fold instead
+    /// (`listReach`, ConversationView's `foldLift`).
+    private func roomUnderFold(from y: CGFloat) -> CGFloat? {
+        guard composerFrame.height > 0 else { return nil }
+        return regions.room(under: y)
+    }
+
+    /// How far above the composer's bottom edge its open list (+, "/", "@") reaches at full
+    /// size, 0 with none open: the chat lifts its dock over a fold the list would cross, while
+    /// the list is open (Duo stage 2).
+    private var listReach: CGFloat {
+        guard composerFrame.height > 0 else { return 0 }
+        let h = composerFrame.height
+        if showAttach { return h + 10 + AttachPanel.naturalHeight(rows: attachItems.count) }
+        // The lists at the height they take with no fold (capped), so one that fits under the
+        // fold leaves the dock where it is, however long the list.
+        if !menuItems.isEmpty || menuLoading { return h + 10 + min(listCap, CGFloat(max(menuItems.count, 1)) * SlashMenuList.rowHeight + 8) }
+        if !mentionSuggestions.isEmpty {
+            // In the card: what it shows is in the card's height already.
+            let full = min(listCap, mentionListHeight)
+            return h + max(0, full - min(mentionListCap, full))
+        }
+        return 0
     }
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
@@ -120,8 +148,9 @@ struct ComposerView: View {
         return String(last.dropFirst())
     }
     private var mentionSuggestions: [ProfileInfo] {
-        guard let q = mentionQuery?.lowercased(), let profiles = model.runtime?.profiles else { return [] }
-        return profiles.filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) || $0.label.lowercased().hasPrefix(q) }
+        // The chat's own gateway's bots: onboarding's tour (#388) runs a demo that is not the app's gateway in use.
+        guard let q = mentionQuery?.lowercased() else { return [] }
+        return chat.runtime.profiles.filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) || $0.label.lowercased().hasPrefix(q) }
     }
     private func pickMention(_ p: ProfileInfo) {
         var parts = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
@@ -171,9 +200,22 @@ struct ComposerView: View {
     /// The command list scrolls inside a cap: about 30 % of the window, so with the keyboard up
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat {
-        let cap = max(120, min(280, visibleHeight * 0.30))
-        return roomUnderFold.map { min(cap, $0) } ?? cap
+        // The "/" list stands 10 pt above the card (`slashOverlay`).
+        roomUnderFold(from: composerFrame.minY - 10).map { min(listCap, $0) } ?? listCap
     }
+
+    /// The "/" and "@" lists' cap with no fold: about 30 % of the window above the keyboard.
+    private var listCap: CGFloat { max(120, min(280, visibleHeight * 0.30)) }
+
+    /// The "@" list's cap: the same share, under a fold measured from the field's top (the
+    /// stack's bottom edge less a one-line field and its padding), which the list itself does
+    /// not move.
+    private var mentionListCap: CGFloat {
+        roomUnderFold(from: composerFrame.maxY - 46 - 10).map { min(listCap, $0) } ?? listCap
+    }
+
+    /// The "@" list's height with every bot in it.
+    private var mentionListHeight: CGFloat { CGFloat(mentionSuggestions.count) * 40 + 8 }
 
     /// The window's height less the keyboard: what the caps are a share of. The Mac's views get
     /// the empty window geometry (its layout is the window's own), so there the window itself
@@ -307,6 +349,10 @@ struct ComposerView: View {
             }
             // Where the composer stands in the window, for the fold above it (`roomUnderFold`).
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composerFrame = $0 }
+            #if os(iOS)
+            // How far its open list reaches, for the dock's lift over a fold (ConversationView).
+            .preference(key: ComposerListReach.self, value: listReach)
+            #endif
     }
 
     /// The + panel, always in the tree: closed, a faint circle the size of the + button on
@@ -656,7 +702,7 @@ struct ComposerView: View {
             }
             .padding(.horizontal, 6).padding(.vertical, 4)
         }
-        .frame(height: min(commandListCap, CGFloat(mentionSuggestions.count) * 40 + 8))
+        .frame(height: min(mentionListCap, mentionListHeight))
         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
     }
 
@@ -667,7 +713,7 @@ struct ComposerView: View {
             Section("Model") { ModelMenuContent(chat: chat) }
             ReasoningEffortMenu(chat: chat)
         } label: {
-            // Matt's wording (2026-10-10, via the planner): the model's name in the text's own
+            // Matt's wording (2026-10-10): the model's name in the text's own
             // tone, the level after it in a lighter one, no "Reasoning:"; at the accessibility
             // sizes the level stands alone.
             HStack(spacing: 6) {
@@ -836,6 +882,11 @@ struct ComposerView: View {
     #endif
 
     private var attachPanel: some View {
+        AttachPanel(items: attachItems, surface: false, cap: attachCap) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+    }
+
+    /// The + panel's rows: a fixed set, some greyed out where they cannot be used now.
+    private var attachItems: [AttachItem] {
         var items: [AttachItem] = []
         #if os(iOS)
         items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !Self.cameraAvailable) { showCamera = true })
@@ -849,7 +900,7 @@ struct ComposerView: View {
         })
         items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
         items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
-        return AttachPanel(items: items, surface: false, cap: attachCap) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+        return items
     }
 
     /// The room above the card for the + panel: down from the header (the status bar plus the
@@ -857,8 +908,10 @@ struct ComposerView: View {
     private var attachCap: CGFloat {
         #if os(iOS)
         guard composerFrame.minY > 0 else { return 400 }
-        let room = composerFrame.minY - windowGeometry.safeArea.top - 60 - 10
-        return max(180, roomUnderFold.map { min(room, $0) } ?? room)
+        let room = AttachPanel.room(cardTop: composerFrame.minY, safeTop: windowGeometry.safeArea.top, headerBottom: chatHeaderBottom)
+        // Under a fold, no 180 pt floor: it won over the fold (the 10-12 round). The panel
+        // stands 10 pt above the card.
+        return roomUnderFold(from: composerFrame.minY - 10).map { min(room, $0) } ?? max(180, room)
         #else
         return 600
         #endif
@@ -903,7 +956,9 @@ struct ComposerView: View {
             quote = ""
         }
         text = ""
-        focused = true
+        // The app's chats keep the cursor for the next message unless Close keyboard after sending is on (#350); the
+        // tour's and the demo's put the keyboard away either way.
+        focused = ComposerFocusRule.afterSend(placeKeepsFocus: focusesAfterSend, closeAfterSending: closeKeyboardAfterSend)
         historyCursor = nil
         NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
         if let prefill = await chat.send(t) { text = prefill }
@@ -1034,4 +1089,27 @@ struct HistorySheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Whether a send leaves the cursor in the composer (`ComposerView`); the app's chats do. Onboarding's tour and Demo
+    /// mode's chats don't: there a send puts the keyboard away (#490), where the next thing to read is the reply.
+    @Entry var composerFocusesAfterSend: Bool = true
+    /// The message bar's field takes no typing (onboarding's tour, #490: beat 3's message is ready-made and beat 4's
+    /// mention types itself), so no keyboard comes up for it. VoiceOver reads its words as text, not as a field.
+    @Entry var composerReadOnly: Bool = false
+}
+
+/// How far above the composer's bottom edge its open list (+, "/", "@") reaches at full size,
+/// 0 with none open (`ComposerView.listReach`): the chat lifts its dock over a fold across the
+/// window that the list would cross (Duo stage 2).
+struct ComposerListReach: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+extension EnvironmentValues {
+    /// The bottom of the chat's header in window space, 0 until measured (ConversationView): the morph bar's chat row
+    /// on a narrow window, the chat's own header on a wide one.
+    @Entry var chatHeaderBottom: CGFloat = 0
 }
