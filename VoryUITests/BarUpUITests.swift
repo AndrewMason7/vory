@@ -441,6 +441,13 @@ final class BarUpUITests: XCTestCase {
                 }
                 // Chat info stays clear of the column.
                 XCTAssertFalse(info.frame.intersects(more.frame), "Chat info \(info.frame) runs into More \(more.frame)")
+                // #549: nothing of the band hangs below More in the column. Its column part, where there is one, ends by
+                // More's own bottom, its soft foot and all (the readout's bandColumn).
+                let bandColumn = c["bandColumn"]
+                print("CHATFRAMES column band \(bandColumn.map { "\($0)" } ?? "none") More \(more.frame)")
+                if let bandColumn {
+                    XCTAssertLessThanOrEqual(bandColumn.maxY, more.frame.maxY + 0.5, "the column's band \(bandColumn) hangs below More \(more.frame)")
+                }
                 if pose != .closed {
                     XCTAssertEqual(info.frame.midY, Self.sideRowMiddle, accuracy: 1, "Chat info \(info.frame) not on the status's middle")
                     XCTAssertEqual(back.exists, listHidden, listHidden ? "no Back with the list hidden" : "Back beside the list")
