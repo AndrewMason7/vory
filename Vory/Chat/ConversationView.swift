@@ -642,7 +642,7 @@ struct ChatHeader: View {
     #if os(iOS)
     /// The Duo on its side, like Messages there (Matt, 2026-10-28, #542): the face (no glass behind it) and the name at the
     /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; More in the status column
-    /// under the time and Wi-Fi; Messages' band behind them (`ChatBand`). Back only while the list isn't beside the chat
+    /// under the time and Wi-Fi; Messages' band behind the row (`ChatBand`). Back only while the list isn't beside the chat
     /// (its column hidden), at the top left. VoiceOver: Back, Chat info, More, the group after the thread as everywhere
     /// (`ConversationView.header`).
     private var messagesSide: some View {
@@ -675,11 +675,10 @@ struct ChatHeader: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { sideFrame = $0 }
         .background(alignment: .topLeading) {
             // From the window's top, out to its trailing edge and a quarter of the face under the row (the header's own
-            // bottom, less the band's soft foot); down the column as far under More.
-            // Both wait for the header's place in the window.
+            // bottom, less the band's soft foot); not down the column, where More stands on its own glass. It waits for
+            // the header's place in the window.
             if sideFrame.width > 0 {
-                ChatBand(width: g.bounds.width - sideFrame.minX, bottom: sideFrame.maxY - ChatBand.foot,
-                         column: showsActions ? (x: columnX - 22 - 3 - sideFrame.minX, bottom: moreTop + 44 + ChatBand.below) : nil)
+                ChatBand(width: g.bounds.width - sideFrame.minX, bottom: sideFrame.maxY - ChatBand.foot)
                     .offset(y: -sideFrame.minY)
             }
         }
@@ -921,10 +920,9 @@ struct ChatNameLines: View {
 #if os(iOS)
 /// A chat's band on the Duo, like Messages' (Matt, 2026-10-28, #542): the system bars' own material behind the chat's
 /// controls, from the window's top down to `bottom` and from where it's drawn out to `width`, so the thread never runs
-/// through the name or the controls. Where they stand in the status column it runs down the column too, from `column.x`
-/// to `column.bottom`, so the column reads as part of the bar. One material masked to both parts (two layers would be
-/// darker where they cross); each part is opaque to its bottom, then a short soft foot. In points from its own top-left,
-/// laid at the window's top; no taps, and VoiceOver doesn't read it.
+/// through the name or the controls: opaque to its bottom, then a short soft foot. Never down the status column: Back
+/// and More stand there on their own glass, as UIKit's own items do (#549: a part down the column hung below More as a
+/// block). In points from its own top-left, laid at the window's top; no taps, and VoiceOver doesn't read it.
 struct ChatBand: View {
     /// How far the band reaches under the face's row: a quarter of the face's 44 pt, as Messages' does (Matt, 2026-10-28).
     static let below: CGFloat = 11
@@ -935,28 +933,15 @@ struct ChatBand: View {
     var width: CGFloat
     /// Its opaque part's bottom, from the window's top; the foot fades past it.
     var bottom: CGFloat
-    var column: (x: CGFloat, bottom: CGFloat)? = nil
 
     var body: some View {
         Rectangle().fill(.bar)
-            .frame(width: max(0, width), height: max(bottom, column?.bottom ?? 0) + Self.foot)
-            .mask(alignment: .topLeading) {
-                ZStack(alignment: .topLeading) {
-                    Self.fade(to: bottom).frame(width: max(0, width), height: bottom + Self.foot)
-                    if let column {
-                        Self.fade(to: column.bottom).frame(width: max(0, width - column.x), height: column.bottom + Self.foot).offset(x: column.x)
-                    }
-                }
-            }
+            .frame(width: max(0, width), height: bottom + Self.foot)
+            .mask(Self.fade(to: bottom))
             #if DEBUG
-            // Its opaque part, for the readout ("band" in debug.morphframes); the column's part as far as it's drawn, foot
-            // and all ("bandColumn").
+            // Its opaque part, for the readout ("band" in debug.morphframes).
             .background(alignment: .topLeading) {
                 Color.clear.frame(width: max(0, width), height: bottom).modifier(MorphFramesProbe.Mark(key: "band"))
-                if let column {
-                    Color.clear.frame(width: max(0, width - column.x), height: column.bottom + Self.foot)
-                        .modifier(MorphFramesProbe.Mark(key: "bandColumn")).offset(x: column.x)
-                }
             }
             #endif
             .allowsHitTesting(false).accessibilityHidden(true)

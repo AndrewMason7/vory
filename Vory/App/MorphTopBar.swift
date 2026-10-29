@@ -490,14 +490,13 @@ struct MorphTopBar: View {
     /// The bot's name and the chat's title, as laid out beside the face (the bar's space).
     @State private var nameFrame: CGRect = .zero
     /// A chat's band, like Messages' (`ChatBand`): from the window's top to a quarter of the face under the row; closed,
-    /// down the status column to as far under More too. It comes in with the chat. Drawn behind the bar, from the bar's own top-left (the
-    /// safe area's), out to the window's edges.
+    /// not down the status column, where Back and More stand on their own glass. It comes in with the chat. Drawn behind
+    /// the bar, from the bar's own top-left (the safe area's), out to the window's edges.
     @ViewBuilder private var chatBand: some View {
         if messagesBar, state.chat != nil, let lead = chatFrames[.lead] {
             let g = windowGeometry
             let top = g.safeArea.top + TopBarRoom.barPadding
-            ChatBand(width: g.bounds.width, bottom: top + max(lead.maxY, nameFrame.maxY) + ChatBand.below,
-                     column: columnFrame(.columnMore).map { (x: $0.minX + g.safeArea.leading + Self.sideInset - 3, bottom: top + $0.maxY + ChatBand.below) })
+            ChatBand(width: g.bounds.width, bottom: top + max(lead.maxY, nameFrame.maxY) + ChatBand.below)
                 .offset(x: -g.safeArea.leading, y: -g.safeArea.top)
                 .opacity(Double(max(0, 1 - shown * 2.4)))
         }
