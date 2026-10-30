@@ -133,8 +133,16 @@ enum MarkdownTableMetrics {
     /// than the graphics card allows on the sheet, where cells are not cut to three lines (#361). The whole cell is in
     /// Copy as Markdown and on a long press on the sheet.
     static func shownCell(_ markdown: String, limit: Int = TextPieces.limit) -> String {
-        guard markdown.utf8.count > limit else { return markdown }
-        return String(markdown.prefix(limit)) + "…"
+        let text = markdown.utf8.count > limit ? String(markdown.prefix(limit)) + "…" : markdown
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // If a table cell is a naked LaTeX math formula without delimiters ($), wrap it in $...$
+        // so it parses through the exact same inline math pipeline as paragraph formulas.
+        if !trimmed.isEmpty && !trimmed.contains("$") && !trimmed.contains("\\(") && !trimmed.contains("\\[") {
+            if trimmed.contains("\\") || trimmed.contains("^{") || trimmed.contains("_{") {
+                return "$\(trimmed)$"
+            }
+        }
+        return text
     }
 
     /// Most columns and rows a table shows in a reply; the whole table is on its sheet.
@@ -442,7 +450,7 @@ struct MarkdownTableGrid: View {
     }
 
     private func text(_ markdown: String, column c: Int, header: Bool) -> some View {
-        Text(MarkdownView.inline(MarkdownTableMetrics.shownCell(markdown)))
+        Mentions.text(MarkdownView.inline(MarkdownTableMetrics.shownCell(markdown)))
             .font(header ? font.weight(.semibold) : font)
             .lineLimit(wraps ? nil : lineLimit)
             .truncationMode(.tail)
@@ -481,7 +489,7 @@ struct MarkdownTableStack: View {
                 // Only a header: its names, one per line.
                 card {
                     ForEach(table.header.indices, id: \.self) { c in
-                        Text(MarkdownView.inline(table.header[c])).font(font.weight(.semibold))
+                        Mentions.text(MarkdownView.inline(table.header[c])).font(font.weight(.semibold))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -505,8 +513,8 @@ struct MarkdownTableStack: View {
 
     private func line(row r: Int, column c: Int) -> some View {
         let name = table.header[c]
-        let value = Text(MarkdownView.inline(MarkdownTableMetrics.shownCell(table.cell(row: r, column: c), limit: TextPieces.Limits.largestAccessibility.chars)))
-        let shown = name.isEmpty ? value : Text("\(Text(MarkdownView.inline(name)).fontWeight(.semibold)): \(value)")
+        let value = Mentions.text(MarkdownView.inline(MarkdownTableMetrics.shownCell(table.cell(row: r, column: c), limit: TextPieces.Limits.largestAccessibility.chars)))
+        let shown = name.isEmpty ? value : Mentions.text(MarkdownView.inline(name)).fontWeight(.semibold) + Text(": ") + value
         return shown.font(font)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel(table.spokenCell(row: r, column: c))
