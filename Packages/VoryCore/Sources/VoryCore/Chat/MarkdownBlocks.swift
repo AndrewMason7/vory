@@ -64,7 +64,7 @@ extension MarkdownTable {
     /// cell's VoiceOver label is built from it each time the table is drawn.
     public static func plain(_ text: String) -> String {
         if let hit = plainCache.object(forKey: text as NSString) { return hit as String }
-        let out = String(MarkdownParser.inline(text).characters).trimmingCharacters(in: .whitespaces)
+        let out = String(MarkdownParser.inlineTableCell(text).characters).trimmingCharacters(in: .whitespaces)
         plainCache.setObject(out as NSString, forKey: text as NSString)
         return out
     }
@@ -374,12 +374,33 @@ public enum MarkdownParser {
     /// Preserves and formats inline LaTeX math ($...$, \(...\), and display delimiters written
     /// inside a paragraph) without markdown syntax conflicts.
     public static func inline(_ text: String) -> AttributedString {
+        inline(text, allowNakedMath: true, requireDollar: false)
+    }
+
+    /// Table cell inline markdown: only formats math when delimited by `$` (e.g. `$x^2$`, `$$x$$`),
+    /// preventing file paths (`C:\tools\app`) and regex patterns (`\d+`, `\b\w+\b`) from being parsed as math.
+    public static func inlineTableCell(_ text: String) -> AttributedString {
+        inline(text, allowNakedMath: false, requireDollar: true)
+    }
+
+    public static func inline(_ text: String, allowNakedMath: Bool, requireDollar: Bool) -> AttributedString {
+        if requireDollar && !text.contains("$") {
+            return parseMarkdown(text)
+        }
+
         guard MathNotation.mayContainMath(text) else {
             return parseMarkdown(text)
         }
 
-        let spans = MathNotation.findInlineMath(in: text)
+        var spans = MathNotation.findInlineMath(in: text)
+        if requireDollar {
+            spans = spans.filter { $0.delimiter == .dollar || $0.delimiter == .doubleDollar }
+        }
+
         guard !spans.isEmpty else {
+            if !allowNakedMath {
+                return parseMarkdown(text)
+            }
             // No delimited math: only the LaTeX loose in the prose needs reading.
             return parseMarkdown(MathNotation.formatNakedCommands(in: text))
         }
@@ -403,7 +424,7 @@ public enum MarkdownParser {
         sanitized.append(contentsOf: text[lastIndex...])
 
         // Format any naked LaTeX commands outside code blocks (e.g. \LaTeX, \theta, \rightarrow, M_ (ghost))
-        if MathNotation.mayContainMath(sanitized) {
+        if allowNakedMath && MathNotation.mayContainMath(sanitized) {
             sanitized = MathNotation.formatNakedCommands(in: sanitized)
         }
 

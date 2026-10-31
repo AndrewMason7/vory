@@ -544,4 +544,53 @@ import Testing
         #expect(table.rows[0][0].contains("$5"))
         #expect(table.rows[0][1].contains("P(A|B)"))
     }
+
+    @Test func tableCellsOnlyRenderMathWhenDollarPresent() {
+        // Paths and regex must NOT turn into math in table cells (no $ delimiter)
+        let windowsPath = #"C:\tools\app\config.json"#
+        let unixPath = #"\path\to\file.md"#
+        let regexWord = #"\b\w+\b"#
+        let regexDigits = #"\d{4}-\d{2}-\d{2}"#
+        let nakedMath = #"\alpha + \beta = \gamma"#
+
+        let pathResult = String(MarkdownParser.inlineTableCell(windowsPath).characters)
+        #expect(pathResult == windowsPath, "Windows path must not be altered into math: \(pathResult)")
+        #expect(!pathResult.contains("→"), "Path should not turn \\to into arrow: \(pathResult)")
+
+        let unixResult = String(MarkdownParser.inlineTableCell(unixPath).characters)
+        #expect(unixResult == unixPath, "Unix-style path with \\to must not be altered: \(unixResult)")
+        #expect(!unixResult.contains("→"), "Path should not turn \\to into arrow: \(unixResult)")
+
+        let regexWordResult = String(MarkdownParser.inlineTableCell(regexWord).characters)
+        #expect(regexWordResult == regexWord, "Regex \\b\\w+\\b must not turn into math: \(regexWordResult)")
+
+        let regexDigitsResult = String(MarkdownParser.inlineTableCell(regexDigits).characters)
+        #expect(regexDigitsResult == regexDigits, "Regex digits must not turn into math: \(regexDigitsResult)")
+
+        let nakedResult = String(MarkdownParser.inlineTableCell(nakedMath).characters)
+        #expect(!nakedResult.contains("α"), "Naked math without $ in table cell must not turn into Unicode alpha: \(nakedResult)")
+        #expect(nakedResult == nakedMath, "Naked commands without $ must remain literal in table cell: \(nakedResult)")
+
+        // Math WITH $ delimiter must still render as math
+        let formula = #"$x^2 + y^2$"#
+        let formulaResult = MarkdownParser.inlineTableCell(formula)
+        let formulaStr = String(formulaResult.characters)
+        #expect(formulaResult.runs.contains(where: { $0.math != nil }), "Delimited math must carry math attribute")
+        #expect(formulaStr.contains("²") || formulaStr.contains("x"), "Delimited math must render formatted superscripts: \(formulaStr)")
+
+        let dollarBayes = #"$P(A|B)$"#
+        let bayesResult = MarkdownParser.inlineTableCell(dollarBayes)
+        #expect(bayesResult.runs.contains(where: { $0.math != nil }), "Delimited Bayes must carry math attribute")
+
+        // Currency with $ must not turn into math
+        let currency = "$50 to $100"
+        let currencyResult = MarkdownParser.inlineTableCell(currency)
+        #expect(!currencyResult.runs.contains(where: { $0.math != nil }), "Currency must not be treated as math")
+        #expect(String(currencyResult.characters) == currency)
+
+        // MarkdownTable.plain must also leave paths and regex untouched
+        #expect(MarkdownTable.plain(windowsPath) == windowsPath)
+        #expect(MarkdownTable.plain(regexWord) == regexWord)
+        #expect(MarkdownTable.plain(unixPath) == unixPath)
+    }
 }

@@ -2457,12 +2457,25 @@ struct MarkdownView: View, Equatable {
         guard text.utf8.contains(UInt8(ascii: "@")) else { return a }
         return Mentions.mark(a, names: Mentions.names)
     }
+    /// Inline styling for table cells: only renders math when delimited by `$`.
+    @MainActor static func inlineTableCell(_ text: String) -> AttributedString {
+        let a = inlineTableCellCached(text)
+        guard text.utf8.contains(UInt8(ascii: "@")) else { return a }
+        return Mentions.mark(a, names: Mentions.names)
+    }
     /// The inline text as a view, bot mentions drawn as chips (#321), in pieces when long for the text size (#361).
     @MainActor static func inlineText(_ text: String) -> some View { InlineText(text: text) }
     static func inlineCached(_ text: String) -> AttributedString {
         let key = text as NSString
         if let hit = inlineCache.object(forKey: key) { return hit.text }
         let a = MarkdownParser.inline(text)
+        inlineCache.setObject(InlineBox(a), forKey: key, cost: text.utf8.count)
+        return a
+    }
+    static func inlineTableCellCached(_ text: String) -> AttributedString {
+        let key = ("table:" + text) as NSString
+        if let hit = inlineCache.object(forKey: key) { return hit.text }
+        let a = MarkdownParser.inlineTableCell(text)
         inlineCache.setObject(InlineBox(a), forKey: key, cost: text.utf8.count)
         return a
     }
