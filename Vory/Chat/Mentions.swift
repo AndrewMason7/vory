@@ -144,6 +144,10 @@ extension Mentions {
         var out = Text("")
         for run in a.runs {
             let slice = AttributedString(a[run.range])
+            if run.math != nil || shouldFormatAsMath(slice) {
+                out = Text("\(out)\(math(slice))")
+                continue
+            }
             guard let link = run.link, let bot = bot(from: link) else { out = Text("\(out)\(Text(slice))"); continue }
             let color = BotColors.color(for: bot)
             var name = slice
@@ -156,6 +160,48 @@ extension Mentions {
             }
             let styledChip = chip.foregroundStyle(color).customAttribute(MentionChipAttribute(color: color))
             out = Text("\(out)\u{2009}\(styledChip)\u{2009}")
+        }
+        return out
+    }
+
+    /// Fast check whether an un-attributed slice holds formatted math scripts or operators.
+    private static func shouldFormatAsMath(_ slice: AttributedString) -> Bool {
+        let s = String(slice.characters)
+        return s.contains("₍") || s.contains("₎") || s.contains("^(") ||
+               s.contains("∫") || s.contains("∑") || s.contains("∏") || s.contains("√")
+    }
+
+    /// An inline formula set as maths rather than as prose: serif, italic letters, and a script
+    /// drawn as a script (`ℳ₍grass₎` is ℳ with "grass" below the baseline, not "ℳ(grass)").
+    /// Long runs take the cheap path — one styled `Text`.
+    @MainActor static func math(_ a: AttributedString) -> Text {
+        let characters = a.characters
+        guard characters.count <= 200 else { return Text(a).fontDesign(.serif).italic() }
+        var out = Text("")
+        for segment in MathNotation.segments(of: String(characters)) {
+            let piece = serif(segment.text)
+            switch segment.script {
+            case .baseline:
+                out = Text("\(out)\(piece)")
+            case .sub:
+                let subPiece = piece.font(.system(.caption, design: .serif)).baselineOffset(-2.5)
+                out = Text("\(out)\(subPiece)")
+            case .sup:
+                let supPiece = piece.font(.system(.caption, design: .serif)).baselineOffset(4)
+                out = Text("\(out)\(supPiece)")
+            }
+        }
+        return out
+    }
+
+    /// Serif, italic for the letters: a digit, an operator or a bracket is upright in KaTeX.
+    /// The runs keep their order (`MathNotation.typeRuns`), so nothing is reordered.
+    @MainActor static func serif(_ text: String) -> Text {
+        var out = Text("")
+        for run in MathNotation.typeRuns(text) {
+            var piece = Text(AttributedString(run.text)).fontDesign(.serif)
+            if run.italic { piece = piece.italic() }
+            out = Text("\(out)\(piece)")
         }
         return out
     }
