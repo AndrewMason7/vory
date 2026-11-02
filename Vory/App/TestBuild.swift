@@ -79,7 +79,17 @@ enum TestBuild {
         #else
         let debug = false
         #endif
-        return await check(debug: debug, transaction: appStoreEnvironment, receiptName: Bundle.main.appStoreReceiptURL?.lastPathComponent)
+        let receiptName: String? = {
+            let storeKitDir = Bundle.main.bundleURL.appendingPathComponent("StoreKit")
+            if FileManager.default.fileExists(atPath: storeKitDir.appendingPathComponent("sandboxReceipt").path) {
+                return "sandboxReceipt"
+            }
+            if FileManager.default.fileExists(atPath: storeKitDir.appendingPathComponent("receipt").path) {
+                return "receipt"
+            }
+            return nil
+        }()
+        return await check(debug: debug, transaction: appStoreEnvironment, receiptName: receiptName)
     }
 }
 
