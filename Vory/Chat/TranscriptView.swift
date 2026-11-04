@@ -2747,7 +2747,6 @@ struct MarkdownTableView: View {
         }
         .padding(.horizontal, 10).padding(.top, 2)
     }
-    }
 
     private var card: some View {
         // The grid alone when its columns fit (it then stretches to the bubble's width), else
