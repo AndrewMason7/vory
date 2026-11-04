@@ -52,6 +52,38 @@ import Testing
         #expect(await !check(nil, nil).isTestBuild, "no answer, no receipt")
     }
 
+    /// Receipt location: Mac App Store receipts in `Contents/_MASReceipt`, iOS receipts in `StoreKit`.
+    @Test func receiptFoundInStoreKitAndMASReceipt() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("vory-receipt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        #expect(TestBuild.receiptName(at: tempDir) == nil, "no receipt when folder is empty")
+
+        let storeKitDir = tempDir.appendingPathComponent("StoreKit")
+        let masReceiptDir = tempDir.appendingPathComponent("Contents/_MASReceipt")
+
+        try FileManager.default.createDirectory(at: masReceiptDir, withIntermediateDirectories: true)
+        let masReceipt = masReceiptDir.appendingPathComponent("receipt")
+        FileManager.default.createFile(atPath: masReceipt.path, contents: Data())
+        #expect(TestBuild.receiptName(at: tempDir) == "receipt", "Mac App Store receipt in Contents/_MASReceipt")
+
+        let masSandbox = masReceiptDir.appendingPathComponent("sandboxReceipt")
+        FileManager.default.createFile(atPath: masSandbox.path, contents: Data())
+        #expect(TestBuild.receiptName(at: tempDir) == "sandboxReceipt", "Mac TestFlight sandboxReceipt in Contents/_MASReceipt")
+
+        try FileManager.default.removeItem(at: masReceiptDir)
+
+        try FileManager.default.createDirectory(at: storeKitDir, withIntermediateDirectories: true)
+        let iosReceipt = storeKitDir.appendingPathComponent("receipt")
+        FileManager.default.createFile(atPath: iosReceipt.path, contents: Data())
+        #expect(TestBuild.receiptName(at: tempDir) == "receipt", "iOS App Store receipt in StoreKit")
+
+        let iosSandbox = storeKitDir.appendingPathComponent("sandboxReceipt")
+        FileManager.default.createFile(atPath: iosSandbox.path, contents: Data())
+        #expect(TestBuild.receiptName(at: tempDir) == "sandboxReceipt", "iOS TestFlight sandboxReceipt in StoreKit")
+    }
+
     /// The line at Troubleshooting's foot: none on a confirmed App Store install; otherwise what was decided and why.
     @Test func theReasonLine() async {
         #expect(await check((.production, true), "receipt").reason == nil)

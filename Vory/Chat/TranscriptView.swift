@@ -556,11 +556,13 @@ extension TranscriptView {
     /// card that grew pushed itself up and was pulled back a frame later, and one near the bottom was scrolled into view
     /// after it opened, a second motion (#437). A close with the thread at its very end keeps the end anchored: the
     /// thread is shorter after it, so the rows above come down, in the same animation as the close.
-    /// Once the hold ends, a thread still locked to its end follows a running turn again, eased as `followRows` does
-    /// (rows that arrived meanwhile were held back): a card toggled near the end while a turn streams does not stop the
-    /// thread following it. With no turn running, nothing moves after the toggle.
+    /// Once the hold ends, the thread follows its end again only if the reader was at its very end as the card was toggled
+    /// (`CardFollow`): a turn still running, or rows that arrived meanwhile (held back), eased as `followRows` does. A
+    /// reader up the thread is left where they are, even while the thread is still locked to its end, so a card opened
+    /// there never ends with a jump to the bottom. With no turn running and no rows in, nothing moves after the toggle.
     private func holdCard(opening: Bool) {
         guard opening || metrics.distanceFromBottom >= 4 else { CardHold.shared.end(); return }
+        let atEnd = metrics.distanceFromBottom < 4
         cardHold += 1
         let hold = cardHold
         holdingCard = true
@@ -603,9 +605,9 @@ extension TranscriptView {
             #if DEBUG
             CardMotionProbe.holding = false
             #endif
-            // A turn running under a thread locked to its end goes on being followed (eased, as `followRows` does); with
-            // no turn running the thread stays where the card left it.
-            let follow = followAfterHold
+            // Followed again only if the reader was at the very end as the card was toggled (`CardFollow`); a reader up
+            // the thread stays where the card left them.
+            let follow = CardFollow.afterHold(atEndWhenToggled: atEnd, rowsArrived: followAfterHold, turnRunning: chat.isRunning)
             followAfterHold = false
             if follow, mayFollow(), metrics.distanceFromBottom > 4 { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
@@ -2082,6 +2084,16 @@ extension View {
     func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true, fade: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep, fade: fade)) }
 }
 
+/// After a card's hold (`TranscriptView.holdCard`), whether the thread follows its end again: only for a reader who was at
+/// its very end as the card was toggled, and then for a turn still running or rows that came in during the hold. A reader
+/// up the thread is left where they are, even while the thread is still locked to its end, so a card opened there never
+/// ends with a jump to the bottom.
+enum CardFollow {
+    static func afterHold(atEndWhenToggled: Bool, rowsArrived: Bool, turnRunning: Bool) -> Bool {
+        atEndWhenToggled && (rowsArrived || turnRunning)
+    }
+}
+
 /// The tapped card's place while the thread holds it (#437, #473). The thread's hold anchors its size changes at its top,
 /// which keeps a card where it is as it grows, unless rows above it are measured in the same pass (the lazy stack's
 /// estimate for rows not yet measured, right after an open or far up a long chat): then the card moved by their
@@ -2709,13 +2721,12 @@ struct MarkdownTableView: View {
             .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
     }
 
+    /// Full screen, beside the wrap switch and built as it is: a caption glyph in a 44 pt square.
     private var openTableButton: some View {
         Button { full = true } label: {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.caption2.weight(.semibold))
+                .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
-                .background(.thinMaterial, in: .circle)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
@@ -2724,25 +2735,18 @@ struct MarkdownTableView: View {
         .help("Open Table")
     }
 
-    /// The card's top header strip: an anchored title on the leading edge and compact 28 pt action
-    /// discs on the trailing edge. Sitting here rather than overlaying the table cells prevents
-    /// narrow rightmost columns from having their headers squeezed by the buttons.
+    /// The card's header, built as a code block's: the title where a code block names its language,
+    /// in the same type, and the wrap switch and full screen at the trailing end. Above the grid
+    /// rather than over its cells, so a narrow last column keeps its header's room.
     private var controls: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 5) {
-                Image(systemName: "tablecells")
-                    .font(.caption2)
-                Text("Table")
-                    .font(.caption2.weight(.medium))
-            }
-            .foregroundStyle(.secondary)
-            .padding(.leading, 12)
-
+        HStack {
+            Text("Table").font(.caption2).foregroundStyle(.secondary)
             Spacer(minLength: 0)
-
-            TableWrapToggle()
+            TableWrapToggle().padding(.trailing, 2)
             openTableButton
         }
+        .padding(.horizontal, 10).padding(.top, 2)
+    }
     }
 
     private var card: some View {

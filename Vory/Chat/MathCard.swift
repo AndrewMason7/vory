@@ -4,12 +4,6 @@ import WebKit
 import JavaScriptCore
 import VoryCore
 
-#if os(iOS)
-public typealias PlatformImage = UIImage
-#else
-public typealias PlatformImage = NSImage
-#endif
-
 // MARK: - KaTeX Synchronous Thread-Safe In-Memory Cache
 
 /// Thread-safe in-memory cache for pre-rendered KaTeX HTML markup and measured card sizes.
@@ -25,12 +19,6 @@ enum KaTeXCache {
     nonisolated(unsafe) private static let sizeCache: NSCache<NSString, NSValue> = {
         let cache = NSCache<NSString, NSValue>()
         cache.countLimit = 500
-        return cache
-    }()
-
-    nonisolated(unsafe) private static let snapshotCache: NSCache<NSString, PlatformImage> = {
-        let cache = NSCache<NSString, PlatformImage>()
-        cache.countLimit = 300
         return cache
     }()
 
@@ -56,16 +44,6 @@ enum KaTeXCache {
         #else
         sizeCache.setObject(NSValue(size: size), forKey: latex as NSString)
         #endif
-    }
-
-    static func snapshot(for latex: String, dark: Bool) -> PlatformImage? {
-        let key = "\(latex):\(dark ? "dark" : "light")" as NSString
-        return snapshotCache.object(forKey: key)
-    }
-
-    static func setSnapshot(_ image: PlatformImage, for latex: String, dark: Bool) {
-        let key = "\(latex):\(dark ? "dark" : "light")" as NSString
-        snapshotCache.setObject(image, forKey: key)
     }
 }
 
@@ -135,8 +113,17 @@ enum MathCard {
             .replacingOccurrences(of: "'", with: "&#39;")
     }
 
+    /// Whether a math card's web view may follow a navigation: only the load of its own document,
+    /// which `loadHTMLString(_:baseURL: nil)` makes as about:blank in the main frame, and one per
+    /// load the card itself started. A link in the maths, a frame or any other navigation is cancelled.
+    static func allowsNavigation(to url: URL?, isMainFrame: Bool, pendingLoads: Int) -> Bool {
+        pendingLoads > 0 && isMainFrame && (url == nil || url?.absoluteString == "about:blank")
+    }
+
     /// Generates a self-contained HTML page containing pre-rendered 2D KaTeX + MathML math
-    /// with embedded KaTeX CSS. Requires zero network requests and zero client-side scripts.
+    /// with embedded KaTeX CSS. Requires zero network requests, and the page runs no script: its
+    /// web view has page JavaScript off. The one script is the app's own size measurement,
+    /// which the app runs from outside (`evaluateJavaScript` still works with page JavaScript off).
     static func document(mathMarkup: String, dark: Bool) -> String {
         return """
         <!doctype html>
@@ -194,23 +181,55 @@ enum MathCard {
 struct MathWebView {
     var equation: String
     var document: String
-    var dark: Bool = false
     @Binding var height: CGFloat
     @Binding var contentWidth: CGFloat
     @Binding var loaded: Bool
-    var onSnapshot: ((PlatformImage) -> Void)? = nil
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
         var parent: MathWebView
         var loadedDocument = ""
         var measuring: Task<Void, Never>?
+        /// Loads this card started and WebKit has not asked about yet: each lets one navigation through.
+        var pendingLoads = 0
 
         init(_ parent: MathWebView) { self.parent = parent }
 
         func load(into web: WKWebView) {
             guard loadedDocument != parent.document else { return }
             loadedDocument = parent.document
+            pendingLoads += 1
             web.loadHTMLString(parent.document, baseURL: nil)
+        }
+
+        /// Times this card has loaded its page again after its web content process ended.
+        var reloads = 0
+
+        // WebKit ends a page's process under memory pressure, or when it crashes, and the card stayed blank until
+        // SwiftUI rebuilt it: its own document is loaded again, a load of its own, so the navigation rule lets it in.
+        // Twice at most: a page that ends its process every time would otherwise start a new one forever.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            guard reloads < 2 else {
+                if reloads == 2 { MathCard.log.notice("math card: its web content process ended again; not loading it a third time") }
+                reloads = 3
+                return
+            }
+            reloads += 1
+            MathCard.log.notice("math card: its web content process ended; loading its page again")
+            loadedDocument = ""
+            load(into: webView)
+        }
+
+        // The async form, as in HTMLWebView: the closure form only "nearly matches" the requirement
+        // unless its closure carries the main-actor mark, and WebKit then never calls it.
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+            let url = navigationAction.request.url
+            guard MathCard.allowsNavigation(to: url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true,
+                                            pendingLoads: pendingLoads) else {
+                MathCard.log.notice("math card navigation cancelled: \(url?.absoluteString ?? "nil", privacy: .public) type \(navigationAction.navigationType.rawValue)")
+                return .cancel
+            }
+            pendingLoads -= 1
+            return .allow
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -239,34 +258,14 @@ struct MathWebView {
                     """
                     let raw = try? await web.evaluateJavaScript(script)
                     let dims = (raw as? [Double]) ?? (raw as? [NSNumber])?.map(\.doubleValue)
-                    var measuredWidth: CGFloat = 0
-                    var measuredHeight: CGFloat = 0
                     if let dims, dims.count >= 2 {
                         let w = CGFloat(dims[0])
                         let h = CGFloat(min(max(dims[1], 36), 360))
                         if abs(h - parent.height) > 1 { parent.height = h }
                         if w > 0 && abs(w - parent.contentWidth) > 1 { parent.contentWidth = w }
                         KaTeXCache.setSize(CGSize(width: w, height: h), for: parent.equation)
-                        measuredWidth = w
-                        measuredHeight = h
                     }
                     if !parent.loaded { parent.loaded = true }
-
-                    if measuredWidth > 0 && measuredHeight > 0 {
-                        let captureWidth = max(web.bounds.width, measuredWidth)
-                        let targetFrame = CGRect(x: 0, y: 0, width: captureWidth, height: measuredHeight)
-                        if web.frame != targetFrame {
-                            web.frame = targetFrame
-                            try? await Task.sleep(for: .milliseconds(30))
-                        }
-                        let config = WKSnapshotConfiguration()
-                        config.rect = CGRect(origin: .zero, size: CGSize(width: captureWidth, height: measuredHeight))
-                        if let snapshot = try? await web.takeSnapshot(configuration: config) {
-                            KaTeXCache.setSnapshot(snapshot, for: parent.equation, dark: parent.dark)
-                            parent.onSnapshot?(snapshot)
-                            return
-                        }
-                    }
                 }
             }
         }
@@ -277,7 +276,8 @@ struct MathWebView {
     @MainActor func makeWebView(_ coordinator: Coordinator) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
-        config.defaultWebpagePreferences.allowsContentJavaScript = true
+        // The page is pre-rendered markup: it needs no script, so none of its own may run.
+        config.defaultWebpagePreferences.allowsContentJavaScript = false
         config.mediaTypesRequiringUserActionForPlayback = .all
 
         let web = WKWebView(frame: .zero, configuration: config)
@@ -322,8 +322,6 @@ extension MathWebView: UIViewRepresentable {
     static func dismantleUIView(_ web: WKWebView, coordinator: Coordinator) {
         coordinator.measuring?.cancel()
         web.stopLoading()
-        web.navigationDelegate = nil
-        web.removeFromSuperview()
     }
 }
 #else
@@ -333,8 +331,6 @@ extension MathWebView: NSViewRepresentable {
     static func dismantleNSView(_ web: WKWebView, coordinator: Coordinator) {
         coordinator.measuring?.cancel()
         web.stopLoading()
-        web.navigationDelegate = nil
-        web.removeFromSuperview()
     }
 }
 #endif
@@ -352,7 +348,6 @@ struct MathCardView: View {
     @State private var availableWidth: CGFloat = 0
     @State private var loaded = false
     @State private var mathMarkup: String?
-    @State private var snapshotImage: PlatformImage?
 
     init(equation: String, closed: Bool) {
         self.equation = equation
@@ -363,58 +358,27 @@ struct MathCardView: View {
         _height = State(initialValue: cachedSize?.height ?? 48)
         _contentWidth = State(initialValue: cachedSize?.width ?? 0)
         _loaded = State(initialValue: cachedMarkup != nil)
-        _snapshotImage = State(initialValue: nil)
     }
 
     var body: some View {
-        let currentSnapshot = snapshotImage ?? KaTeXCache.snapshot(for: equation, dark: scheme == .dark)
-        let viewWidth = availableWidth > 40 ? availableWidth - 40 : 0
-        let effectiveWidth = currentSnapshot?.size.width ?? contentWidth
-        let effectiveHeight = currentSnapshot?.size.height ?? height
-        let targetWidth = max(effectiveWidth, viewWidth)
-        let displayHeight = min(max(effectiveHeight, 36), 360)
-
         HStack(spacing: 0) {
-            if closed, let snapshot = currentSnapshot {
-                // Cached native image: rendered immediately with zero WKWebView creation
-                ScrollView(.horizontal, showsIndicators: false) {
-                    #if os(iOS)
-                    Image(uiImage: snapshot)
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: targetWidth > 0 ? targetWidth : nil, height: displayHeight)
-                    #else
-                    Image(nsImage: snapshot)
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: targetWidth > 0 ? targetWidth : nil, height: displayHeight)
-                    #endif
-                }
-                .frame(height: displayHeight)
-                .frame(maxWidth: .infinity)
-            } else if closed, let markup = mathMarkup {
-                // Transient pre-rendered 2D math card: mounts only until snapshot is captured and delivered
+            if closed, let markup = mathMarkup {
+                // Pre-rendered 2D math card: loaded immediately from memory, persistent across scrolling
                 let doc = MathCard.document(mathMarkup: markup, dark: scheme == .dark)
+                let viewWidth = availableWidth > 40 ? availableWidth - 40 : 0
+                let targetWidth = max(contentWidth, viewWidth)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     MathWebView(
                         equation: equation,
                         document: doc,
-                        dark: scheme == .dark,
                         height: $height,
                         contentWidth: $contentWidth,
-                        loaded: $loaded,
-                        onSnapshot: { img in
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                snapshotImage = img
-                            }
-                        }
+                        loaded: $loaded
                     )
-                    .frame(width: targetWidth > 0 ? targetWidth : nil, height: displayHeight)
+                    .frame(width: targetWidth > 0 ? targetWidth : nil, height: min(max(height, 36), 360))
                 }
-                .frame(height: displayHeight)
+                .frame(height: min(max(height, 36), 360))
                 .frame(maxWidth: .infinity)
             } else {
                 // Streaming active or pre-computing markup: fast Swift text rendering with spinner
@@ -449,13 +413,7 @@ struct MathCardView: View {
                 availableWidth = width
             }
         }
-        .onChange(of: scheme) { _, newScheme in
-            snapshotImage = KaTeXCache.snapshot(for: equation, dark: newScheme == .dark)
-        }
-        .onChange(of: equation) { _, newEq in
-            snapshotImage = KaTeXCache.snapshot(for: newEq, dark: scheme == .dark)
-        }
-        .task(id: "\(equation):\(closed):\(scheme == .dark)") {
+        .task(id: "\(equation):\(closed)") {
             if closed {
                 let markup = await KaTeXEngine.shared.render(latex: equation)
                 mathMarkup = markup

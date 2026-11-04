@@ -145,7 +145,7 @@ extension Mentions {
         for run in a.runs {
             let slice = AttributedString(a[run.range])
             if run.math != nil || shouldFormatAsMath(slice) {
-                out = Text("\(out)\(math(slice))")
+                out = out + math(slice)
                 continue
             }
             guard let link = run.link, let bot = bot(from: link) else { out = Text("\(out)\(Text(slice))"); continue }
@@ -181,14 +181,9 @@ extension Mentions {
         for segment in MathNotation.segments(of: String(characters)) {
             let piece = serif(segment.text)
             switch segment.script {
-            case .baseline:
-                out = Text("\(out)\(piece)")
-            case .sub:
-                let subPiece = piece.font(.system(.caption, design: .serif)).baselineOffset(-2.5)
-                out = Text("\(out)\(subPiece)")
-            case .sup:
-                let supPiece = piece.font(.system(.caption, design: .serif)).baselineOffset(4)
-                out = Text("\(out)\(supPiece)")
+            case .baseline: out = out + piece
+            case .sub: out = out + piece.font(.system(.caption, design: .serif)).baselineOffset(-2.5)
+            case .sup: out = out + piece.font(.system(.caption, design: .serif)).baselineOffset(4)
             }
         }
         return out
@@ -201,7 +196,7 @@ extension Mentions {
         for run in MathNotation.typeRuns(text) {
             var piece = Text(AttributedString(run.text)).fontDesign(.serif)
             if run.italic { piece = piece.italic() }
-            out = Text("\(out)\(piece)")
+            out = out + piece
         }
         return out
     }
