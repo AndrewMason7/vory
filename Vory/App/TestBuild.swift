@@ -73,15 +73,23 @@ enum TestBuild {
     }
 
     /// The receipt file's name in the bundle, if any: "sandboxReceipt" on TestFlight, "receipt" on the App Store.
-    /// On the Mac the receipt lives in `Contents/_MASReceipt`; on iOS it lives in `StoreKit`.
+    /// On the Mac the receipt lives inside the bundle at `Contents/_MASReceipt`; on iOS it sits beside the app
+    /// bundle in the container's `StoreKit` directory.
     static func receiptName(at bundleURL: URL = Bundle.main.bundleURL, fileManager: FileManager = .default) -> String? {
         #if os(macOS)
-        let subpaths = ["Contents/_MASReceipt", "StoreKit"]
+        let candidateDirs = [
+            bundleURL.appendingPathComponent("Contents/_MASReceipt"),
+            bundleURL.deletingLastPathComponent().appendingPathComponent("StoreKit"),
+            bundleURL.appendingPathComponent("StoreKit")
+        ]
         #else
-        let subpaths = ["StoreKit", "Contents/_MASReceipt"]
+        let candidateDirs = [
+            bundleURL.deletingLastPathComponent().appendingPathComponent("StoreKit"),
+            bundleURL.appendingPathComponent("Contents/_MASReceipt"),
+            bundleURL.appendingPathComponent("StoreKit")
+        ]
         #endif
-        for subpath in subpaths {
-            let dir = bundleURL.appendingPathComponent(subpath)
+        for dir in candidateDirs {
             if fileManager.fileExists(atPath: dir.appendingPathComponent("sandboxReceipt").path) {
                 return "sandboxReceipt"
             }

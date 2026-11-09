@@ -663,6 +663,39 @@ def _pdf_bytes(title: str, line: str) -> bytes:
     return bytes(out)
 
 
+def files_download(query: dict) -> Response:
+    """GET /api/files/download (#638), as the gateway's files router sends it: the file's raw bytes with its media
+    type and an attachment disposition naming it. The refusal is ASSUMED: 403 "Access denied" for a secret or a
+    session store, as the demo gateway sends it; the real gateway's answer for those isn't checked yet.
+    MOCK_NO_DOWNLOAD=1: the route isn't there (Starlette's 404 "Not Found"), for the app's fallback to the picture
+    routes."""
+    from urllib.parse import unquote
+    if os.environ.get("MOCK_NO_DOWNLOAD"):
+        return _json_response(404, {"detail": "Not Found"})
+    p = unquote(query.get("path", ""))
+    if p.startswith("~/"):
+        p = "/home/hermes/" + p[2:]
+    name = p.rsplit("/", 1)[-1].replace('"', "")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if "/.hermes/sessions/" in p or "/.ssh/" in p or p.startswith("/etc/") or name == "auth.json":
+        return _json_response(403, {"detail": "Access denied"})
+    if "gone" in p:
+        return _json_response(404, {"detail": "File not found"})
+    import base64
+    if ext in ("md", "markdown", "txt"):
+        body, mime = f"# {name}\n\nA few lines the mock wrote for {p}.\n".encode(), "text/markdown"
+    elif ext == "pdf":
+        body, mime = _pdf_bytes("Mock " + name, "Served by the download route."), "application/pdf"
+    elif ext == "png":
+        body, mime = base64.b64decode(_png_data_url(sum(ord(c) for c in p)).split(",", 1)[1]), "image/png"
+    elif ext == "csv":
+        body, mime = b"shard,errors,slowest_ms\n001,3,200\n002,7,253\n003,0,306\n", "text/csv"
+    else:
+        return _json_response(404, {"detail": "File not found"})
+    return Response(200, "OK", Headers([("Content-Type", mime), ("Content-Disposition", f'attachment; filename="{name}"'),
+                                        ("Content-Length", str(len(body)))]), body)
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
     if base in ("/api/media", "/api/files/read"):
@@ -879,6 +912,66 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
 
 RESTART: dict = {}
 PROFILE_RENAMES: list[dict] = []
+
+# The companion update (#635, test only; off unless --companion is given): Settings › Software Update over the mock.
+# The gateway reports an older companion (its plugin.yaml, an older hermes_push.py and a connected heartbeat). The
+# app's upload is kept in memory and read back, so the bundled script's hash matches after it; the heartbeat reports
+# the uploaded version 3 s after the last file lands (the companion reloading itself in place) or, with
+# --companion-restart, only once a gateway restart asked after the upload has run 4 s.
+COMPANION: dict = {"version": None, "restart": False, "files": {}, "uploaded_at": None}
+COMPANION_OLD_SCRIPT = b"# vory-push companion: an older build, as the mock serves it\n"
+COMPANION_FILES = ("/plugins/vory-push/plugin.yaml", "/plugins/vory-push/hermes_push.py", "/plugins/vory-push/__init__.py",
+                   "/push/status.json")
+
+
+def _companion_file(p: str) -> str | None:
+    return next((tail for tail in COMPANION_FILES if p.endswith(tail)), None)
+
+
+def companion_heartbeat() -> dict:
+    files, up = COMPANION["files"], COMPANION["uploaded_at"]
+    new = False
+    if up is not None and "/plugins/vory-push/plugin.yaml" in files and "/plugins/vory-push/hermes_push.py" in files:
+        if COMPANION["restart"]:
+            started = RESTART.get("started", 0)
+            new = started > up and time.time() - started >= 4
+        else:
+            new = time.time() - up >= 3
+    if new:
+        m = re.search(rb'version: "([^"]+)"', files["/plugins/vory-push/plugin.yaml"])
+        version, script = (m.group(1).decode() if m else "?"), files["/plugins/vory-push/hermes_push.py"]
+    else:
+        version, script = COMPANION["version"], COMPANION_OLD_SCRIPT
+    return {"version": version, "script_sha256": hashlib.sha256(script).hexdigest(), "profile": "default",
+            "updated_at": time.time(), "connected": True, "transport": "websocket", "attached": 1, "devices": 1}
+
+
+def companion_read(p: str) -> tuple[int, object]:
+    """GET /api/files/read for the companion's files, as the gateway's files route answers."""
+    tail = _companion_file(p)
+    if tail == "/push/status.json":
+        body, mime = json.dumps(companion_heartbeat()).encode(), "application/json"
+    elif tail in COMPANION["files"]:
+        body, mime = COMPANION["files"][tail], "text/plain"
+    elif tail == "/plugins/vory-push/plugin.yaml":
+        body, mime = f'name: vory-push\nversion: "{COMPANION["version"]}"\n'.encode(), "text/yaml"
+    elif tail == "/plugins/vory-push/hermes_push.py":
+        body, mime = COMPANION_OLD_SCRIPT, "text/x-python"
+    else:
+        return 404, {"detail": "File not found"}
+    return 200, {"name": p.rsplit("/", 1)[-1], "path": p, "size": len(body), "mime_type": mime,
+                 "data_url": f"data:{mime};base64," + base64.b64encode(body).decode()}
+
+
+def companion_upload(payload: dict) -> tuple[int, object]:
+    """POST /api/files/upload of a companion file: kept, and read back from then on."""
+    p, url = str(payload.get("path") or ""), str(payload.get("data_url") or "")
+    tail = _companion_file(p)
+    if tail is None or tail == "/push/status.json" or "," not in url:
+        return 200, {"ok": True, "path": "(mock)"}
+    COMPANION["files"][tail] = base64.b64decode(url.split(",", 1)[1])
+    COMPANION["uploaded_at"] = time.time()
+    return 200, {"ok": True, "path": p}
 
 
 def create_profile(payload: dict) -> tuple[int, object]:
@@ -1329,6 +1422,47 @@ NO_PDF_TOOLS = "--no-pdf-tools" in sys.argv
 NO_PINS = "--no-pins" in sys.argv
 # Rows that say "pinned" but a pin refused all the same, for the app's refusal path (#406).
 REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
+# --strict-params: a Hermes v0.23.0 socket served by its session authority (#665). Before any handler, a call to one of
+# its canonical methods with a key the method's contract doesn't declare is refused, as gateway/session_controls.py's
+# dispatcher refuses it (canonical_param_problems in tui_gateway/contracts/registry.py): code 4001, "invalid_params",
+# the unknown keys in data.fields. The key sets are v0.23.0's (NousResearch/hermes-agent at the tag), for the canonical
+# methods this mock serves; "profile" is declared on each. Handler rules (approval.respond's exact set, steer's
+# execution_generation) and the -32601 for session calls the authority doesn't serve are not mirrored. gateway.ready
+# says "session_authority": true, as v0.23.0's socket does with an authority (tui_gateway/ws.py).
+# --authority: a Hermes v0.23.0 socket served by its session authority, beyond the key check (#665, part A). It implies
+# --strict-params. Each turn is an execution with its own generation; an approval or a single question is published as
+# an `approval.request` / `clarify.request` event with its prompt_id and execution_generation (no server request), and
+# answered with `approval.respond` / `clarify.respond`: exactly {session_id, execution_generation, prompt_id,
+# choice|answer} (gateway/session_controls.py), the choice one the prompt offers, the generation the running one
+# (`stale_generation`), the socket attached to the session (`permission_denied`); a prompt already settled answers
+# {"status": "already_resolved"}. Its end is `approval.settled` / `clarify.settled`. session.create and session.resume
+# answer the session's execution_generation, and session.resume its open prompts as `prompts`; approval.pending lists
+# request_id (the prompt id) with no generation (gateway/session_pending_controls.py, session_ancillary.py).
+AUTHORITY = "--authority" in sys.argv
+STRICT_PARAMS = "--strict-params" in sys.argv or AUTHORITY
+GENERATIONS: dict = {}   # live session id -> its newest execution generation
+PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as published, the future its answer settles)
+STRICT_PARAMS_DECLARED = {
+    "session.create": {"accept_hooks", "api_key", "base_url", "checkpoints", "client_env", "cwd", "cwd_explicit", "editor",
+                       "follow_profile_config", "hidden", "ignore_rules", "ignore_user_config", "max_turns", "model",
+                       "pass_session_id", "profile", "provider", "reasoning", "request_id", "row_cwd", "run_budget",
+                       "safe_mode", "service_tier", "skills", "source", "title", "toolsets", "verbose", "yolo"},  # CanonicalCreateParams
+    "session.resume": {"api_key", "cols", "defer_history", "display_projection", "editor", "latest", "omit_messages",
+                       "profile", "session_id", "source", "title", "workspace"},  # CanonicalResumeParams
+    "session.list": {"include_hidden", "limit", "profile", "scope", "title"},  # CanonicalListParams
+    "session.interrupt": {"execution_generation", "profile", "session_id"},  # CanonicalControlParams
+    "session.steer": {"execution_generation", "profile", "session_id", "text"},  # CanonicalCorrectionParams
+    "prompt.submit": {"api_text", "attachments", "clarify_batch", "display_kind", "finite", "input_id", "interrupted",
+                      "model_override", "profile", "queued", "session_id", "submission_id", "surface", "text",
+                      "title_preview", "turn_author", "unattended", "voice_context", "voice_turn"},  # CanonicalSubmitParams
+    "approval.respond": {"choice", "execution_generation", "profile", "prompt_id", "session_id"},  # CanonicalApprovalParams
+    "config.get": {"cwd", "key", "profile", "session_id"},  # ConfigGetParams
+    "config.set": {"confirm_expensive_model", "key", "profile", "scope", "session_id", "value"},  # CanonicalConfigSetParams
+    "profiles.list": {"include_sessions", "profile"},  # CanonicalProfilesParams
+    "groups.create": {"members", "name", "profile", "room_id"},  # CanonicalRoomCreateParams
+    "image.attach_bytes": {"content_base64", "data", "ext", "filename", "profile", "session_id"},  # ImageAttachBytesParams
+    "clarify.respond": {"answer", "execution_generation", "profile", "prompt_id", "session_id"},  # ClarifyRespondParams
+}
 # MOCK_FENCE=1: a Hermes from about 2026-10-17 on (#467), whose chat edits are fenced (hermes_cli/web_routers/
 # sessions.py, web_server_sessions.py): GET /api/sessions/{id}/mutation-snapshot gives the chat's revision, and a DELETE
 # (identity in the query) or PATCH (in the body) without request_id and expected_revision is refused. Without it, the
@@ -1765,6 +1899,8 @@ def _process_request(connection, request):
     auth = auth_rest(method, base, query, body_json if isinstance(body_json, dict) else {}, request.headers)
     if auth is not None:
         result = auth
+    elif method == "GET" and base == "/api/files/download":
+        return files_download(query)
     elif base.startswith("/api/plugins/kanban/") or base.startswith("/api/audio/"):
         try:
             payload = json.loads(getattr(request, "body", b"") or b"{}")
@@ -1881,6 +2017,10 @@ def _process_request(connection, request):
                 "updated_at": time.time(), "disbanded_at": None, "latest_seq": 0}
         ROOMS.append(room)
         result = (200, {"room": room})
+    elif COMPANION["version"] and method == "POST" and base == "/api/files/upload":
+        result = companion_upload(body_json if isinstance(body_json, dict) else {})
+    elif COMPANION["version"] and base == "/api/files/read" and _companion_file(unquote(query.get("path", ""))):
+        result = companion_read(unquote(query.get("path", "")))
     else:
         result = rest(path, query)
     if result and result[0] == 302 and isinstance(result[1], dict) and "location" in result[1]:
@@ -2062,6 +2202,8 @@ class Gateway:
 
     async def ask(self, method: str, sid: str, params: dict, timeout: float = 300) -> dict | None:
         """Server -> client request to EVERY attached client; the first answer settles it."""
+        if AUTHORITY and (method == "approval" or (method == "clarify" and "questions" not in params)):
+            return await self.ask_prompt(method, sid, params, timeout)
         rid = f"srq-{uuid.uuid4().hex[:12]}"
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         live = LIVE.get(sid)
@@ -2088,6 +2230,31 @@ class Gateway:
             return None
         finally:
             self.pending.pop(rid, None)
+
+    async def ask_prompt(self, kind: str, sid: str, params: dict, timeout: float) -> dict | None:
+        """--authority: an approval or a single question as the session authority asks it, by event (#665)."""
+        prompt_id = params.get("request_id") or f"prm-{uuid.uuid4().hex[:12]}"
+        generation = GENERATIONS.setdefault(sid, 1)
+        if kind == "approval":
+            prompt = {"kind": "approval", "prompt_id": prompt_id, "execution_generation": generation,
+                      "command": params.get("command", ""), "description": params.get("description", ""),
+                      "choices": list(params.get("choices") or ["once", "session", "always", "deny"])}
+        else:
+            prompt = {"kind": "clarify", "prompt_id": prompt_id, "execution_generation": generation,
+                      "question": params.get("question", ""), "choices": list(params.get("choices") or []),
+                      "multi_select": bool(params.get("multi_select"))}
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        PROMPTS[prompt_id] = (sid, prompt, fut)
+        print(f"prompt {kind} {sid} prompt={prompt_id} generation={generation}", flush=True)
+        await self.event(f"{kind}.request", sid, prompt)
+        try:
+            answer = await asyncio.wait_for(fut, timeout)
+            print(f"answer {kind} {sid} prompt={prompt_id} {answer!r}", flush=True)
+            return answer
+        except asyncio.TimeoutError:
+            if PROMPTS.pop(prompt_id, None) is not None:
+                await self.event(f"{kind}.settled", sid, {"prompt_id": prompt_id, "execution_generation": generation})
+            return None
 
     # -- streaming ----------------------------------------------------------------------------
 
@@ -2558,6 +2725,13 @@ class Gateway:
         await self.event("message.complete", s.sid, {"text": said, "status": "complete", "usage": usage(s.output_tokens, len(TOOLS_STEPS))})
 
     async def _run_turn(self, s: Session, prompt: str) -> None:
+        if AUTHORITY:
+            # Each turn is an execution of its own (#665): a prompt of an earlier one can no longer be answered.
+            GENERATIONS[s.sid] = GENERATIONS.get(s.sid, 0) + 1
+            for pid, (owner, pr, _f) in list(PROMPTS.items()):
+                if owner == s.sid:
+                    PROMPTS.pop(pid, None)
+                    await self.event(f"{pr['kind']}.settled", s.sid, {"prompt_id": pid, "execution_generation": pr["execution_generation"]})
         await asyncio.sleep(0.4)
         # A turn of many tool calls, for the thread's layout checks.
         if prompt.strip().lower().startswith("tools"):
@@ -2629,6 +2803,24 @@ class Gateway:
             # view, where a long paragraph's link sits above the screen.
             await self.event("message.start", s.sid)
             text = "The export finished and every shard matched. The details are on the [status page](https://status.example.com/shards)."
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if prompt.strip().lower().startswith("files inline"):
+            # Files a reply names in a sentence, in inline code and on a line of their own (#638): a note, a PDF and a
+            # picture each way, by names that say which; a session store the gateway won't share; and words that only
+            # start with a slash.
+            await self.event("message.start", s.sid)
+            text = ("Everything for the review is ready.\n\n"
+                    "The notes are in /home/hermes/out/notes-sentence.md, the summary in /home/hermes/out/summary-sentence.pdf, "
+                    "and the chart is /home/hermes/out/chart-sentence.png.\n\n"
+                    "In code: `/home/hermes/out/notes-code.md`, `/home/hermes/out/summary-code.pdf` and "
+                    "`/home/hermes/out/chart-code.png`.\n\n"
+                    "/home/hermes/out/notes-line.md\n/home/hermes/out/summary-line.pdf\n/home/hermes/out/chart-line.png\n\n"
+                    "The session log at /home/hermes/.hermes/sessions/s1.jsonl stays where it is.\n\n"
+                    "Not files: /var/log, /help, and/or, /api/files/download, https://example.com/a/guide.pdf. That is all.\n")
             await self.stream_words(s, text)
             self.store_turn(s, prompt, [text])
             s.inflight = None
@@ -2814,10 +3006,24 @@ class Gateway:
         profile = p.get("profile") or "default"
 
         def ok(result: dict) -> dict:
+            if AUTHORITY and method in ("session.create", "session.resume") and isinstance(result, dict) and result.get("session_id"):
+                # The session authority's snapshot: the execution, and the prompts still open (#665).
+                live_sid = result["session_id"]
+                result = {**result, "execution_generation": GENERATIONS.get(live_sid, 0),
+                          "prompts": [dict(prompt) for (owner, prompt, _f) in PROMPTS.values() if owner == live_sid]}
             return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+        def refused(reason: str) -> dict:
+            return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4001, "message": reason, "data": {"reason": reason}}}
 
         def err(code: int, message: str) -> dict:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+
+        if STRICT_PARAMS and method in STRICT_PARAMS_DECLARED and isinstance(p, dict):
+            unknown = sorted(set(p) - STRICT_PARAMS_DECLARED[method])
+            if unknown:
+                return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4001, "message": "invalid_params",
+                                                               "data": {"reason": "invalid_params", "fields": unknown}}}
 
         if method == "ping":
             return ok({"pong": True})
@@ -3200,6 +3406,38 @@ class Gateway:
         if method in ("session.close", "session.delete"):
             self.sessions.pop(p.get("session_id", ""), None)
             return ok({"closed": True, "deleted": p.get("session_id", "")})
+        if AUTHORITY and method in ("approval.respond", "clarify.respond"):
+            # gateway/session_controls.py respond / respond_clarify, then session_authority.py and
+            # session_pending_controls.py: the exact keys, the prompt, the generation, the socket, the choice.
+            field = "choice" if method == "approval.respond" else "answer"
+            keys = set(p) - {"profile"}
+            if keys != {"session_id", "execution_generation", "prompt_id", field}:
+                return refused("invalid_params")
+            entry = PROMPTS.get(p.get("prompt_id"))
+            if entry is None:
+                return ok({"status": "already_resolved", "prompt_id": p.get("prompt_id")})
+            owner, prompt, fut = entry
+            generation = p.get("execution_generation")
+            if type(generation) is not int or generation != prompt["execution_generation"] or GENERATIONS.get(owner) != generation:
+                return refused("stale_generation")
+            live = LIVE.get(owner)
+            if live is None or self not in live.members:
+                return refused("permission_denied")
+            if method == "approval.respond" and p.get("choice") not in prompt["choices"]:
+                return refused("invalid_params")
+            if method == "clarify.respond" and (not isinstance(p.get("answer"), str) or len(p["answer"]) > 16384):
+                return refused("invalid_params")
+            PROMPTS.pop(p["prompt_id"], None)
+            if not fut.done():
+                fut.set_result({field: p[field]})
+            await self.event(f"{prompt['kind']}.settled", owner, {"prompt_id": p["prompt_id"], "execution_generation": generation})
+            return ok({"status": "resolved", "prompt_id": p["prompt_id"]})
+        if AUTHORITY and method == "approval.pending":
+            # The session authority's list: request_id is the prompt id, and there is no generation in it.
+            sid_asked = p.get("session_id", "")
+            return ok({"approvals": [{"request_id": pid, "command": pr["command"], "description": pr["description"],
+                                      "choices": list(pr["choices"]), "allow_permanent": "always" in pr["choices"]}
+                                     for pid, (owner, pr, _f) in PROMPTS.items() if owner == sid_asked and pr["kind"] == "approval"]})
         if method == "approval.pending":
             # What still waits on this session: the open approval requests, by their request id.
             live = LIVE.get(p.get("session_id", "")) or next((l for l in LIVE.values() if l.stored == p.get("session_id")), None)
@@ -3261,7 +3499,8 @@ async def ws_handler(ws):
         "payload": {"skin": {"name": "default", "description": "", "colors": {}, "light_colors": {},
                              "dark_colors": {}, "branding": {}, "banner_logo": "", "banner_hero": "",
                              "tool_prefix": "", "help_header": ""},
-                    "change_events": True, "replay_epoch": uuid.uuid4().hex[:8], "heartbeat": True}}})
+                    "change_events": True, "replay_epoch": uuid.uuid4().hex[:8], "heartbeat": True,
+                    **({"session_authority": True} if STRICT_PARAMS else {})}}})
     try:
         async for raw in ws:
             for line in str(raw).splitlines():
@@ -3304,12 +3543,17 @@ async def main() -> None:
     ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
     ap.add_argument("--refuse-pins", action="store_true", help="rows say \"pinned\", but a PATCH of only a pin is refused as an old gateway does")
     ap.add_argument("--no-pins", action="store_true", help="no pins, as a gateway from before Hermes kept them: rows without \"pinned\", a PATCH of only a pin refused")
+    ap.add_argument("--strict-params", action="store_true", help="refuse undeclared keys on the canonical methods as Hermes v0.23.0's session authority does: 4001 invalid_params (#665)")
+    ap.add_argument("--authority", action="store_true", help="a Hermes v0.23.0 session authority: approvals and single questions by event, answered with approval.respond / clarify.respond (implies --strict-params; #665)")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
     ap.add_argument("--extra-models", type=int, default=0, metavar="N", help="N more models across two big providers (a long model list, #401)")
     ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
+    ap.add_argument("--companion", default=None, metavar="VERSION", help="the gateway has this older companion, and Software Update's install over it is served (test only, #635)")
+    ap.add_argument("--companion-restart", action="store_true", help="with --companion: the new companion reports in only after a gateway restart")
     args = ap.parse_args()
+    COMPANION.update(version=args.companion, restart=args.companion_restart)
     PROFILES_DELAY[0] = args.profiles_delay
     EXTRA_MODELS[0] = args.extra_models
     titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]
