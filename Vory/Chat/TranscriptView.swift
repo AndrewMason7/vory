@@ -394,8 +394,8 @@ struct TranscriptView: View {
                 metrics.contentHeight = now.height; metrics.containerHeight = now.container
                 metrics.distanceFromBottom = now.distance
                 #if os(iOS)
-                // #713: in the background the reading is kept and nothing is decided from it (`resyncAfterBackground`).
-                if metrics.sceneInBackground { metrics.skippedInBackground = true; return }
+                // #713: in the background or inactive snapshot, the reading is kept and nothing is decided from it (`resyncAfterBackground`).
+                if scenePhase != .active || metrics.sceneInBackground { metrics.skippedInBackground = true; return }
                 #endif
                 // Out of sight while a history lands: the lazy stack is still measuring its rows, so the quiet time
                 // before the thread is shown starts again (#449).
@@ -858,7 +858,9 @@ extension TranscriptView {
         let stuck = metrics.stickToBottom
         guard count > 0, tailFrom != nil, from != to, stuck else { return }
         tailFrom = to
-        scrollPosition.scrollTo(edge: .bottom)
+        if why != "background" && why != "left" {
+            scrollPosition.scrollTo(edge: .bottom)
+        }
     }
 
     /// From `settleTail`, at an open whose rows came after `reachTailOpen`: the boundary is set at the reach start, wherever
@@ -1358,7 +1360,7 @@ extension TranscriptView {
     private func decideAway() {
         #if os(iOS)
         // #713: an ask made in front can run after the switch: nothing is decided in the background.
-        if metrics.sceneInBackground { metrics.skippedInBackground = true; return }
+        if scenePhase != .active || metrics.sceneInBackground { metrics.skippedInBackground = true; return }
         let live = metrics.scrollView?.contentOffset.y ?? metrics.offsetY
         #else
         let live = metrics.offsetY
@@ -1891,8 +1893,12 @@ final class ScrollMetrics {
     /// The UIKit scroll view under the SwiftUI one, for a scroll by a measured distance: its
     /// offset and the rows' global frames are in the same points, so a delta is just a delta.
     weak var scrollView: UIScrollView?
-    /// #713: the thread's scene is in the background (never plain inactive): no landing or away decision is made there.
-    @MainActor var sceneInBackground: Bool { scrollView?.window?.windowScene?.activationState == .background }
+    /// #713: true when the thread's scene is not in the active foreground (in the background, inactive snapshot, or detached):
+    /// no landing or away decision is made there.
+    @MainActor var sceneInBackground: Bool {
+        guard let scene = scrollView?.window?.windowScene else { return true }
+        return scene.activationState != .foregroundActive
+    }
     /// #713: a decision was skipped in the background; the first activation after it re-syncs once (`resyncAfterBackground`).
     var skippedInBackground = false
     /// #713 r3: `stickToBottom` as the thread's scene entered the background (UIKit's didEnterBackground for it), before
