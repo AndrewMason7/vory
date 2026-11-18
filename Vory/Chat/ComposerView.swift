@@ -93,6 +93,9 @@ struct ComposerView: View {
     /// 59: a finger is on the pill's placeholder (its button's pressed state): the pill grows to `pressScale`.
     @State private var pressing = false
     #endif
+    /// 60: a request to bring the keyboard back to the field (`ComposerTextView.refocus`), raised on the return from the
+    /// background and when a rebuilt chat gets its cursor back. Never raised on the Mac.
+    @State private var refocus = 0
     #if DEBUG
     /// 59's test 12: the placeholder's one-line width against its room (`-vory-pill-fit`).
     @State private var pillFitWidth: CGFloat = 0
@@ -545,9 +548,35 @@ struct ComposerView: View {
         .task { try? await Task.sleep(for: .seconds(1)); _ = Self.cameraAvailable }
         // The model list behind the chip, fetched before its first open.
         .task { await chat.warmModelOptions() }
-        // The cursor comes back after a layout switch rebuilt the chat (`ChatViewMemory`).
-        .onAppear { if !chat.isDraft, ChatViewMemory.focused.contains(ChatViewMemory.key(for: chat)) { focused = true } }
-        .onDisappear { if !chat.isDraft { ChatViewMemory.setFocused(focused, for: chat) } }
+        // The cursor comes back after a layout switch rebuilt the chat (`ChatViewMemory`), or when this chat had it as the
+        // app went to the background and the return was just now (`ComposerAwayFocus`, 60). The keyboard is asked for
+        // too: the card's field can be inserted before it has a window, and a field that's already first responder can
+        // come back with no keyboard.
+        .onAppear {
+            guard !chat.isDraft else { return }
+            // Taken here only in front: a rebuild while the app is in the background leaves it for the return.
+            let away = UIApplication.shared.applicationState == .active && ComposerAwayFocus.take(for: chat)
+            if away || ChatViewMemory.focused.contains(ChatViewMemory.key(for: chat)) { focused = true; refocus += 1 }
+        }
+        // 60: a cursor given back by the return isn't remembered by a chat that leaves the screen just after it (a link
+        // or a notification opening another chat): 58 remembered none there.
+        .onDisappear {
+            if !chat.isDraft { ChatViewMemory.setFocused(focused && !ComposerAwayFocus.givenJustNow(chat), for: chat) }
+        }
+        // 60: the bar's focus as the scene leaves the front, kept for this chat once the scene is in the background, and
+        // given back on the return to the chat on screen then (or rebuilt by a layout switch just after it). A keyboard
+        // put away before leaving stays down; another chat opened on the return doesn't take it, and neither does this
+        // chat when the reader opens it again later.
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)) { _ in
+            if !chat.isDraft { ComposerAwayFocus.leaving(focused, for: chat) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.didEnterBackgroundNotification)) { _ in
+            ComposerAwayFocus.wentToBackground()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in
+            ComposerAwayFocus.activated()
+            if !chat.isDraft, ComposerAwayFocus.take(for: chat) { focused = true; refocus += 1 }
+        }
         #endif
         #if os(macOS)
         // A new chat on the Mac (⌘N, the list's button, an intent) opens with the cursor in
@@ -582,7 +611,8 @@ struct ComposerView: View {
                          menuOpen: !menuItems.isEmpty || menuLoading,
                          onTab: { completeOnTab() },
                          onEscape: { dismissMenu() },
-                         onDictate: newMessage == nil && !readOnlyBar ? { dictation.start() } : nil)
+                         onDictate: newMessage == nil && !readOnlyBar ? { dictation.start() } : nil,
+                         refocus: refocus)
             .padding(.horizontal, 4).padding(.top, 2)
             .frame(minHeight: 30)
             .task(id: chat.profile) { if !group { catalog = await chat.commandsCatalog() } }
@@ -1455,3 +1485,38 @@ private struct BarMatch: ViewModifier {
         #endif
     }
 }
+
+#if os(iOS)
+/// 60: which chats had the bar focused as the app went to the background. Written as the scene leaves the front (the
+/// reader's own state then: a keyboard put away before leaving reads unfocused), kept only once the scene is in the
+/// background (a passing deactivation, Control Center or a call banner, keeps nothing), and given back only within
+/// `window` of the return that follows: to the chat on screen then, and to the same chat rebuilt by a layout switch
+/// right after (its old view gave it, its new view takes it again). A chat opened later doesn't get it.
+@MainActor enum ComposerAwayFocus {
+    private static var leavingFocused: Set<String> = []
+    private static var kept: Set<String> = []
+    private static var fromBackground = false
+    private static var activatedAt = Date.distantPast
+    /// The return's own updates and a layout switch's rebuild come well inside it; a reader opening a chat comes after.
+    static let window: TimeInterval = 1.5
+    private static var inWindow: Bool { Date().timeIntervalSince(activatedAt) <= window }
+    static func leaving(_ focused: Bool, for chat: ChatSession) {
+        let key = ChatViewMemory.key(for: chat)
+        if focused { leavingFocused.insert(key) } else { leavingFocused.remove(key) }
+    }
+    static func wentToBackground() { kept = leavingFocused; leavingFocused = []; fromBackground = true }
+    /// Back in front. Every composer hears it: the first starts the window, the rest find it started. A return that
+    /// didn't follow the background (a passing deactivation) keeps nothing.
+    static func activated() {
+        guard !inWindow else { return }
+        if !fromBackground { kept = [] }
+        fromBackground = false
+        leavingFocused = []
+        activatedAt = Date()
+    }
+    /// This chat gets the keyboard back: its key was kept and the return was just now.
+    static func take(for chat: ChatSession) -> Bool { inWindow && kept.contains(ChatViewMemory.key(for: chat)) }
+    /// This chat's cursor came from the return just now (a view leaving now isn't remembered as focused for it).
+    static func givenJustNow(_ chat: ChatSession) -> Bool { take(for: chat) }
+}
+#endif
