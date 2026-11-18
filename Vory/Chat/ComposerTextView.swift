@@ -126,6 +126,8 @@ struct ComposerTextView: View {
     var menuOpen = false
     var onTab: () -> Bool = { false }
     var onEscape: () -> Bool = { false }
+    /// 59: the iPhone's "Dictate" action; the Mac's field doesn't offer it (its mic is a click), so it's unused here.
+    var onDictate: (() -> Void)? = nil
     @FocusState private var isFocused: Bool
     /// The keys an input method has while it composes (see ComposedKeys).
     @State private var composed = ComposedKeys()
@@ -427,6 +429,9 @@ struct ComposerTextView: UIViewRepresentable {
     var menuOpen = false
     var onTab: () -> Bool = { false }
     var onEscape: () -> Bool = { false }
+    /// 59: VoiceOver's and Switch Control's "Dictate" on the field (they can't hold the bar): starts the mic's latched
+    /// dictation. Nil where the bar offers none (the New Message sheet, the tour).
+    var onDictate: (() -> Void)? = nil
 
     static let acceptedTypes: [UTType] = [.image, .movie, .pdf, .audio, .plainText, .text, .fileURL, .data]
 
@@ -460,6 +465,15 @@ struct ComposerTextView: UIViewRepresentable {
 
     func updateUIView(_ v: PasteTextView, context: Context) {
         context.coordinator.parent = self
+        // 59: "Dictate" while the bar offers it; the action reads the latest closure through the coordinator.
+        if (v.accessibilityCustomActions?.isEmpty == false) != (onDictate != nil) {
+            v.accessibilityCustomActions = onDictate == nil ? nil : [
+                UIAccessibilityCustomAction(name: "Dictate") { [weak coordinator = context.coordinator] _ in
+                    MainActor.assumeIsolated { coordinator?.parent.onDictate?() }
+                    return true
+                },
+            ]
+        }
         // No typing where the bar is read-only (the tour, `composerReadOnly`): no keyboard, no selection, and VoiceOver
         // reads the words as text rather than offering a field that takes nothing.
         let readOnly = context.environment.composerReadOnly

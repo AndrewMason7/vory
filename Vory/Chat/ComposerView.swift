@@ -43,6 +43,10 @@ struct ComposerView: View {
     /// The cursor stays in the field after a send, ready for the next message, as in Messages. Onboarding's tour (#388)
     /// turns it off: its Send is a step of the tour, and the keyboard coming up covered the chat it shows.
     @Environment(\.composerFocusesAfterSend) private var focusesAfterSend
+    /// The tour's bar takes no typing (#490); it keeps the card.
+    @Environment(\.composerReadOnly) private var readOnlyBar
+    /// 59: the pill's controls and the card's, matched as one becomes the other.
+    @Namespace private var barSpace
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
@@ -83,6 +87,18 @@ struct ComposerView: View {
     /// Why the last Return did nothing (see SlashMenu.holdNote); gone with the next edit.
     @State private var holdNote: String?
     @State private var dictation = DictationController()
+    #if os(iOS)
+    /// 59: a hold on the pill is dictating (from the recognizer's began to the words landing): the hold row shows.
+    @State private var holding = false
+    /// 59: a finger is on the pill's placeholder (its button's pressed state): the pill grows to `pressScale`.
+    @State private var pressing = false
+    #endif
+    #if DEBUG
+    /// 59's test 12: the placeholder's one-line width against its room (`-vory-pill-fit`).
+    @State private var pillFitWidth: CGFloat = 0
+    @State private var pillFitRoom: CGFloat = 0
+    static let pillFitOn = ProcessInfo.processInfo.arguments.contains("-vory-pill-fit")
+    #endif
     @State private var stagedPreview: URL?
     /// Shown after a paste that dropped a lot of text into the field.
     @State private var longTextOffer = false
@@ -139,6 +155,20 @@ struct ComposerView: View {
             return h + max(0, full - min(mentionListCap, full))
         }
         return 0
+    }
+
+    /// 59: the pill at rest (`ReplyBarRules.collapses`); the card otherwise, and always on the Mac. The "/" and "@" lists
+    /// need words, so they never open over the pill; the + panel opens above the pill as above the card.
+    private var collapsed: Bool {
+        #if os(iOS)
+        ReplyBarRules.collapses(.init(chatsOwn: newMessage == nil && !readOnlyBar, focused: focused, textEmpty: text.isEmpty,
+                                      staged: !chat.staged.isEmpty, quoted: !quote.isEmpty, editing: chat.editingID != nil,
+                                      listOpen: !menuItems.isEmpty || menuLoading || !mentionSuggestions.isEmpty,
+                                      longTextOffer: longTextOffer, holdNote: holdNote != nil,
+                                      dictating: dictation.isListening || dictation.isTranscribing))
+        #else
+        false
+        #endif
     }
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
@@ -432,7 +462,19 @@ struct ComposerView: View {
 
     private var composerStack: some View {
         VStack(spacing: 8) {
+            #if os(iOS)
+            Group {
+                // A hold keeps the pill in the tree: its recognizer is on the pill's placeholder, and leaving the tree mid-hold
+                // would lose the release. The latched bar is the mic tapped; the card is the rest.
+                if collapsed || holding { pill }
+                else if dictation.isListening, newMessage == nil, !readOnlyBar { latchedBar }
+                else { card.transition(.opacity) }
+            }
+            .animation(reduceMotion ? .easeInOut(duration: 0.15) : .snappy(duration: 0.12), value: collapsed)
+            #else
+            // The Mac keeps the card, as before 59.
             card
+            #endif
             if chat.isRunning, !text.isEmpty {
                 HStack {
                     Text("Agent is working. Send queues the message.").font(.caption2).foregroundStyle(.secondary)
@@ -444,6 +486,15 @@ struct ComposerView: View {
         }
         #if os(iOS)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stackWidth = $0 }
+        #if DEBUG
+        // 59's UI tests: how many times the fake dictation started (`-vory-fake-dictation`), on a 1 pt element.
+        .overlay(alignment: .topLeading) {
+            if DictationController.fakeWords != nil {
+                Color.clear.frame(width: 1, height: 1).accessibilityElement()
+                    .accessibilityIdentifier("debug.dictationStarts").accessibilityValue("\(dictation.fakeStarts)")
+            }
+        }
+        #endif
         .onChange(of: menuItems.map(\.id)) { _, _ in if !menuItems.isEmpty { shownSlashItems = menuItems } }
         .onChange(of: !menuItems.isEmpty || menuLoading) { _, open in
             Smooth.animate("slashMenu")
@@ -530,7 +581,8 @@ struct ComposerView: View {
                          returnSends: returnSends,
                          menuOpen: !menuItems.isEmpty || menuLoading,
                          onTab: { completeOnTab() },
-                         onEscape: { dismissMenu() })
+                         onEscape: { dismissMenu() },
+                         onDictate: newMessage == nil && !readOnlyBar ? { dictation.start() } : nil)
             .padding(.horizontal, 4).padding(.top, 2)
             .frame(minHeight: 30)
             .task(id: chat.profile) { if !group { catalog = await chat.commandsCatalog() } }
@@ -614,6 +666,7 @@ struct ComposerView: View {
             HStack(alignment: .center, spacing: 8) {
                 if !group {
                     attachMenu.layoutPriority(1).disabled(newMessage?.enabled == false)
+                        .modifier(BarMatch(id: "attach", space: barSpace, on: !reduceMotion))
                     // The chip gives way first: at the accessibility sizes it shortened to its
                     // level alone and the send button was cut by the card's edge.
                     modelChip
@@ -643,6 +696,216 @@ struct ComposerView: View {
             }
         }
         .animation(.snappy(duration: 0.15), value: dropTargeted)
+    }
+
+    #if os(iOS)
+    /// 59: the bar at rest, one row: +, the placeholder (a tap focuses the field, a hold dictates), the mic, and voice
+    /// mode (the reply's stop while one runs). The same glass as the card, by the same id, so the dock morphs between
+    /// them. While a hold dictates, the row fades and the hold row is drawn over it in the same glass, so the finger, the
+    /// placeholder and its recognizer stay where they were.
+    private var pill: some View {
+        ZStack {
+            HStack(alignment: .center, spacing: 8) {
+                attachMenu.layoutPriority(1)
+                    .modifier(BarMatch(id: "attach", space: barSpace, on: !reduceMotion))
+                    // The controls stop growing at XXXL, as the card's row does (#396); the placeholder keeps its full size.
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                pillPlaceholder
+                Group {
+                    micWell
+                    switch ReplyBarRules.pillTrailing(running: chat.isRunning) {
+                    case .voiceMode: voiceModeButton
+                    case .stop: stopButton.modifier(BarMatch(id: "stop", space: barSpace, on: !reduceMotion))
+                    }
+                }
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            }
+            .opacity(holding ? 0 : 1)
+            .accessibilityHidden(holding)
+            if holding { holdBar }
+        }
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .glassEffect(.regular, in: .capsule)
+        .glassEffectID("dock", in: namespace)
+        .scaleEffect(!reduceMotion && (pressing || holding) ? ReplyBarRules.pressScale : 1)
+        .animation(.snappy(duration: 0.1), value: pressing || holding)
+        #if DEBUG
+        // 59's test 12: the placeholder's fit, on a 1 pt element (`-vory-pill-fit`).
+        .overlay(alignment: .topTrailing) {
+            if Self.pillFitOn {
+                Color.clear.frame(width: 1, height: 1).accessibilityElement().accessibilityIdentifier("debug.pillFit")
+                    .accessibilityValue("\(pillFitWidth <= pillFitRoom ? "fits" : "truncates") w=\(Int(pillFitWidth.rounded(.up))) room=\(Int(pillFitRoom.rounded(.down)))")
+            }
+        }
+        #endif
+        .transition(.opacity)
+    }
+
+    /// 59: the hold's events (`HoldToDictate`), through `ReplyBarRules.action(for:)`.
+    private func holdEvent(_ event: ReplyBarRules.HoldEvent) {
+        switch ReplyBarRules.action(for: event) {
+        case .start:
+            guard ReplyBarRules.holdOffered(collapsed: collapsed, voiceModeActive: HandsFreeSession.shared.isActive,
+                                            dictating: dictation.isListening || dictation.isTranscribing) else { return }
+            holding = true
+            dictation.start()
+        case .fillField:
+            guard holding else { return }
+            Task {
+                await dictation.started()
+                let words = await dictation.stop(engine: chat.runtime.voice)
+                if !words.isEmpty { text = words; focused = true }
+                // Never sent: `sendsAtOnce(.hold, …)` is false whatever Settings › Voice says (the words wait in the field).
+                if ReplyBarRules.sendsAtOnce(.hold, sendAfterDictation: VoiceSettings.sendAfterDictation) { await send() }
+                holding = false
+            }
+        case .discard:
+            guard holding else { return }
+            Task { await dictation.started(); dictation.cancel(); holding = false }
+        }
+    }
+
+    /// 59: the mic tapped: ✕ (no words), the waveform, and the listening `TalkButton` (its stop puts the words in the field,
+    /// as today, and sends them only with Send after dictation). No send button of its own.
+    private var latchedBar: some View {
+        HStack(spacing: 8) {
+            Button { dictation.cancel() } label: {
+                Image(systemName: "xmark").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                    .glassEffect(.regular.interactive(), in: .circle).frame(width: 44, height: 44).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel dictation")
+            .accessibilityIdentifier("composer.dictation.cancel")
+            DictationWaveform(dictation: dictation).frame(maxWidth: .infinity)
+            TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in
+                text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } }
+            }
+            .frame(width: 44, height: 44)
+            .modifier(BarMatch(id: "mic", space: barSpace, on: !reduceMotion))
+        }
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .glassEffect(.regular, in: .capsule)
+        .glassEffectID("dock", in: namespace)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("composer.dictationBar")
+        .transition(.opacity)
+    }
+
+    /// 59: the hold: the red stop (shown, not a button: the finger is down), the hint, and the waveform; dimmed while the
+    /// words are being made. Letting go never sends.
+    private var holdBar: some View {
+        HStack(spacing: 10) {
+            ZStack { Circle().fill(.red); RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 10, height: 10) }
+                .frame(width: 28, height: 28).frame(width: 36, height: 36)
+                .accessibilityHidden(true)
+            Text(ReplyBarRules.holdHint).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            DictationWaveform(dictation: dictation).frame(maxWidth: .infinity)
+        }
+        .opacity(dictation.isTranscribing ? 0.5 : 1)
+        .padding(.horizontal, 7)
+        // Drawn over the pill's faded row, inside the pill's own glass: no glass, no id, no scale of its own, and no
+        // touches, so the finger stays on the placeholder button and its recognizer.
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Dictating")
+        .accessibilityHint(ReplyBarRules.holdHint)
+        .accessibilityIdentifier("composer.holdBar")
+        .transition(.opacity)
+    }
+
+    /// 59: the pill's placeholder: a tap focuses the field, a hold dictates (its own view: inside the pill's one expression
+    /// it took the type checker past its limit). A plain view, not a Button: a Button's own tap fought the hold either way
+    /// (59's UI runs), so the tap and the hold are one exclusive pair in HoldToDictate, the hold first.
+    private var pillPlaceholder: some View {
+        pillPlaceholderBody
+            // One element for VoiceOver and Switch Control: a button named Message whose activate focuses the field, with the
+            // words as its value (read "Message, Reply or hold to talk", which teaches the hold). A representation, not
+            // `.accessibilityElement(children: .ignore)`: with that, the placeholder's text stayed a child element of its own.
+            .accessibilityRepresentation {
+                Button("Message") { focused = true }
+                    .accessibilityValue(ReplyBarRules.placeholder(running: chat.isRunning))
+                    .accessibilityHint("Double-tap to type")
+                    // VoiceOver and Switch Control can't hold: the mic's latched dictation, the same words in the field.
+                    .accessibilityAction(named: "Dictate") { dictation.start() }
+                    .accessibilityIdentifier("composer.pill")
+            }
+    }
+
+    /// The placeholder's view and its gestures, before its accessibility.
+    private var pillPlaceholderBody: some View {
+        Text(ReplyBarRules.placeholder(running: chat.isRunning))
+            .font(.body).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            // The pill is the element ("Message", with the words as its value), so the words aren't a text of their own, as
+            // the field's placeholder isn't (`isAccessibilityElement = false`); VoiceOver would otherwise meet them twice.
+            .accessibilityHidden(true)
+            #if DEBUG
+            // 59's test 12 (`-vory-pill-fit`): the placeholder's own one-line width, from a hidden fixed-size copy.
+            .background(alignment: .leading) {
+                if Self.pillFitOn {
+                    Text(ReplyBarRules.placeholder(running: chat.isRunning)).font(.body).fixedSize().hidden()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pillFitWidth = $0 }
+                }
+            }
+            #endif
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            #if DEBUG
+            // 59's test 12: the text's room, the label's width after its frame, less its 4 pt padding each side.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width - 8 } action: { if Self.pillFitOn { pillFitRoom = $0 } }
+            #endif
+            .contentShape(.rect)
+            // The hold first, the tap only when it fails; the finger reported from touch-down for the press scale.
+            .modifier(HoldToDictate(onEvent: { holdEvent($0) }, onTap: {
+                #if DEBUG
+                HoldToDictate.stamp("focus set")   // 59's probe: the tap reached the field's focus
+                #endif
+                focused = true
+            }, onPressing: { pressing = $0 }))
+    }
+
+    /// The mic in a 36 pt well, as + has: the same `TalkButton` and closure as the card's idle mic.
+    private var micWell: some View {
+        TalkButton(dictation: dictation, engine: chat.runtime.voice,
+                   onHold: holdStartsVoiceMode ? { HandsFreeSession.shared.start(chat: chat) } : nil) { transcript in
+            text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } }
+        }
+        .frame(width: 36, height: 36)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .modifier(BarMatch(id: "mic", space: barSpace, on: !reduceMotion))
+        .disabled(HandsFreeSession.shared.isActive)
+    }
+
+    /// Voice mode, the pill's trailing slot at rest: today's voice mode, full screen; with it already running for this
+    /// chat out of sight, the same button brings its screen back.
+    private var voiceModeButton: some View {
+        let session = HandsFreeSession.shared
+        let mine = session.isActive(for: chat)
+        return Button {
+            if mine { session.minimized = false } else { session.start(chat: chat) }
+        } label: {
+            Image(systemName: "waveform.badge.mic").font(.body.weight(.semibold))
+                .frame(width: 36, height: 36)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .frame(width: 44, height: 44).contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(session.isActive && !mine)
+        .accessibilityLabel(mine ? "Show voice mode" : "Voice mode")
+        .accessibilityIdentifier("composer.voiceMode")
+        .accessibilityShowsLargeContentViewer { Label(mine ? "Show voice mode" : "Voice mode", systemImage: "waveform.badge.mic") }
+    }
+    #endif
+
+    /// The reply's stop, shared by the card's trailing slot and the pill (59): today's button, moved here unchanged.
+    private var stopButton: some View {
+        Button { Task { await chat.stop() } } label: {
+            Image(systemName: "stop.fill").font(.caption.weight(.bold)).foregroundStyle(.white)
+                .frame(width: 28, height: 28).background(.red, in: .circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop")
+        .accessibilityShowsLargeContentViewer { Label("Stop", systemImage: "stop.fill") }
     }
 
     /// The staged files, along the top of the card: a real preview of each, × on the corner.
@@ -841,23 +1104,20 @@ struct ComposerView: View {
             newMessageControl(newMessage)
         } else if dictation.isListening {
             TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
+                // A mic tap on the pill lands here (dictating keeps the card): the mic moves into this stop (59).
+                .modifier(BarMatch(id: "mic", space: barSpace, on: !reduceMotion))
         } else if dictation.isTranscribing {
             // The recording is being turned into words (on the gateway or here).
             ProgressView().controlSize(.small).frame(width: 28, height: 28).accessibilityLabel("Transcribing")
         } else if chat.isRunning, text.isEmpty {
-            Button { Task { await chat.stop() } } label: {
-                Image(systemName: "stop.fill").font(.caption.weight(.bold)).foregroundStyle(.white)
-                    .frame(width: 28, height: 28).background(.red, in: .circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop")
-            .accessibilityShowsLargeContentViewer { Label("Stop", systemImage: "stop.fill") }
+            stopButton.modifier(BarMatch(id: "stop", space: barSpace, on: !reduceMotion))
         } else if text.isEmpty && chat.staged.isEmpty && !HandsFreeSession.shared.isActive {
             // Dictation steps aside while voice mode has the microphone (its recorder reset the
             // audio session under the engine).
             // Held, the mic does what Settings › Voice › Hold the mic to says: dictation, or
             // the whole conversation by voice on this chat (the Mac's mic is a click; it keeps it).
             TalkButton(dictation: dictation, engine: chat.runtime.voice, onHold: holdStartsVoiceMode ? { HandsFreeSession.shared.start(chat: chat) } : nil) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
+                .modifier(BarMatch(id: "mic", space: barSpace, on: !reduceMotion))
         } else {
             // An edit on its way is sent once (#556).
             let disabled = (text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty) || chat.resending
@@ -1179,4 +1439,19 @@ extension EnvironmentValues {
     /// The bottom of the chat's header in window space, 0 until measured (ConversationView): the morph bar's chat row
     /// on a narrow window, the chat's own header on a wide one.
     @Entry var chatHeaderBottom: CGFloat = 0
+}
+
+/// 59: `matchedGeometryEffect` only with motion allowed (with Reduce Motion the pill and the card cross-fade). The Mac
+/// keeps the card and never morphs, so there the view is returned untouched, as before 59.
+private struct BarMatch: ViewModifier {
+    let id: String
+    let space: Namespace.ID
+    let on: Bool
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+        #else
+        if on { content.matchedGeometryEffect(id: id, in: space) } else { content }
+        #endif
+    }
 }

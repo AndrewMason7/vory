@@ -5,8 +5,21 @@ import Foundation
 /// replies; the board's writes are applied and its event socket told; files the app sends are kept for the demo's life.
 extension DemoGateway {
     /// Seconds between streamed pieces, and for a tool step.
-    var pieceDelay: Double { pace == .real ? 0.035 : 0.008 }
-    var stepDelay: Double { pace == .real ? 1.2 : 0.25 }
+    var pieceDelay: Double { (pace == .real ? 0.035 : 0.008) * slowness }
+    var stepDelay: Double { (pace == .real ? 1.2 : 0.25) * slowness }
+
+    /// The delays' multiplier: 1, or 5 in a Debug build launched with `-vory-demo-slow` (59's UI tests), where a reply's
+    /// pieces and steps take five times as long, so a turn runs about 25 s rather than 5 and the tests that need a reply
+    /// still running find one.
+    var slowness: Double {
+        #if DEBUG
+        if Self.slowDemo { return 5 }
+        #endif
+        return 1
+    }
+    #if DEBUG
+    static let slowDemo = ProcessInfo.processInfo.arguments.contains("-vory-demo-slow")
+    #endif
 
     func liveRPC(_ method: String, _ p: [String: Any], profile: String) -> Result<Any, RPCError>? {
         switch method {

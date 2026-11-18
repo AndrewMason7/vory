@@ -79,6 +79,7 @@ struct VoiceSettingsView: View {
                     Text("Read replies aloud speaks each reply as it finishes in the chat you have open. Send after dictation sends what you dictated as soon as it is in words, with nothing to tap.")
                     #if os(iOS)
                     Text("Hold the mic to: a tap on the composer's mic always dictates into the field; Dictate makes a hold do the same, Start voice mode makes a hold open the whole conversation by voice on that chat, as the + panel does.")
+                    Text("Holding the message bar always puts what you said in the field, so you can check it before you send. Send after dictation applies to the mic.")
                     #endif
                 }
             }

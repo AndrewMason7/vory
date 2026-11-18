@@ -113,9 +113,32 @@ final class DictationController {
     var levels: [Float] = []
     var startedAt: Date?
     static let waveformSamples = 64
+    /// The start in flight (59): `started()` waits for it, so a release that comes before the recorder runs never leaves a
+    /// recording running.
+    private var startTask: Task<Void, Never>?
+    /// How many times DEBUG's fake dictation started (59's UI tests read it through `debug.dictationStarts`). A plain
+    /// stored property so the observation tracks it; it stays 0 outside DEBUG.
+    var fakeStarts = 0
+
+    #if DEBUG
+    /// DEBUG `-vory-fake-dictation "<words>"` (59's UI tests): start listens without the microphone, stop returns the
+    /// words, cancel returns nothing. No recorder, no permission, no audio session: no prompt can come up. Read once.
+    nonisolated static let fakeWords: String? = fakeWords(in: ProcessInfo.processInfo.arguments)
+    nonisolated static func fakeWords(in args: [String]) -> String? {
+        guard let i = args.firstIndex(of: "-vory-fake-dictation"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+    #endif
+
+    /// The start in flight, if any, finished (59: the hold's release waits for it, so a quick release never leaves a
+    /// recording running).
+    func started() async { await startTask?.value }
 
     func start() {
-        Task {
+        #if DEBUG
+        if Self.fakeWords != nil { transcript = ""; levels = []; startedAt = Date(); isListening = true; fakeStarts += 1; return }
+        #endif
+        startTask = Task {
             guard await AVAudioApplication.requestRecordPermission() else { error = "Microphone access denied."; return }
             do {
                 #if os(iOS)
@@ -147,6 +170,9 @@ final class DictationController {
 
     /// Stops the recording and turns it into words through `engine`; empty when nothing was heard.
     func stop(engine: VoiceEngine?) async -> String {
+        #if DEBUG
+        if let words = Self.fakeWords { isListening = false; transcript = words; return words }
+        #endif
         meter?.invalidate(); meter = nil
         recorder?.stop(); recorder = nil
         isListening = false
@@ -172,6 +198,9 @@ final class DictationController {
 
     /// Drops a recording without transcribing it (the composer went away).
     func cancel() {
+        #if DEBUG
+        if Self.fakeWords != nil { isListening = false; return }
+        #endif
         meter?.invalidate(); meter = nil
         recorder?.stop(); recorder = nil
         isListening = false

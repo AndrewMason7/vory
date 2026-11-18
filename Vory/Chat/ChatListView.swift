@@ -56,6 +56,10 @@ struct ChatListView: View {
     /// The break after the open Scheduled section there, before the person's chats (#673 keeps one of 16 pt or more):
     /// half a point over, so on a 3x screen it is drawn 16 1/3 or 16 2/3 pt, never a hair under 16.
     private static let scheduledBreak: CGFloat = 16.5
+    /// 59: the gap the system's search drawer leaves above the list's first section, as measured (testListGaps, the iPad
+    /// and the iPhone, 2026-11-17: 10 pt). The drawer is the system's and the list can't read its bottom, so the break
+    /// after the Scheduled card is this constant, and the UI test checks the two gaps stay equal.
+    private static let searchRhythm: CGFloat = 10
     #else
     private var flatGroups: Bool { false }
     #endif
@@ -887,6 +891,10 @@ struct ChatListView: View {
             scheduledRows(runs, runtime: runtime)
         } else {
             Section { scheduledRows(runs, runtime: runtime) }
+                // 59 (feedback on 58's open Duo): the break after the Scheduled card is the gap above it, between the
+                // search field and the card, one rhythm down the column (it was the list's default, 35 pt, against 10).
+                // This section alone: the project groups keep the list's default gap.
+                .listSectionSpacing(.custom(Self.searchRhythm))
         }
         #endif
     }
@@ -1347,6 +1355,7 @@ struct ChatListView: View {
                 if let face { BotAmbient.shared.tap(profile: face.profile, session: face.session) }
                 open(route)
             } label: { label().contentShape(.rect) }.buttonStyle(.plain)
+                #if os(macOS)
                 // The open chat's row, tinted like the selected conversation in Messages. Drawn
                 // here: the Mac's list did not show a listRowBackground on these rows.
                 .background {
@@ -1355,10 +1364,26 @@ struct ChatListView: View {
                             .padding(.horizontal, -8).padding(.vertical, -7)
                     }
                 }
+                #endif
         } else {
             NavigationLink(value: route) { label() }
         }
     }
+
+    #if os(iOS)
+    /// 59 (feedback on 58's open Duo): the open chat's row beside a detail column (the iPad, the open Duo), outside Select
+    /// mode. Never on the closed Duo's list, which pushes its chats.
+    private func isOpenRow(_ selected: Bool) -> Bool { selected && detailPath != nil && !selecting && !closedStrip }
+    /// The row's background: on the closed Duo the page's one surface (#693, B2, as before); the open chat's row is the
+    /// List's own row background, the section's grey with the accent's tint over it, so the List draws it to the cell's
+    /// edges and clips it to the section's corners (the stock look), with no line beside it. It was a rounded tint inside
+    /// the row: 4 pt in on the left, 3 at the top and bottom, flush on the right, its line still drawn.
+    private func rowBackground(selected: Bool) -> AnyView? {
+        if closedStrip { return AnyView(Color.clear) }
+        if isOpenRow(selected) { return AnyView(Color(.secondarySystemGroupedBackground).overlay(Color.accentColor.opacity(0.16))) }
+        return nil
+    }
+    #endif
 
     /// The bot beside each chat: with All bots on the phone, always on the Mac (the list reads
     /// like a list of conversations with someone).
@@ -1384,7 +1409,9 @@ struct ChatListView: View {
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
                 #if os(iOS)
-                .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+                .listRowBackground(rowBackground(selected: selectedID == s.id))   // #693 (B2); 59: the open chat's row
+                .listRowSeparator(isOpenRow(selectedID == s.id) ? .hidden : .automatic, edges: .all)
+                .accessibilityAddTraits(isOpenRow(selectedID == s.id) ? .isSelected : [])
                 #endif
                 .accessibilityFocused($spokenRow, equals: s.id)
                 #if os(macOS)
@@ -1458,7 +1485,9 @@ struct ChatListView: View {
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
                 #if os(iOS)
-                .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+                .listRowBackground(rowBackground(selected: selectedID == ChatNavigation.selectionID(ofRoom: room.roomId)))   // #693 (B2); 59
+                .listRowSeparator(isOpenRow(selectedID == ChatNavigation.selectionID(ofRoom: room.roomId)) ? .hidden : .automatic, edges: .all)
+                .accessibilityAddTraits(isOpenRow(selectedID == ChatNavigation.selectionID(ofRoom: room.roomId)) ? .isSelected : [])
                 #endif
                 .task(id: "\(room.roomId)-\(room.latestSeq ?? 0)-\(aiSummaries)") {
                     if roomLogs[room.roomId] == nil || (room.latestSeq ?? 0) > (roomLogs[room.roomId]?.last?.seq ?? 0),
